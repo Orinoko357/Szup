@@ -46,8 +46,11 @@ app.use('/api/konfiguracja', require('./src/routes/konfiguracja'));
 // Health check
 app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
 
-// 404
-app.use((req, res) => res.status(404).json({ error: 'Nie znaleziono zasobu.' }));
+// Serve React frontend (production build)
+const path = require('path');
+const publicDir = path.join(__dirname, 'public');
+app.use(express.static(publicDir));
+app.get('*', (req, res) => res.sendFile(path.join(publicDir, 'index.html')));
 
 // Error handler
 app.use((err, req, res, next) => {
