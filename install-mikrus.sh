@@ -5,12 +5,12 @@
 # ============================================================
 set -euo pipefail
 
-APP_DIR="/root/szup"
+APP_DIR="/opt/szup"
 APP_PORT=20189
 DB_NAME="szup_db"
 DB_USER="szup_user"
-PDF_DIR="/root/szup-pdf"
-LOG_DIR="/root/szup-logs"
+PDF_DIR="/opt/szup-pdf"
+LOG_DIR="/opt/szup-logs"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}[OK]${NC} $1"; }
