@@ -6,7 +6,7 @@
 set -euo pipefail
 
 APP_DIR="/opt/szup"
-APP_PORT=20189
+APP_PORT=40273
 DB_NAME="szup_db"
 DB_USER="szup_user"
 PDF_DIR="/opt/szup-pdf"
