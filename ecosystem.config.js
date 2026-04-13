@@ -3,7 +3,7 @@ module.exports = {
     {
       name: 'szup-backend',
       script: './backend/server.js',
-      cwd: '/home/szup/app',
+      cwd: '/opt/szup',
       instances: 2,
       exec_mode: 'cluster',
       watch: false,
