@@ -29,7 +29,10 @@ ok "Port $APP_PORT wolny"
 
 # ── 1. Python 3.11+
 if ! command -v python3 &>/dev/null || python3 -c "import sys; exit(0 if sys.version_info >= (3,11) else 1)" 2>/dev/null; then
-  warn "Instaluję Python 3.11..."
+  warn "Instaluję Python 3.11 (deadsnakes PPA)..."
+  apt-get update -qq
+  apt-get install -y software-properties-common
+  add-apt-repository -y ppa:deadsnakes/ppa
   apt-get update -qq
   apt-get install -y python3.11 python3.11-venv python3.11-dev python3-pip
 fi
