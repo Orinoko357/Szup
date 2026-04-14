@@ -2,19 +2,14 @@ module.exports = {
   apps: [
     {
       name: 'szup-backend',
-      script: './backend/server.js',
-      cwd: '/opt/szup',
-      instances: 2,
-      exec_mode: 'cluster',
+      script: 'uvicorn',
+      args: 'main:app --host 0.0.0.0 --port 40273 --workers 2 --loop asyncio',
+      cwd: '/opt/szup/backend-py',
+      interpreter: 'none',
       watch: false,
       max_memory_restart: '512M',
       env: {
-        NODE_ENV: 'production',
-        PORT: 40273,
-      },
-      env_production: {
-        NODE_ENV: 'production',
-        PORT: 40273,
+        PYTHONUNBUFFERED: '1',
       },
       // Logging
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
@@ -23,14 +18,10 @@ module.exports = {
       merge_logs: true,
       // Graceful shutdown
       kill_timeout: 10000,
-      wait_ready: true,
-      listen_timeout: 10000,
       // Restart policy
       max_restarts: 10,
       restart_delay: 5000,
       autorestart: true,
-      // Node.js flags for production
-      node_args: '--max-old-space-size=512',
     },
   ],
 };

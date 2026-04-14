@@ -1,16 +1,15 @@
 #!/bin/bash
 # ============================================================
-#  SZUP — Instalator dla Mikrus (port 20189)
+#  SZUP v2 — Instalator (Python/FastAPI + SQLite)
 #  Uruchom jako root: bash install-mikrus.sh
 # ============================================================
 set -euo pipefail
 
 APP_DIR="/opt/szup"
 APP_PORT=40273
-DB_NAME="szup_db"
-DB_USER="szup_user"
 PDF_DIR="/opt/szup-pdf"
 LOG_DIR="/opt/szup-logs"
+DATA_DIR="/opt/szup/data"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}[OK]${NC} $1"; }
@@ -18,17 +17,26 @@ warn() { echo -e "${YELLOW}[!!]${NC} $1"; }
 die()  { echo -e "${RED}[BŁĄD]${NC} $1"; exit 1; }
 
 echo "======================================================"
-echo "  SZUP — Instalator (port $APP_PORT)"
+echo "  SZUP v2 — Instalator (port $APP_PORT)"
 echo "======================================================"
 echo ""
 
-# ── 0. Sprawdź czy port jest wolny
+# ── 0. Sprawdź port
 if ss -tlnp 2>/dev/null | grep -q ":$APP_PORT " || netstat -tlnp 2>/dev/null | grep -q ":$APP_PORT "; then
   die "Port $APP_PORT jest już zajęty! Sprawdź: ss -tlnp | grep $APP_PORT"
 fi
 ok "Port $APP_PORT wolny"
 
-# ── 1. Node.js 20
+# ── 1. Python 3.11+
+if ! command -v python3 &>/dev/null || python3 -c "import sys; exit(0 if sys.version_info >= (3,11) else 1)" 2>/dev/null; then
+  warn "Instaluję Python 3.11..."
+  apt-get update -qq
+  apt-get install -y python3.11 python3.11-venv python3.11-dev python3-pip
+fi
+PYTHON=$(command -v python3.11 || command -v python3)
+ok "Python $($PYTHON --version)"
+
+# ── 2. Node.js 20 (dla frontendu)
 if ! command -v node &>/dev/null || [[ "$(node -e 'process.stdout.write(process.version.split(".")[0].slice(1))')" -lt 18 ]]; then
   warn "Instaluję Node.js 20..."
   curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
@@ -36,72 +44,43 @@ if ! command -v node &>/dev/null || [[ "$(node -e 'process.stdout.write(process.
 fi
 ok "Node.js $(node --version)"
 
-# ── 2. PM2
+# ── 3. PM2
 if ! command -v pm2 &>/dev/null; then
   warn "Instaluję PM2..."
   npm install -g pm2
 fi
 ok "PM2 $(pm2 --version)"
 
-# ── 3. PostgreSQL
-if ! command -v psql &>/dev/null; then
-  warn "Instaluję PostgreSQL..."
-  apt-get install -y postgresql postgresql-contrib
-fi
-if ! systemctl is-active --quiet postgresql; then
-  systemctl start postgresql
-  systemctl enable postgresql
-fi
-ok "PostgreSQL aktywny"
-
-# ── 4. Baza danych
-DB_PASS=$(openssl rand -base64 24 | tr -d '/+=' | head -c 24)
-if sudo -u postgres psql -lqt 2>/dev/null | cut -d\| -f1 | grep -qw "$DB_NAME"; then
-  warn "Baza $DB_NAME już istnieje — pomijam tworzenie"
-  # Odczytaj hasło z .env jeśli istnieje
-  if [[ -f "$APP_DIR/backend/.env" ]]; then
-    DB_PASS=$(grep DATABASE_URL "$APP_DIR/backend/.env" 2>/dev/null | sed 's/.*:\/\/[^:]*:\([^@]*\)@.*/\1/' || echo "$DB_PASS")
-  fi
-else
-  sudo -u postgres psql <<SQL
-CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';
-CREATE DATABASE $DB_NAME OWNER $DB_USER;
-GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;
-SQL
-  ok "Baza danych $DB_NAME utworzona"
-fi
-
-# ── 5. Klonuj/aktualizuj repozytorium
+# ── 4. Klonuj/aktualizuj repo
 if [[ -d "$APP_DIR/.git" ]]; then
-  warn "Katalog $APP_DIR istnieje — aktualizuję (git pull)..."
+  warn "Aktualizuję repo (git pull)..."
   cd "$APP_DIR"
-  git pull origin claude/build-permissions-system-ZpzBN 2>/dev/null || git pull 2>/dev/null || warn "git pull nie powiódł się, używam istniejącego kodu"
+  git pull origin claude/build-permissions-system-ZpzBN 2>/dev/null || git pull 2>/dev/null || warn "git pull nie powiódł się"
 else
   warn "Klonuję repozytorium..."
-  # Jeśli brak git repo — skopiuj z lokalnego (tar)
   if [[ -d "/root/szup-src" ]]; then
     cp -r /root/szup-src "$APP_DIR"
   else
     die "Brak repozytorium! Skopiuj kod do $APP_DIR lub ustaw git remote."
   fi
 fi
-ok "Kod aplikacji gotowy w $APP_DIR"
+ok "Kod gotowy w $APP_DIR"
 
-# ── 6. Katalogi
-mkdir -p "$PDF_DIR" "$LOG_DIR"
-ok "Katalogi: $PDF_DIR, $LOG_DIR"
+# ── 5. Katalogi
+mkdir -p "$PDF_DIR" "$LOG_DIR" "$DATA_DIR"
+ok "Katalogi: $PDF_DIR, $LOG_DIR, $DATA_DIR"
 
-# ── 7. Generuj klucze i .env
-if [[ -f "$APP_DIR/backend/.env" ]]; then
+# ── 6. Generuj .env
+if [[ -f "$APP_DIR/backend-py/.env" ]]; then
   warn ".env już istnieje — nie nadpisuję"
 else
-  JWT_SECRET=$(node -e "process.stdout.write(require('crypto').randomBytes(64).toString('hex'))")
-  JWT_REFRESH=$(node -e "process.stdout.write(require('crypto').randomBytes(64).toString('hex'))")
-  LDAP_KEY=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")
+  JWT_SECRET=$($PYTHON -c "import secrets; print(secrets.token_hex(64))")
+  JWT_REFRESH=$($PYTHON -c "import secrets; print(secrets.token_hex(64))")
+  LDAP_KEY=$($PYTHON -c "import secrets; print(secrets.token_hex(32))")
   SERVER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
 
-  cat > "$APP_DIR/backend/.env" <<ENV
-DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}
+  cat > "$APP_DIR/backend-py/.env" <<ENV
+DATABASE_URL=sqlite:///${DATA_DIR}/szup.db
 JWT_SECRET=${JWT_SECRET}
 JWT_REFRESH_SECRET=${JWT_REFRESH}
 LDAP_ENCRYPTION_KEY=${LDAP_KEY}
@@ -109,37 +88,50 @@ PDF_STORAGE_PATH=${PDF_DIR}
 LOG_PATH=${LOG_DIR}
 PORT=${APP_PORT}
 ALLOWED_ORIGIN=http://${SERVER_IP}:${APP_PORT}
-NODE_ENV=production
 SCHEDULER_ENABLED=true
 ENV
   ok ".env wygenerowany"
 fi
 
-# ── 8. npm install — backend
-cd "$APP_DIR/backend"
-npm install --production
-ok "Backend: npm install"
+# ── 7. Python venv + dependencies
+cd "$APP_DIR/backend-py"
+if [[ ! -d "venv" ]]; then
+  $PYTHON -m venv venv
+fi
+source venv/bin/activate
+pip install -q --upgrade pip
+pip install -q -r requirements.txt
+ok "Backend Python: zależności zainstalowane"
 
-# ── 9. npm install + build — frontend
+# ── 8. Inicjalizacja bazy danych
+python scripts/init_db.py
+ok "Baza danych zainicjalizowana"
+
+# ── 9. npm install + build frontendu
 cd "$APP_DIR/frontend"
 npm install
 npm run build
-ok "Frontend: zbudowany → backend/public/"
+ok "Frontend: zbudowany → backend-py/public/"
 
-# ── 10. Migracje
-cd "$APP_DIR/backend"
-node src/migrations/run.js
-ok "Migracje bazy danych"
+# ── 10. Utwórz konto SUPERADMIN
+SADMIN_USER="admin"
+SADMIN_PASS="Admin@Szup2025!!"
+cd "$APP_DIR/backend-py"
+source venv/bin/activate
+python scripts/init_superadmin.py "$SADMIN_USER" "$SADMIN_PASS" 2>/dev/null || warn "Konto admin już istnieje"
+ok "Konto superadmin: $SADMIN_USER"
 
 # ── 11. PM2 — start lub reload
 cd "$APP_DIR"
+# Zaktualizuj ścieżkę uvicorn do venv
+UVICORN_PATH="$APP_DIR/backend-py/venv/bin/uvicorn"
+sed -i "s|uvicorn|$UVICORN_PATH|" ecosystem.config.js 2>/dev/null || true
+
 if pm2 list 2>/dev/null | grep -q "szup-backend"; then
-  pm2 reload ecosystem.config.js --env production
+  pm2 reload ecosystem.config.js
   ok "PM2: szup-backend przeładowany"
 else
-  # Popraw port w ecosystem.config.js
-  sed -i "s/PORT: 3001/PORT: $APP_PORT/" ecosystem.config.js 2>/dev/null || true
-  pm2 start ecosystem.config.js --env production
+  pm2 start ecosystem.config.js
   ok "PM2: szup-backend uruchomiony"
 fi
 pm2 save
@@ -148,19 +140,17 @@ pm2 save
 pm2 startup systemd -u root --hp /root 2>/dev/null | tail -1 | bash 2>/dev/null || \
   warn "Autostart PM2: uruchom ręcznie 'pm2 startup' i wklej wyświetloną komendę"
 
-# ── 13. Sprawdź
-sleep 2
+# ── 13. Test
+sleep 3
 if curl -sf http://localhost:$APP_PORT/api/health &>/dev/null; then
   SERVER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
   echo ""
   echo "======================================================"
   ok "SZUP działa!"
   echo -e "  Adres:  ${GREEN}http://${SERVER_IP}:${APP_PORT}${NC}"
+  echo -e "  Login:  ${GREEN}$SADMIN_USER${NC} / $SADMIN_PASS"
   echo "======================================================"
-  echo ""
-  echo "Następny krok — utwórz konto SUPERADMIN:"
-  echo "  cd $APP_DIR/backend && node scripts/init-superadmin.js"
 else
-  warn "Aplikacja nie odpowiada na porcie $APP_PORT. Sprawdź logi:"
+  warn "Aplikacja nie odpowiada. Sprawdź logi:"
   echo "  pm2 logs szup-backend --lines 30"
 fi

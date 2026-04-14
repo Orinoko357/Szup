@@ -2,12 +2,13 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../../api/axios';
 import { useAuth } from '../../hooks/useAuth';
+import { Shield, User, Lock, ChevronDown } from 'lucide-react';
 
 export default function Login() {
   const { login, user } = useAuth();
   const navigate = useNavigate();
   const [domains, setDomains] = useState([]);
-  const [form, setForm] = useState({ username: '', password: '', domena_id: '' });
+  const [form, setForm] = useState({ username: '', password: '', domena_id: '__local__' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -32,77 +33,107 @@ export default function Login() {
       login(data.accessToken, data.user);
       navigate('/');
     } catch (err) {
-      setError(err.response?.data?.error || 'Błąd logowania.');
+      setError(err.response?.data?.error || 'Nieprawidłowe dane logowania.');
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary-900 to-primary-700 flex items-center justify-center px-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-primary-600 rounded-2xl mb-4">
-            <span className="text-white font-bold text-xl">ZUP</span>
+    <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #0e1f38 0%, #1c355e 50%, #24406d 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+      <div style={{ width: '100%', maxWidth: '420px' }}>
+        {/* Logo */}
+        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '64px', height: '64px', background: '#c5a065', borderRadius: '16px', marginBottom: '16px' }}>
+            <Shield size={32} color="#1c355e" strokeWidth={2.5} />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">System ZUP</h1>
-          <p className="text-sm text-gray-500 mt-1">Zarządzanie Uprawnieniami w Systemach Teleinformatycznych</p>
+          <div style={{ color: 'white', fontSize: '22px', fontWeight: '800', letterSpacing: '-0.3px' }}>SZUP</div>
+          <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', marginTop: '4px' }}>
+            System Zarządzania Uprawnieniami
+          </div>
         </div>
 
-        {error && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-            {error}
+        {/* Card */}
+        <div style={{ background: 'white', borderRadius: '12px', padding: '32px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+          <div style={{ marginBottom: '24px' }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#6b7280', borderLeft: '4px solid #c5a065', paddingLeft: '10px' }}>
+              Logowanie do systemu
+            </div>
           </div>
-        )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="form-label">Nazwa użytkownika</label>
-            <input
-              type="text"
-              className="form-input border px-3 py-2 w-full rounded-md border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary-500"
-              value={form.username}
-              onChange={e => setForm({ ...form, username: e.target.value })}
-              autoComplete="username"
-              required
-            />
-          </div>
-          <div>
-            <label className="form-label">Hasło</label>
-            <input
-              type="password"
-              className="form-input border px-3 py-2 w-full rounded-md border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary-500"
-              value={form.password}
-              onChange={e => setForm({ ...form, password: e.target.value })}
-              autoComplete="current-password"
-              required
-            />
-          </div>
-          <div>
-            <label className="form-label">Domena</label>
-            <select
-              className="form-input border px-3 py-2 w-full rounded-md border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary-500"
-              value={form.domena_id}
-              onChange={e => setForm({ ...form, domena_id: e.target.value })}
+          {error && (
+            <div style={{ marginBottom: '16px', padding: '10px 14px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: '6px', color: '#991b1b', fontSize: '13px' }}>
+              {error}
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div>
+              <label className="form-label">Nazwa użytkownika</label>
+              <div style={{ position: 'relative' }}>
+                <User size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
+                <input
+                  type="text"
+                  className="form-input"
+                  style={{ paddingLeft: '36px' }}
+                  value={form.username}
+                  onChange={e => setForm({ ...form, username: e.target.value })}
+                  autoComplete="username"
+                  required
+                  placeholder="login"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="form-label">Hasło</label>
+              <div style={{ position: 'relative' }}>
+                <Lock size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
+                <input
+                  type="password"
+                  className="form-input"
+                  style={{ paddingLeft: '36px' }}
+                  value={form.password}
+                  onChange={e => setForm({ ...form, password: e.target.value })}
+                  autoComplete="current-password"
+                  required
+                  placeholder="••••••••"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="form-label">Metoda uwierzytelnienia</label>
+              <div style={{ position: 'relative' }}>
+                <select
+                  className="form-input"
+                  style={{ appearance: 'none', paddingRight: '32px' }}
+                  value={form.domena_id}
+                  onChange={e => setForm({ ...form, domena_id: e.target.value })}
+                >
+                  <option value="__local__">Administrator lokalny</option>
+                  {domains.map(d => (
+                    <option key={d.id} value={d.id}>{d.nazwa} ({d.domena})</option>
+                  ))}
+                  {domains.length > 0 && <option value="__auto__">Wykryj automatycznie</option>}
+                </select>
+                <ChevronDown size={14} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af', pointerEvents: 'none' }} />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn btn-primary"
+              style={{ width: '100%', padding: '11px 16px', marginTop: '4px', fontSize: '14px' }}
             >
-              <option value="__auto__">Wykryj automatycznie</option>
-              {domains.map(d => (
-                <option key={d.id} value={d.id}>{d.nazwa} ({d.domena})</option>
-              ))}
-              <option value="__local__">Administrator lokalny</option>
-            </select>
-          </div>
-          <button
-            type="submit"
-            disabled={loading}
-            className="btn-primary w-full py-2.5 mt-2"
-          >
-            {loading ? 'Logowanie...' : 'Zaloguj się'}
-          </button>
-        </form>
+              {loading ? 'Logowanie...' : 'Zaloguj się'}
+            </button>
+          </form>
+        </div>
 
-        <p className="text-center text-xs text-gray-400 mt-6">
-          NIS2 art. 21 | Zgodność z ustawą o samorządzie gminnym art. 10a
+        <p style={{ textAlign: 'center', color: 'rgba(255,255,255,0.25)', fontSize: '11px', marginTop: '20px' }}>
+          NIS2 art. 21 · Ustawa o samorządzie gminnym art. 10a
         </p>
       </div>
     </div>
