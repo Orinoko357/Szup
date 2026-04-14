@@ -96,7 +96,7 @@ async def moje_do_zatwierdzenia(session: Session = Depends(get_session),
     return [dict(r) for r in rows]
 
 
-@router.get("/")
+@router.get("")
 async def list_wnioski(status: Optional[str] = None, tenant_id: Optional[int] = None,
                         pracownik_id: Optional[int] = None, page: int = 1, limit: int = 20,
                         session: Session = Depends(get_session),
@@ -203,7 +203,7 @@ async def get_wniosek(wniosek_id: int, session: Session = Depends(get_session),
     return result
 
 
-@router.post("/", status_code=201)
+@router.post("", status_code=201)
 async def create_wniosek(body: WniosekIn, request: Request,
                           session: Session = Depends(get_session),
                           current_user: CurrentUser = Depends(require_roles("KIEROWNIK", "IT_ADMIN", "SUPERADMIN"))):

@@ -33,7 +33,7 @@ class LdapDomenaIn(BaseModel):
     kolejnosc: Optional[int] = 0
 
 
-@router.get("/")
+@router.get("")
 async def list_domeny(session: Session = Depends(get_session),
                        current_user: CurrentUser = Depends(require_roles(*IT))):
     rows = session.execute(
@@ -42,7 +42,7 @@ async def list_domeny(session: Session = Depends(get_session),
     return [dict(r) for r in rows]
 
 
-@router.post("/", status_code=201)
+@router.post("", status_code=201)
 async def create_domena(body: LdapDomenaIn, session: Session = Depends(get_session),
                          current_user: CurrentUser = Depends(require_roles(*IT))):
     enc = encrypt_ldap_password(body.bind_password) if body.bind_password else None

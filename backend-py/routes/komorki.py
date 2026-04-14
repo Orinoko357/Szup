@@ -21,7 +21,7 @@ class KomorkaIn(BaseModel):
     aktywna: Optional[bool] = True
 
 
-@router.get("/")
+@router.get("")
 async def list_komorki(tenant_id: Optional[int] = None, struktura_org_id: Optional[int] = None,
                         session: Session = Depends(get_session),
                         current_user: CurrentUser = Depends(get_current_user)):
@@ -50,7 +50,7 @@ async def get_komorka(komorka_id: int, session: Session = Depends(get_session),
     return dict(row)
 
 
-@router.post("/", status_code=201)
+@router.post("", status_code=201)
 async def create_komorka(body: KomorkaIn, session: Session = Depends(get_session),
                           current_user: CurrentUser = Depends(require_roles(*IT))):
     row = session.execute(

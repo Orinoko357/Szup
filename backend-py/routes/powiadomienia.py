@@ -10,7 +10,7 @@ from dependencies import CurrentUser, get_current_user
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("")
 async def get_unread(session: Session = Depends(get_session),
                       current_user: CurrentUser = Depends(get_current_user)):
     rows = session.execute(

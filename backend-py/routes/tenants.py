@@ -23,7 +23,7 @@ class TenantIn(BaseModel):
     dni_do_przegladu: Optional[int] = 365
 
 
-@router.get("/")
+@router.get("")
 async def list_tenants(session: Session = Depends(get_session),
                        current_user: CurrentUser = Depends(get_current_user)):
     rows = session.execute(text("SELECT * FROM tenants ORDER BY nazwa")).mappings().all()
@@ -39,7 +39,7 @@ async def get_tenant(tenant_id: int, session: Session = Depends(get_session),
     return dict(row)
 
 
-@router.post("/", status_code=201)
+@router.post("", status_code=201)
 async def create_tenant(body: TenantIn, request: Request,
                         session: Session = Depends(get_session),
                         current_user: CurrentUser = Depends(require_roles(*IT))):

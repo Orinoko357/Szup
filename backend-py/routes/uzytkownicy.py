@@ -36,7 +36,7 @@ class BlokadaIn(BaseModel):
     zablokowany: bool
 
 
-@router.get("/")
+@router.get("")
 async def list_uzytkownicy(tenant_id: Optional[int] = None, rola: Optional[str] = None,
                             aktywny: Optional[str] = None,
                             session: Session = Depends(get_session),
@@ -74,7 +74,7 @@ async def get_uzytkownik(user_id: int, session: Session = Depends(get_session),
     return dict(row)
 
 
-@router.post("/", status_code=201)
+@router.post("", status_code=201)
 async def create_uzytkownik(body: UzytkownikIn, request: Request,
                              session: Session = Depends(get_session),
                              current_user: CurrentUser = Depends(require_roles(*IT))):

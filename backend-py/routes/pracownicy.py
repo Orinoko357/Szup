@@ -23,7 +23,7 @@ class PracownikIn(BaseModel):
     przelozony_id: Optional[int] = None
 
 
-@router.get("/")
+@router.get("")
 async def list_pracownicy(tenant_id: Optional[int] = None, komorka_id: Optional[int] = None,
                            aktywny: Optional[str] = None, q: Optional[str] = None,
                            session: Session = Depends(get_session),
@@ -112,7 +112,7 @@ async def get_pracownik(prac_id: int, session: Session = Depends(get_session),
     return result
 
 
-@router.post("/", status_code=201)
+@router.post("", status_code=201)
 async def create_pracownik(body: PracownikIn, request: Request,
                             session: Session = Depends(get_session),
                             current_user: CurrentUser = Depends(require_roles("IT_ADMIN", "SUPERADMIN", "KADRY"))):

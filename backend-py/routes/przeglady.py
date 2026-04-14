@@ -27,7 +27,7 @@ class DecyzjaIn(BaseModel):
     uzasadnienie: str
 
 
-@router.get("/")
+@router.get("")
 async def list_przeglady(tenant_id: Optional[int] = None, status: Optional[str] = None,
                           session: Session = Depends(get_session),
                           current_user: CurrentUser = Depends(require_roles(*IT))):
@@ -86,7 +86,7 @@ async def get_przeglad(przeglad_id: int, session: Session = Depends(get_session)
     return result
 
 
-@router.post("/", status_code=201)
+@router.post("", status_code=201)
 async def create_przeglad(body: PrzegladIn, request: Request,
                            session: Session = Depends(get_session),
                            current_user: CurrentUser = Depends(require_roles(*IT))):

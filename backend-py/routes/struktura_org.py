@@ -22,7 +22,7 @@ class StrukturIn(BaseModel):
     aktywna: Optional[bool] = True
 
 
-@router.get("/")
+@router.get("")
 async def list_struktura(tenant_id: Optional[int] = None,
                           session: Session = Depends(get_session),
                           current_user: CurrentUser = Depends(get_current_user)):
@@ -38,7 +38,7 @@ async def list_struktura(tenant_id: Optional[int] = None,
     return [dict(r) for r in rows]
 
 
-@router.post("/", status_code=201)
+@router.post("", status_code=201)
 async def create_struktura(body: StrukturIn, session: Session = Depends(get_session),
                             current_user: CurrentUser = Depends(require_roles(*IT))):
     row = session.execute(

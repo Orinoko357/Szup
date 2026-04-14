@@ -53,7 +53,7 @@ FETCH_Q = """SELECT up.id, up.aktywne, up.nadane_bezposrednio, up.data_od, up.da
               WHERE 1=1"""
 
 
-@router.get("/")
+@router.get("")
 async def list_uprawnienia(tenant_id: Optional[int] = None, pracownik_id: Optional[int] = None,
                             system_id: Optional[int] = None, aktywne: Optional[str] = None,
                             uprzywilejowany: Optional[str] = None, format: Optional[str] = None,

@@ -33,7 +33,7 @@ class IncydentUpdate(BaseModel):
     dotyczy_nis2: Optional[bool] = False
 
 
-@router.get("/")
+@router.get("")
 async def list_incydenty(tenant_id: Optional[int] = None, status: Optional[str] = None,
                           format: Optional[str] = None,
                           session: Session = Depends(get_session),
@@ -85,7 +85,7 @@ async def get_incydent(incydent_id: int, session: Session = Depends(get_session)
     return dict(row)
 
 
-@router.post("/", status_code=201)
+@router.post("", status_code=201)
 async def create_incydent(body: IncydentIn, request: Request,
                            session: Session = Depends(get_session),
                            current_user: CurrentUser = Depends(require_roles(*IT))):

@@ -35,7 +35,7 @@ class ZakresIn(BaseModel):
     uprzywilejowany: Optional[bool] = False
 
 
-@router.get("/")
+@router.get("")
 async def list_systemy(tenant_id: Optional[int] = None,
                         session: Session = Depends(get_session),
                         current_user: CurrentUser = Depends(get_current_user)):
@@ -71,7 +71,7 @@ async def get_system(system_id: int, session: Session = Depends(get_session),
     return result
 
 
-@router.post("/", status_code=201)
+@router.post("", status_code=201)
 async def create_system(body: SystemIn, request: Request,
                          session: Session = Depends(get_session),
                          current_user: CurrentUser = Depends(require_roles(*IT))):
