@@ -45,7 +45,7 @@ async def create_tenant(body: TenantIn, request: Request,
                         current_user: CurrentUser = Depends(require_roles(*IT))):
     from datetime import datetime
     row = session.execute(
-        text("INSERT INTO tenants (nazwa, skrot, regon, nip, dni_do_przegladu, data_utworzenia) VALUES (:n,:s,:r,:nip,:d,:dt) RETURNING *"),
+        text("INSERT INTO tenants (nazwa, skrot, regon, nip, dni_do_przegladu, aktywny, data_utworzenia) VALUES (:n,:s,:r,:nip,:d,1,:dt) RETURNING *"),
         {"n": body.nazwa, "s": body.skrot, "r": body.regon, "nip": body.nip,
          "d": body.dni_do_przegladu or 365, "dt": datetime.utcnow()},
     ).mappings().first()
