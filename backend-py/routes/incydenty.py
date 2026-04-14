@@ -3,6 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from schemas import BaseSchema
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -14,7 +15,7 @@ router = APIRouter()
 IT = ("IT_ADMIN", "SUPERADMIN")
 
 
-class IncydentIn(BaseModel):
+class IncydentIn(BaseSchema):
     tenant_id: int
     tytul: str
     opis: Optional[str] = None
@@ -23,7 +24,7 @@ class IncydentIn(BaseModel):
     dotyczy_nis2: Optional[bool] = False
 
 
-class IncydentUpdate(BaseModel):
+class IncydentUpdate(BaseSchema):
     tytul: str
     opis: Optional[str] = None
     typ: str

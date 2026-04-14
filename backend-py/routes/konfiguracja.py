@@ -3,6 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from schemas import BaseSchema
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -13,14 +14,14 @@ router = APIRouter()
 IT = ("IT_ADMIN", "SUPERADMIN")
 
 
-class NumeracjaIn(BaseModel):
+class NumeracjaIn(BaseSchema):
     format_szablonu: str
     prefix: str
     szerokosc_sekwencji: int
     reset_co: str
 
 
-class PlatformaIn(BaseModel):
+class PlatformaIn(BaseSchema):
     wartosc: Optional[str] = None
 
 

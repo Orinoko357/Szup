@@ -3,6 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from schemas import BaseSchema
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -14,7 +15,7 @@ router = APIRouter()
 IT = ("IT_ADMIN", "SUPERADMIN")
 
 
-class TenantIn(BaseModel):
+class TenantIn(BaseSchema):
     nazwa: str
     skrot: str
     regon: Optional[str] = None

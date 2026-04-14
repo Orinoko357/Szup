@@ -208,6 +208,9 @@ async def refresh(request: Request, response: Response, session: Session = Depen
         text("SELECT * FROM uzytkownicy WHERE id=:id"),
         {"id": payload.get("userId")},
     ).mappings().first()
+    if not user:
+        response.delete_cookie(REFRESH_COOKIE)
+        raise HTTPException(status_code=401, detail="Użytkownik nie istnieje.")
     user = dict(user)
 
     new_payload = {"userId": user["id"], "username": user["username"], "email": user.get("email"),

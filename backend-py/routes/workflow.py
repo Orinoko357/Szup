@@ -3,6 +3,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from schemas import BaseSchema
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -14,20 +15,20 @@ router = APIRouter()
 IT = ("IT_ADMIN", "SUPERADMIN")
 
 
-class SzablonIn(BaseModel):
+class SzablonIn(BaseSchema):
     tenant_id: int
     nazwa: str
     opis: Optional[str] = None
     aktywny: Optional[bool] = True
 
 
-class SzablonUpdate(BaseModel):
+class SzablonUpdate(BaseSchema):
     nazwa: Optional[str] = None
     opis: Optional[str] = None
     aktywny: Optional[bool] = True
 
 
-class PoziomIn(BaseModel):
+class PoziomIn(BaseSchema):
     kolejnosc: int
     nazwa: Optional[str] = None
     zatwierdzajacy_id: Optional[int] = None
@@ -37,16 +38,16 @@ class PoziomIn(BaseModel):
     eskalacja_dni: Optional[int] = 7
 
 
-class ReorderItem(BaseModel):
+class ReorderItem(BaseSchema):
     id: int
     kolejnosc: int
 
 
-class ReorderIn(BaseModel):
+class ReorderIn(BaseSchema):
     kolejnosci: List[ReorderItem]
 
 
-class PrzypisanieIn(BaseModel):
+class PrzypisanieIn(BaseSchema):
     szablon_id: int
     typ: str
     komorka_id: Optional[int] = None

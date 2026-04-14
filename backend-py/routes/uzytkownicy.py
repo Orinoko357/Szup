@@ -3,6 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from schemas import BaseSchema
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -13,7 +14,7 @@ router = APIRouter()
 IT = ("IT_ADMIN", "SUPERADMIN")
 
 
-class UzytkownikIn(BaseModel):
+class UzytkownikIn(BaseSchema):
     username: str
     imie: str
     nazwisko: str
@@ -23,7 +24,7 @@ class UzytkownikIn(BaseModel):
     aktywny: Optional[bool] = True
 
 
-class UzytkownikUpdate(BaseModel):
+class UzytkownikUpdate(BaseSchema):
     imie: Optional[str] = None
     nazwisko: Optional[str] = None
     email: Optional[str] = None
@@ -32,7 +33,7 @@ class UzytkownikUpdate(BaseModel):
     aktywny: Optional[bool] = True
 
 
-class BlokadaIn(BaseModel):
+class BlokadaIn(BaseSchema):
     zablokowany: bool
 
 

@@ -3,6 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from schemas import BaseSchema
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -12,7 +13,7 @@ from dependencies import CurrentUser, get_current_user, require_roles, write_aud
 router = APIRouter()
 
 
-class NadajIn(BaseModel):
+class NadajIn(BaseSchema):
     pracownik_id: int
     system_id: int
     modul_id: Optional[int] = None
@@ -22,11 +23,11 @@ class NadajIn(BaseModel):
     data_do: Optional[str] = None
 
 
-class CofnijIn(BaseModel):
+class CofnijIn(BaseSchema):
     powod: str
 
 
-class MasoweCofniecieIn(BaseModel):
+class MasoweCofniecieIn(BaseSchema):
     pracownik_id: int
     powod: str
 

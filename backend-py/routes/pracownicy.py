@@ -3,6 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from schemas import BaseSchema
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -12,7 +13,7 @@ from dependencies import CurrentUser, get_current_user, require_roles, write_aud
 router = APIRouter()
 
 
-class PracownikIn(BaseModel):
+class PracownikIn(BaseSchema):
     uzytkownik_id: int
     tenant_id: int
     komorka_id: Optional[int] = None

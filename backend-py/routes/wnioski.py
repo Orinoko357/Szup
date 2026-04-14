@@ -5,6 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from schemas import BaseSchema
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -21,50 +22,50 @@ from services.workflow_service import (
 router = APIRouter()
 
 
-class PozycjaIn(BaseModel):
+class PozycjaIn(BaseSchema):
     system_id: int
     modul_id: Optional[int] = None
     zakres_id: int
     uzasadnienie: Optional[str] = None
 
 
-class WniosekIn(BaseModel):
+class WniosekIn(BaseSchema):
     pracownik_id: int
     pozycje: List[PozycjaIn]
     uwagi_inicjujacego: Optional[str] = None
     zloz: Optional[bool] = False
 
 
-class ZatwierdzIn(BaseModel):
+class ZatwierdzIn(BaseSchema):
     etap_kolejnosc: int
     komentarz: Optional[str] = None
 
 
-class OdrzucIn(BaseModel):
+class OdrzucIn(BaseSchema):
     etap_kolejnosc: int
     powod: str
 
 
-class OdeslijIn(BaseModel):
+class OdeslijIn(BaseSchema):
     etap_kolejnosc: int
     komentarz: str
 
 
-class PominIn(BaseModel):
+class PominIn(BaseSchema):
     etap_kolejnosc: int
     powod: str
 
 
-class ZrealizujIn(BaseModel):
+class ZrealizujIn(BaseSchema):
     uwagi: Optional[str] = None
     pozycje_do_usuniecia: Optional[List[int]] = []
 
 
-class ItOdrzucIn(BaseModel):
+class ItOdrzucIn(BaseSchema):
     powod: str
 
 
-class PozycjaUpdate(BaseModel):
+class PozycjaUpdate(BaseSchema):
     zakres_id: Optional[int] = None
     uzasadnienie: Optional[str] = None
 
