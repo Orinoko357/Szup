@@ -48,4 +48,6 @@ def get_session() -> Session:
 
 
 def create_db_and_tables():
+    # Import all models to ensure they are registered with SQLModel metadata
+    import models  # noqa: F401
     SQLModel.metadata.create_all(engine)
