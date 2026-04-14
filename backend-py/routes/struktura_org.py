@@ -42,7 +42,7 @@ async def list_struktura(tenant_id: Optional[int] = None,
 async def create_struktura(body: StrukturIn, session: Session = Depends(get_session),
                             current_user: CurrentUser = Depends(require_roles(*IT))):
     row = session.execute(
-        text("INSERT INTO struktura_org (tenant_id, nazwa, typ_wezla, nadrzedny_id, kolejnosc) VALUES (:tid,:n,:t,:nad,:k) RETURNING *"),
+        text("INSERT INTO struktura_org (tenant_id, nazwa, typ_wezla, nadrzedny_id, kolejnosc, aktywna) VALUES (:tid,:n,:t,:nad,:k,1) RETURNING *"),
         {"tid": body.tenant_id, "n": body.nazwa, "t": body.typ_wezla or "WYDZIAL",
          "nad": body.nadrzedny_id, "k": body.kolejnosc or 0},
     ).mappings().first()

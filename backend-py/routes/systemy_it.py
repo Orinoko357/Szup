@@ -77,7 +77,7 @@ async def create_system(body: SystemIn, request: Request,
                          current_user: CurrentUser = Depends(require_roles(*IT))):
     from datetime import datetime
     row = session.execute(
-        text("INSERT INTO systemy_it (tenant_id,nazwa,opis,wlasciciel,poziom_krytycznosci,dodany_przez,data_dodania) VALUES (:tid,:n,:o,:w,:pk,:dp,:dd) RETURNING *"),
+        text("INSERT INTO systemy_it (tenant_id,nazwa,opis,wlasciciel,poziom_krytycznosci,dodany_przez,data_dodania,aktywny) VALUES (:tid,:n,:o,:w,:pk,:dp,:dd,1) RETURNING *"),
         {"tid": body.tenant_id, "n": body.nazwa, "o": body.opis, "w": body.wlasciciel,
          "pk": body.poziom_krytycznosci, "dp": current_user.userId, "dd": datetime.utcnow()},
     ).mappings().first()
@@ -107,7 +107,7 @@ async def update_system(system_id: int, body: SystemIn, session: Session = Depen
 async def create_modul(system_id: int, body: ModulIn, session: Session = Depends(get_session),
                         current_user: CurrentUser = Depends(require_roles(*IT))):
     row = session.execute(
-        text("INSERT INTO modul_systemu (system_id,nazwa,opis) VALUES (:sid,:n,:o) RETURNING *"),
+        text("INSERT INTO modul_systemu (system_id,nazwa,opis,aktywny) VALUES (:sid,:n,:o,1) RETURNING *"),
         {"sid": system_id, "n": body.nazwa, "o": body.opis},
     ).mappings().first()
     session.commit()
@@ -130,7 +130,7 @@ async def create_zakres(system_id: int, body: ZakresIn, session: Session = Depen
                          current_user: CurrentUser = Depends(require_roles(*IT))):
     row = session.execute(
         text("INSERT INTO zakres_uprawnien (system_id,modul_id,nazwa,opis,uprzywilejowany) VALUES (:sid,:mid,:n,:o,:u) RETURNING *"),
-        {"sid": system_id, "mid": body.modul_id, "n": body.nazwa, "o": body.opis, "u": body.uprzywilejowany or False},
+        {"sid": system_id, "mid": body.modul_id, "n": body.nazwa, "o": body.opis, "u": 1 if body.uprzywilejowany else 0},
     ).mappings().first()
     session.commit()
     return dict(row)

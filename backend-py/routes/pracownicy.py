@@ -117,7 +117,7 @@ async def create_pracownik(body: PracownikIn, request: Request,
                             session: Session = Depends(get_session),
                             current_user: CurrentUser = Depends(require_roles("IT_ADMIN", "SUPERADMIN", "KADRY"))):
     row = session.execute(
-        text("INSERT INTO pracownicy (uzytkownik_id,tenant_id,komorka_id,stanowisko,data_zatrudnienia,przelozony_id) VALUES (:uid,:tid,:kid,:s,:d,:p) RETURNING *"),
+        text("INSERT INTO pracownicy (uzytkownik_id,tenant_id,komorka_id,stanowisko,data_zatrudnienia,przelozony_id,aktywny) VALUES (:uid,:tid,:kid,:s,:d,:p,1) RETURNING *"),
         {"uid": body.uzytkownik_id, "tid": body.tenant_id, "kid": body.komorka_id,
          "s": body.stanowisko, "d": body.data_zatrudnienia, "p": body.przelozony_id},
     ).mappings().first()

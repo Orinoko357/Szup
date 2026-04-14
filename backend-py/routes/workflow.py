@@ -104,7 +104,7 @@ async def create_szablon(body: SzablonIn, request: Request,
                           current_user: CurrentUser = Depends(require_roles(*IT))):
     from datetime import datetime
     row = session.execute(
-        text("INSERT INTO workflow_szablony (tenant_id,nazwa,opis,utworzony_przez,data_utworzenia) VALUES (:tid,:n,:o,:up,:dt) RETURNING *"),
+        text("INSERT INTO workflow_szablony (tenant_id,nazwa,opis,aktywny,utworzony_przez,data_utworzenia) VALUES (:tid,:n,:o,1,:up,:dt) RETURNING *"),
         {"tid": body.tenant_id, "n": body.nazwa, "o": body.opis, "up": current_user.userId, "dt": datetime.utcnow()},
     ).mappings().first()
     session.commit()
@@ -182,7 +182,7 @@ async def create_poziom(szablon_id: int, body: PoziomIn,
         text("""INSERT INTO workflow_poziomy (szablon_id,kolejnosc,nazwa,zatwierdzajacy_id,opcjonalny,
                 opis_warunku_pominiecia,przypomnienie_dni,eskalacja_dni) VALUES (:sid,:k,:n,:z,:o,:op,:r,:e) RETURNING *"""),
         {"sid": szablon_id, "k": body.kolejnosc, "n": body.nazwa, "z": body.zatwierdzajacy_id,
-         "o": body.opcjonalny or False, "op": body.opis_warunku_pominiecia,
+         "o": 1 if body.opcjonalny else 0, "op": body.opis_warunku_pominiecia,
          "r": body.przypomnienie_dni or 3, "e": body.eskalacja_dni or 7},
     ).mappings().first()
     session.commit()

@@ -54,7 +54,7 @@ async def get_komorka(komorka_id: int, session: Session = Depends(get_session),
 async def create_komorka(body: KomorkaIn, session: Session = Depends(get_session),
                           current_user: CurrentUser = Depends(require_roles(*IT))):
     row = session.execute(
-        text("INSERT INTO komorki_org (tenant_id, struktura_org_id, nazwa, kod) VALUES (:tid,:sid,:n,:k) RETURNING *"),
+        text("INSERT INTO komorki_org (tenant_id, struktura_org_id, nazwa, kod, aktywna) VALUES (:tid,:sid,:n,:k,1) RETURNING *"),
         {"tid": body.tenant_id, "sid": body.struktura_org_id, "n": body.nazwa, "k": body.kod},
     ).mappings().first()
     session.commit()

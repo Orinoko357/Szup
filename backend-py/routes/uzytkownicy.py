@@ -80,7 +80,7 @@ async def create_uzytkownik(body: UzytkownikIn, request: Request,
                              current_user: CurrentUser = Depends(require_roles(*IT))):
     from datetime import datetime
     row = session.execute(
-        text("INSERT INTO uzytkownicy (username,imie,nazwisko,email,rola,tenant_id,data_utworzenia) VALUES (:u,:i,:n,:e,:r,:t,:dt) RETURNING id,username,imie,nazwisko,email,rola,tenant_id"),
+        text("INSERT INTO uzytkownicy (username,imie,nazwisko,email,rola,tenant_id,data_utworzenia,aktywny,wymagaj_zmiany_hasla,nieudane_logowania) VALUES (:u,:i,:n,:e,:r,:t,:dt,1,1,0) RETURNING id,username,imie,nazwisko,email,rola,tenant_id"),
         {"u": body.username, "i": body.imie, "n": body.nazwisko, "e": body.email,
          "r": body.rola, "t": body.tenant_id, "dt": datetime.utcnow()},
     ).mappings().first()
