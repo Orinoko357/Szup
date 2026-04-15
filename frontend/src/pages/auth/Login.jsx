@@ -33,7 +33,7 @@ export default function Login() {
       login(data.accessToken, data.user);
       navigate('/');
     } catch (err) {
-      setError(err.response?.data?.error || 'Nieprawidłowe dane logowania.');
+      setError(err.response?.data?.detail || err.response?.data?.error || 'Nieprawidłowe dane logowania.');
     } finally {
       setLoading(false);
     }
