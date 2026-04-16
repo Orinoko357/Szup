@@ -22,27 +22,23 @@ def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
 
-def _make_fernet() -> Optional[Fernet]:
+def _make_fernet() -> Fernet:
     key_hex = settings.LDAP_ENCRYPTION_KEY
-    if not key_hex or len(key_hex) < 64:
-        return None
-    raw = bytes.fromhex(key_hex[:64])
+    if key_hex and len(key_hex) >= 64:
+        raw = bytes.fromhex(key_hex[:64])
+    else:
+        # Derive stable key from JWT_SECRET when LDAP_ENCRYPTION_KEY not configured
+        raw = hashlib.sha256(settings.JWT_SECRET.encode()).digest()
     fernet_key = base64.urlsafe_b64encode(raw)
     return Fernet(fernet_key)
 
 
 def encrypt_ldap_password(plain: str) -> str:
-    f = _make_fernet()
-    if f is None:
-        raise ValueError("LDAP_ENCRYPTION_KEY not configured")
-    return f.encrypt(plain.encode()).decode()
+    return _make_fernet().encrypt(plain.encode()).decode()
 
 
 def decrypt_ldap_password(enc: str) -> str:
-    f = _make_fernet()
-    if f is None:
-        raise ValueError("LDAP_ENCRYPTION_KEY not configured")
-    return f.decrypt(enc.encode()).decode()
+    return _make_fernet().decrypt(enc.encode()).decode()
 
 
 def create_access_token(payload: dict[str, Any]) -> str:

@@ -42,7 +42,7 @@ export default function AdminLdapDomeny() {
         await api.put(`/ldap-domeny/${modal.id}`, form);
       }
       setModal(null); load();
-    } catch (e) { setError(e.response?.data?.error || 'Błąd.'); }
+    } catch (e) { setError(e.response?.data?.detail || e.response?.data?.error || 'Błąd serwera.'); }
     finally { setSaving(false); }
   }
 
