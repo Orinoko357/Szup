@@ -133,6 +133,9 @@ class Pracownik(SQLModel, table=True):
     tenant_id: int = Field(foreign_key="tenants.id")
     jednostka_id: Optional[int] = Field(default=None, foreign_key="jednostki_org.id")
     komorka_id: Optional[int] = Field(default=None, foreign_key="komorki_org.id")
+    imie: Optional[str] = None        # used when no uzytkownik_id
+    nazwisko: Optional[str] = None
+    email: Optional[str] = None
     stanowisko: Optional[str] = None
     data_zatrudnienia: Optional[date] = None
     data_zwolnienia: Optional[date] = None

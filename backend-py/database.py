@@ -59,6 +59,9 @@ def _run_migrations():
     with SessionLocal() as session:
         migrations = [
             "ALTER TABLE pracownicy ADD COLUMN jednostka_id INTEGER REFERENCES jednostki_org(id)",
+            "ALTER TABLE pracownicy ADD COLUMN imie TEXT",
+            "ALTER TABLE pracownicy ADD COLUMN nazwisko TEXT",
+            "ALTER TABLE pracownicy ADD COLUMN email TEXT",
         ]
         for sql in migrations:
             try:
