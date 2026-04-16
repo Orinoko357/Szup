@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from database import get_session
 from dependencies import CurrentUser, get_current_user, require_roles, write_audit, get_client_ip
-from services.workflow_service import resolve_szablon
+from services.workflow_service import resolve_etapy_from_tree
 
 router = APIRouter()
 IT = ("IT_ADMIN", "SUPERADMIN")
@@ -293,8 +293,8 @@ async def resolve_for_pracownik(pracownik_id: int,
                                  session: Session = Depends(get_session),
                                  current_user: CurrentUser = Depends(get_current_user)):
     try:
-        result = resolve_szablon(pracownik_id, session)
-        return result
+        etapy = resolve_etapy_from_tree(pracownik_id, session)
+        return {"etapy": etapy}
     except HTTPException:
         raise
     except Exception as e:
