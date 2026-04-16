@@ -14,7 +14,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: 'dist',
+    outDir: '/var/www/szup.intranet.wods.pl',
     emptyOutDir: true,
   },
 });
