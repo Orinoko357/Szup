@@ -1,7 +1,7 @@
 from __future__ import annotations
 import logging
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from fastapi import HTTPException
 from sqlalchemy import text
@@ -13,79 +13,99 @@ from services.notification_service import create_notification, notify_it
 logger = logging.getLogger(__name__)
 
 
-def resolve_szablon(pracownik_id: int, session: Session) -> dict:
-    """Resolve workflow template for an employee (komorka-specific or tenant default)."""
+# ─── Auto-resolve approval chain from org tree ────────────────────────────────
+
+def resolve_etapy_from_tree(pracownik_id: int, session: Session) -> List[dict]:
+    """
+    Derives the approval chain from the org tree:
+      Etap 1 — kierownik of the employee's direct unit
+      Etap 2 — kierownik of the parent unit (if different from Etap 1)
+    """
     prac = session.execute(
-        text("SELECT komorka_id, tenant_id FROM pracownicy WHERE id=:id"),
+        text("SELECT jednostka_id, tenant_id FROM pracownicy WHERE id=:id"),
         {"id": pracownik_id},
     ).mappings().first()
     if not prac:
         raise HTTPException(status_code=404, detail="Pracownik nie istnieje.")
 
-    komorka_id = prac["komorka_id"]
-    tenant_id = prac["tenant_id"]
-    szablon = None
-
-    if komorka_id:
-        row = session.execute(
-            text("""SELECT ws.* FROM workflow_przypisania wp
-                      JOIN workflow_szablony ws ON ws.id=wp.szablon_id
-                     WHERE wp.komorka_id=:kid AND ws.aktywny=1"""),
-            {"kid": komorka_id},
-        ).mappings().first()
-        if row:
-            szablon = dict(row)
-
-    if not szablon:
-        row = session.execute(
-            text("""SELECT ws.* FROM workflow_przypisania wp
-                      JOIN workflow_szablony ws ON ws.id=wp.szablon_id
-                     WHERE wp.typ='TENANT_DEFAULT' AND wp.tenant_id=:tid AND ws.aktywny=1"""),
-            {"tid": tenant_id},
-        ).mappings().first()
-        if row:
-            szablon = dict(row)
-
-    if not szablon:
+    jednostka_id = prac["jednostka_id"]
+    if not jednostka_id:
         raise HTTPException(
             status_code=422,
-            detail="Brak skonfigurowanej ścieżki zatwierdzania dla tej komórki. Skontaktuj się z IT.",
+            detail="Pracownik nie ma przypisanej jednostki organizacyjnej. "
+                   "Uzupełnij dane pracownika.",
         )
 
-    poziomy = session.execute(
-        text("""SELECT wl.*, p.id as prac_id,
-                       u.imie || ' ' || u.nazwisko as zatwierdzajacy_nazwa,
-                       p.stanowisko as zatwierdzajacy_stanowisko
-                  FROM workflow_poziomy wl
-                  LEFT JOIN pracownicy p ON p.id=wl.zatwierdzajacy_id
-                  LEFT JOIN uzytkownicy u ON u.id=p.uzytkownik_id
-                 WHERE wl.szablon_id=:sid ORDER BY wl.kolejnosc"""),
-        {"sid": szablon["id"]},
-    ).mappings().all()
+    etapy: List[dict] = []
+    seen: set = set()
+    current_id = jednostka_id
+    kolejnosc = 1
 
-    return {"szablon": szablon, "poziomy": [dict(p) for p in poziomy]}
+    while current_id and kolejnosc <= 2:
+        unit = session.execute(
+            text("SELECT id, nazwa, kierownik_id, nadrzedny_id FROM jednostki_org WHERE id=:id AND aktywna=1"),
+            {"id": current_id},
+        ).mappings().first()
+        if not unit:
+            break
+        unit = dict(unit)
+
+        kier_id = unit.get("kierownik_id")
+        if kier_id and kier_id not in seen and kier_id != pracownik_id:
+            kier = session.execute(
+                text("""SELECT p.id, u.imie, u.nazwisko, p.stanowisko
+                          FROM pracownicy p
+                          JOIN uzytkownicy u ON u.id = p.uzytkownik_id
+                         WHERE p.id = :id AND p.aktywny = 1"""),
+                {"id": kier_id},
+            ).mappings().first()
+            if kier:
+                kier = dict(kier)
+                etapy.append({
+                    "kolejnosc": kolejnosc,
+                    "nazwa": f"Akceptacja — {kier['imie']} {kier['nazwisko']} ({unit['nazwa']})",
+                    "zatwierdzajacy_id": kier_id,
+                    "opcjonalny": False,
+                    "przypomnienie_dni": 3,
+                    "eskalacja_dni": 7,
+                })
+                seen.add(kier_id)
+                kolejnosc += 1
+
+        current_id = unit.get("nadrzedny_id")
+
+    if not etapy:
+        raise HTTPException(
+            status_code=422,
+            detail="Brak kierowników w strukturze organizacyjnej. "
+                   "Przypisz kierownika do jednostki organizacyjnej pracownika.",
+        )
+
+    return etapy
 
 
-def _snapshot_etapy(wniosek_id: int, poziomy: list, session: Session):
+def _snapshot_etapy(wniosek_id: int, etapy: list, session: Session):
     now = datetime.utcnow()
-    for p in poziomy:
+    for e in etapy:
         session.execute(
             text("""INSERT INTO wnioski_etapy
                      (wniosek_id, kolejnosc, nazwa, zatwierdzajacy_id, opcjonalny,
-                      opis_warunku_pominiecia, przypomnienie_dni, eskalacja_dni, status, data_przypisania)
-                    VALUES (:wid,:k,:n,:zid,:o,:op,:r,:e,'OCZEKUJE',
+                      przypomnienie_dni, eskalacja_dni, status, data_przypisania)
+                    VALUES (:wid,:k,:n,:zid,:o,:r,:e,'OCZEKUJE',
                             CASE WHEN :k=1 THEN :now ELSE NULL END)"""),
-            {"wid": wniosek_id, "k": p["kolejnosc"], "n": p["nazwa"],
-             "zid": p.get("zatwierdzajacy_id"), "o": p.get("opcjonalny", False),
-             "op": p.get("opis_warunku_pominiecia"), "r": p.get("przypomnienie_dni"),
-             "e": p.get("eskalacja_dni"), "now": now},
+            {
+                "wid": wniosek_id, "k": e["kolejnosc"], "n": e["nazwa"],
+                "zid": e.get("zatwierdzajacy_id"), "o": e.get("opcjonalny", False),
+                "r": e.get("przypomnienie_dni"), "e": e.get("eskalacja_dni"), "now": now,
+            },
         )
-    # Ensure first stage has data_przypisania
     session.execute(
         text("UPDATE wnioski_etapy SET data_przypisania=:now WHERE wniosek_id=:wid AND kolejnosc=1"),
         {"now": now, "wid": wniosek_id},
     )
 
+
+# ─── Submit ───────────────────────────────────────────────────────────────────
 
 def submit_wniosek(wniosek_id: int, inicjujacy_user_id: int, session: Session) -> dict:
     w = session.execute(
@@ -99,39 +119,41 @@ def submit_wniosek(wniosek_id: int, inicjujacy_user_id: int, session: Session) -
     if w["status"] not in ("SZKIC", "WYMAGA_POPRAWY"):
         raise HTTPException(status_code=400, detail="Wniosek nie może być złożony w obecnym statusie.")
 
-    numer = w.get("numer")
-    if not numer:
-        numer = generate_numer(session)
+    numer = w.get("numer") or generate_numer(session)
 
-    result = resolve_szablon(w["pracownik_id"], session)
-    szablon = result["szablon"]
-    poziomy = result["poziomy"]
+    # Resolve approval chain from org tree
+    etapy = resolve_etapy_from_tree(w["pracownik_id"], session)
 
     session.execute(text("DELETE FROM wnioski_etapy WHERE wniosek_id=:id"), {"id": wniosek_id})
-    _snapshot_etapy(wniosek_id, poziomy, session)
+    _snapshot_etapy(wniosek_id, etapy, session)
 
     session.execute(
-        text("UPDATE wnioski SET numer=:n, szablon_id=:sid, status='W_TOKU', aktualny_etap_kolejnosc=1, data_ostatniej_zmiany=:dt WHERE id=:id"),
-        {"n": numer, "sid": szablon["id"], "dt": datetime.utcnow(), "id": wniosek_id},
+        text("""UPDATE wnioski
+                   SET numer=:n, szablon_id=NULL, status='W_TOKU',
+                       aktualny_etap_kolejnosc=1, data_ostatniej_zmiany=:dt
+                 WHERE id=:id"""),
+        {"n": numer, "dt": datetime.utcnow(), "id": wniosek_id},
     )
     session.commit()
 
-    if poziomy:
-        first = poziomy[0]
-        if first.get("zatwierdzajacy_id"):
-            u_row = session.execute(
-                text("SELECT uzytkownik_id FROM pracownicy WHERE id=:id"),
-                {"id": first["zatwierdzajacy_id"]},
-            ).mappings().first()
-            if u_row:
-                create_notification(
-                    u_row["uzytkownik_id"], "WNIOSEK_DO_ZATWIERDZENIA",
-                    f"Nowy wniosek {numer} oczekuje na Twoją akceptację (Etap 1: {first.get('nazwa') or ''}).",
-                    f"/wnioski/{wniosek_id}", session,
-                )
+    # Notify first approver
+    if etapy:
+        first = etapy[0]
+        u_row = session.execute(
+            text("SELECT uzytkownik_id FROM pracownicy WHERE id=:id"),
+            {"id": first["zatwierdzajacy_id"]},
+        ).mappings().first()
+        if u_row:
+            create_notification(
+                u_row["uzytkownik_id"], "WNIOSEK_DO_ZATWIERDZENIA",
+                f"Nowy wniosek {numer} oczekuje na Twoją akceptację ({first['nazwa']}).",
+                f"/wnioski/{wniosek_id}", session,
+            )
 
-    return {"numer": numer, "szablon": szablon, "poziomy": poziomy}
+    return {"numer": numer, "etapy": etapy}
 
+
+# ─── Approve ──────────────────────────────────────────────────────────────────
 
 def zatwierdz(wniosek_id: int, etap_kolejnosc: int, zatwierdzajacy_prac_id: int,
                komentarz: Optional[str], user_ctx: Any, session: Session) -> dict:
@@ -190,6 +212,7 @@ def zatwierdz(wniosek_id: int, etap_kolejnosc: int, zatwierdzajacy_prac_id: int,
                     f"/wnioski/{wniosek_id}", session,
                 )
     else:
+        # All stages approved → goes to IT
         session.execute(
             text("UPDATE wnioski SET status='OCZEKUJE_IT', aktualny_etap_kolejnosc=NULL, data_ostatniej_zmiany=:dt WHERE id=:id"),
             {"dt": now, "id": wniosek_id},
@@ -214,6 +237,8 @@ def zatwierdz(wniosek_id: int, etap_kolejnosc: int, zatwierdzajacy_prac_id: int,
                 nowe_dane={"komentarz": komentarz, "etapKolejnosc": etap_kolejnosc, "wniosekId": wniosek_id})
     return {"success": True}
 
+
+# ─── Reject ───────────────────────────────────────────────────────────────────
 
 def odrzuc(wniosek_id: int, etap_kolejnosc: int, zatwierdzajacy_prac_id: int,
             powod: str, user_ctx: Any, session: Session) -> dict:
@@ -261,6 +286,8 @@ def odrzuc(wniosek_id: int, etap_kolejnosc: int, zatwierdzajacy_prac_id: int,
     return {"success": True}
 
 
+# ─── Return for correction ────────────────────────────────────────────────────
+
 def odeslij(wniosek_id: int, etap_kolejnosc: int, zatwierdzajacy_prac_id: int,
              komentarz: str, user_ctx: Any, session: Session) -> dict:
     w = session.execute(text("SELECT * FROM wnioski WHERE id=:id"), {"id": wniosek_id}).mappings().first()
@@ -287,7 +314,7 @@ def odeslij(wniosek_id: int, etap_kolejnosc: int, zatwierdzajacy_prac_id: int,
 
     if etap_kolejnosc > 1:
         session.execute(
-            text("UPDATE wnioski_etapy SET status='OCZEKUJE', data_przypisania=:dt, data_akcji=NULL, data_przypomnienia=NULL WHERE wniosek_id=:wid AND kolejnosc=:k"),
+            text("UPDATE wnioski_etapy SET status='OCZEKUJE', data_przypisania=:dt, data_akcji=NULL WHERE wniosek_id=:wid AND kolejnosc=:k"),
             {"dt": now, "wid": wniosek_id, "k": etap_kolejnosc - 1},
         )
         session.execute(
@@ -307,7 +334,7 @@ def odeslij(wniosek_id: int, etap_kolejnosc: int, zatwierdzajacy_prac_id: int,
             ).mappings().first()
             if u_row:
                 create_notification(u_row["uzytkownik_id"], "WNIOSEK_ODESŁANY",
-                                    f"Wniosek {w.get('numer')} został odesłany do poprawy. Proszę o ponowne zatwierdzenie.",
+                                    f"Wniosek {w.get('numer')} odesłany do poprawy.",
                                     f"/wnioski/{wniosek_id}", session)
     else:
         session.execute(
@@ -332,6 +359,8 @@ def odeslij(wniosek_id: int, etap_kolejnosc: int, zatwierdzajacy_prac_id: int,
                 nowe_dane={"komentarz": komentarz, "etapKolejnosc": etap_kolejnosc})
     return {"success": True}
 
+
+# ─── Skip optional stage ──────────────────────────────────────────────────────
 
 def pomin_etap(wniosek_id: int, etap_kolejnosc: int, zatwierdzajacy_prac_id: int,
                 powod: str, user_ctx: Any, session: Session) -> dict:
@@ -374,7 +403,7 @@ def pomin_etap(wniosek_id: int, etap_kolejnosc: int, zatwierdzajacy_prac_id: int
     else:
         session.execute(
             text("UPDATE wnioski SET status='OCZEKUJE_IT', aktualny_etap_kolejnosc=NULL, data_ostatniej_zmiany=:dt WHERE id=:id"),
-            {"dt": now, "id": wniosek_id},
+            {"dt": now, "id": dict(w)["id"]},
         )
     session.commit()
     return {"success": True}

@@ -16,7 +16,8 @@ router = APIRouter()
 class PracownikIn(BaseSchema):
     uzytkownik_id: int
     tenant_id: int
-    komorka_id: Optional[int] = None
+    jednostka_id: Optional[int] = None
+    komorka_id: Optional[int] = None  # legacy
     stanowisko: Optional[str] = None
     data_zatrudnienia: Optional[str] = None
     data_zwolnienia: Optional[str] = None
@@ -29,16 +30,16 @@ async def list_pracownicy(tenant_id: Optional[int] = None, komorka_id: Optional[
                            aktywny: Optional[str] = None, q: Optional[str] = None,
                            session: Session = Depends(get_session),
                            current_user: CurrentUser = Depends(get_current_user)):
-    query = """SELECT p.id, p.uzytkownik_id, p.tenant_id, p.komorka_id,
+    query = """SELECT p.id, p.uzytkownik_id, p.tenant_id, p.jednostka_id,
                       p.stanowisko, p.data_zatrudnienia, p.data_zwolnienia, p.aktywny,
                       p.przelozony_id,
                       u.imie, u.nazwisko, u.email, u.username, u.rola,
-                      k.nazwa as komorka_nazwa, t.nazwa as tenant_nazwa,
+                      j.nazwa as jednostka_nazwa, t.nazwa as tenant_nazwa,
                       pr.id as przel_id,
                       pu.imie || ' ' || pu.nazwisko as przel_nazwa
                  FROM pracownicy p
                  JOIN uzytkownicy u ON u.id=p.uzytkownik_id
-                 LEFT JOIN komorki_org k ON k.id=p.komorka_id
+                 LEFT JOIN jednostki_org j ON j.id=p.jednostka_id
                  LEFT JOIN tenants t ON t.id=p.tenant_id
                  LEFT JOIN pracownicy pr ON pr.id=p.przelozony_id
                  LEFT JOIN uzytkownicy pu ON pu.id=pr.uzytkownik_id
@@ -53,7 +54,7 @@ async def list_pracownicy(tenant_id: Optional[int] = None, komorka_id: Optional[
         query += " AND p.tenant_id=:tid"
         params["tid"] = effective_tenant
     if komorka_id:
-        query += " AND p.komorka_id=:kid"
+        query += " AND (p.komorka_id=:kid OR p.jednostka_id=:kid)"
         params["kid"] = komorka_id
     if aktywny is not None:
         query += " AND p.aktywny=:a"
@@ -118,8 +119,8 @@ async def create_pracownik(body: PracownikIn, request: Request,
                             session: Session = Depends(get_session),
                             current_user: CurrentUser = Depends(require_roles("IT_ADMIN", "SUPERADMIN", "KADRY"))):
     row = session.execute(
-        text("INSERT INTO pracownicy (uzytkownik_id,tenant_id,komorka_id,stanowisko,data_zatrudnienia,przelozony_id,aktywny) VALUES (:uid,:tid,:kid,:s,:d,:p,1) RETURNING *"),
-        {"uid": body.uzytkownik_id, "tid": body.tenant_id, "kid": body.komorka_id,
+        text("INSERT INTO pracownicy (uzytkownik_id,tenant_id,jednostka_id,stanowisko,data_zatrudnienia,przelozony_id,aktywny) VALUES (:uid,:tid,:jid,:s,:d,:p,1) RETURNING *"),
+        {"uid": body.uzytkownik_id, "tid": body.tenant_id, "jid": body.jednostka_id,
          "s": body.stanowisko, "d": body.data_zatrudnienia, "p": body.przelozony_id},
     ).mappings().first()
     session.commit()
@@ -140,8 +141,8 @@ async def update_pracownik(prac_id: int, body: PracownikIn, request: Request,
     old = dict(old)
 
     row = session.execute(
-        text("UPDATE pracownicy SET komorka_id=:kid, stanowisko=:s, data_zatrudnienia=:dt, data_zwolnienia=:dz, aktywny=:a, przelozony_id=:p WHERE id=:id RETURNING *"),
-        {"kid": body.komorka_id, "s": body.stanowisko, "dt": body.data_zatrudnienia,
+        text("UPDATE pracownicy SET jednostka_id=:jid, stanowisko=:s, data_zatrudnienia=:dt, data_zwolnienia=:dz, aktywny=:a, przelozony_id=:p WHERE id=:id RETURNING *"),
+        {"jid": body.jednostka_id, "s": body.stanowisko, "dt": body.data_zatrudnienia,
          "dz": body.data_zwolnienia, "a": body.aktywny if body.aktywny is not None else True,
          "p": body.przelozony_id, "id": prac_id},
     ).mappings().first()

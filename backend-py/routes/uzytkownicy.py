@@ -11,7 +11,7 @@ from database import get_session
 from dependencies import CurrentUser, get_current_user, require_roles, write_audit, get_client_ip
 
 router = APIRouter()
-IT = ("IT_ADMIN", "SUPERADMIN")
+IT = ("IT_ADMIN", "SUPERADMIN", "KADRY")
 
 
 class UzytkownikIn(BaseSchema):

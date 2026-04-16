@@ -32,13 +32,13 @@ def generate_wniosek_pdf(wniosek_id: int, user_ctx: Any, session: Session) -> st
     w = session.execute(
         text("""SELECT w.*, t.nazwa as tenant_nazwa,
                        u.imie || ' ' || u.nazwisko as pracownik_nazwa,
-                       p.stanowisko, k.nazwa as komorka_nazwa, p.data_zatrudnienia,
+                       p.stanowisko, j.nazwa as komorka_nazwa, p.data_zatrudnienia,
                        ui.imie || ' ' || ui.nazwisko as inicjujacy_nazwa
                   FROM wnioski w
                   JOIN tenants t ON t.id=w.tenant_id
                   JOIN pracownicy p ON p.id=w.pracownik_id
                   JOIN uzytkownicy u ON u.id=p.uzytkownik_id
-                  LEFT JOIN komorki_org k ON k.id=p.komorka_id
+                  LEFT JOIN jednostki_org j ON j.id=p.jednostka_id
                   JOIN pracownicy pi ON pi.id=w.inicjujacy_id
                   JOIN uzytkownicy ui ON ui.id=pi.uzytkownik_id
                  WHERE w.id=:id"""),

@@ -162,12 +162,12 @@ async def get_wniosek(wniosek_id: int, session: Session = Depends(get_session),
     row = session.execute(
         text("""SELECT w.*, t.nazwa as tenant_nazwa,
                        u.imie || ' ' || u.nazwisko as pracownik_nazwa,
-                       p.stanowisko, k.nazwa as komorka_nazwa,
+                       p.stanowisko, j.nazwa as komorka_nazwa,
                        ui.imie || ' ' || ui.nazwisko as inicjujacy_nazwa
                   FROM wnioski w
                   JOIN pracownicy p ON p.id=w.pracownik_id
                   JOIN uzytkownicy u ON u.id=p.uzytkownik_id
-                  LEFT JOIN komorki_org k ON k.id=p.komorka_id
+                  LEFT JOIN jednostki_org j ON j.id=p.jednostka_id
                   JOIN tenants t ON t.id=w.tenant_id
                   JOIN pracownicy pi ON pi.id=w.inicjujacy_id
                   JOIN uzytkownicy ui ON ui.id=pi.uzytkownik_id
@@ -207,7 +207,7 @@ async def get_wniosek(wniosek_id: int, session: Session = Depends(get_session),
 @router.post("", status_code=201)
 async def create_wniosek(body: WniosekIn, request: Request,
                           session: Session = Depends(get_session),
-                          current_user: CurrentUser = Depends(require_roles("KIEROWNIK", "IT_ADMIN", "SUPERADMIN"))):
+                          current_user: CurrentUser = Depends(require_roles("KIEROWNIK", "IT_ADMIN", "SUPERADMIN", "KADRY"))):
     from datetime import datetime
     inic = session.execute(
         text("SELECT id, tenant_id FROM pracownicy WHERE uzytkownik_id=:uid"),
