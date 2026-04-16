@@ -156,6 +156,7 @@ from routes.auth import router as auth_router
 from routes.tenants import router as tenants_router
 from routes.struktura_org import router as struktura_org_router
 from routes.komorki import router as komorki_router
+from routes.jednostki_org import router as jednostki_org_router
 from routes.ldap_domeny import router as ldap_router
 from routes.systemy_it import router as systemy_it_router
 from routes.uzytkownicy import router as uzytkownicy_router
@@ -173,6 +174,7 @@ app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(tenants_router, prefix="/api/tenants", tags=["tenants"])
 app.include_router(struktura_org_router, prefix="/api/struktura-org", tags=["struktura-org"])
 app.include_router(komorki_router, prefix="/api/komorki", tags=["komorki"])
+app.include_router(jednostki_org_router, prefix="/api/jednostki-org", tags=["jednostki-org"])
 app.include_router(ldap_router, prefix="/api/ldap-domeny", tags=["ldap-domeny"])
 app.include_router(systemy_it_router, prefix="/api/systemy-it", tags=["systemy-it"])
 app.include_router(uzytkownicy_router, prefix="/api/uzytkownicy", tags=["uzytkownicy"])

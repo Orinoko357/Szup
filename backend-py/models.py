@@ -114,11 +114,24 @@ class KomorkaOrg(SQLModel, table=True):
     aktywna: bool = True
 
 
+class JednostkaOrg(SQLModel, table=True):
+    __tablename__ = "jednostki_org"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: int = Field(foreign_key="tenants.id")
+    nazwa: str
+    typ: str = "WYDZIAL"  # URZAD/WYDZIAL/REFERAT/BIURO/SEKCJA/ODDZIAL/STANOWISKO
+    nadrzedny_id: Optional[int] = Field(default=None, foreign_key="jednostki_org.id")
+    kierownik_id: Optional[int] = None  # pracownicy.id (no FK to avoid circular dep)
+    kolejnosc: int = 0
+    aktywna: bool = True
+
+
 class Pracownik(SQLModel, table=True):
     __tablename__ = "pracownicy"
     id: Optional[int] = Field(default=None, primary_key=True)
     uzytkownik_id: Optional[int] = Field(default=None, foreign_key="uzytkownicy.id")
     tenant_id: int = Field(foreign_key="tenants.id")
+    jednostka_id: Optional[int] = Field(default=None, foreign_key="jednostki_org.id")
     komorka_id: Optional[int] = Field(default=None, foreign_key="komorki_org.id")
     stanowisko: Optional[str] = None
     data_zatrudnienia: Optional[date] = None

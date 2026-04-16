@@ -48,6 +48,21 @@ def get_session() -> Session:
 
 
 def create_db_and_tables():
-    # Import all models to ensure they are registered with SQLModel metadata
     import models  # noqa: F401
     SQLModel.metadata.create_all(engine)
+    _run_migrations()
+
+
+def _run_migrations():
+    """Add columns/tables introduced after initial schema creation."""
+    from sqlalchemy import text
+    with SessionLocal() as session:
+        migrations = [
+            "ALTER TABLE pracownicy ADD COLUMN jednostka_id INTEGER REFERENCES jednostki_org(id)",
+        ]
+        for sql in migrations:
+            try:
+                session.execute(text(sql))
+                session.commit()
+            except Exception:
+                session.rollback()  # column already exists — ignore
