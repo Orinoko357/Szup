@@ -14,7 +14,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: '../backend-py/public',
+    outDir: 'dist',
     emptyOutDir: true,
   },
 });

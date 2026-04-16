@@ -3,12 +3,9 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
-from pathlib import Path
-
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 
 from config import settings
 
@@ -188,22 +185,6 @@ app.include_router(rejestry_router, prefix="/api/rejestry", tags=["rejestry"])
 app.include_router(incydenty_router, prefix="/api/incydenty", tags=["incydenty"])
 app.include_router(powiadomienia_router, prefix="/api/powiadomienia", tags=["powiadomienia"])
 app.include_router(konfiguracja_router, prefix="/api/konfiguracja", tags=["konfiguracja"])
-
-# Serve React frontend static files
-public_dir = Path(__file__).parent / "public"
-if public_dir.exists() and public_dir.is_dir():
-    app.mount("/assets", StaticFiles(directory=str(public_dir / "assets")), name="assets")
-
-    @app.get("/{full_path:path}", include_in_schema=False)
-    async def serve_spa(full_path: str, request: Request):
-        # Don't intercept API routes
-        if full_path.startswith("api/"):
-            return JSONResponse(status_code=404, content={"error": "Not found."})
-        index_file = public_dir / "index.html"
-        if index_file.exists():
-            return FileResponse(str(index_file))
-        return JSONResponse(status_code=404, content={"error": "Frontend not built."})
-
 
 if __name__ == "__main__":
     import uvicorn
