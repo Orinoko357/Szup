@@ -1,0 +1,52 @@
+# === Sekrety i dane (NIGDY do repo) ===
+.env
+.env.*
+*.key
+*.keytab
+*.pem
+*.p12
+*.pfx
+jwt_secret.key
+
+# Baza aplikacji i kopie
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.bak
+backups/
+
+# Logi
+logs/
+*.log
+
+# === Python (backend) ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Raporty audytu zależności
+deploy/audit-reports/
+
+# === Node / frontend ===
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.vite/
+
+# Build frontu (artefakt — budowany przed wdrożeniem: `npm run build`)
+frontend/dist/
+
+# === System / edytor ===
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

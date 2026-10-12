@@ -1,0 +1,19 @@
+[Unit]
+Description=SZUP - System Zarządzania Uprawnieniami
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/szup/backend
+EnvironmentFile=-/opt/szup/.env
+Environment=SZUP_DATA_DIR=/opt/szup/data
+Environment=SZUP_PROD=1
+ExecStart=/opt/szup/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8003
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/szup/logs/app.log
+StandardError=append:/opt/szup/logs/app.log
+
+[Install]
+WantedBy=multi-user.target

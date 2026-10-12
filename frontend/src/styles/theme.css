@@ -1,0 +1,590 @@
+/* Open Sans — self-hosted (WODS; brak zależności od zewnętrznych CDN
+   ze względów bezpieczeństwa NIS2/KSC). Pliki: public/fonts/*.woff2,
+   licencja OFL: public/fonts/OFL.txt. */
+@font-face {
+  font-family: 'Open Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/OpenSans-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Open Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/OpenSans-Medium.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Open Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/OpenSans-SemiBold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Open Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/OpenSans-Bold.woff2') format('woff2');
+}
+
+/* -----------------------------------------------------------------------
+   CSS Custom Properties — WODS design system
+   Identyfikacja wizualna Urzędu Miasta Wodzisławia Śląskiego.
+   Granat urzędowy + złoto; ostre karty, powaga urzędowa, WCAG 2.1 AA.
+   ----------------------------------------------------------------------- */
+:root {
+  --color-navy:        #1B2A4A;   /* Granat urzędowy */
+  --color-navy-dark:   #16223C;
+  --color-navy-light:  #243B5E;   /* hover na granacie */
+  --color-gold:        #C9A227;   /* Złoto — akcent (markery, sygnet, podkreślenia) */
+  --color-gold-dark:   #8A6D1C;   /* złoto jako tekst na jasnym tle (kontrast) */
+  --color-gold-light:  #D9A441;
+
+  --color-bg:          #F5F6F8;   /* Tło aplikacji */
+  --color-card:        #FFFFFF;
+  --color-table-head:  #F5F6F8;
+
+  --color-text:        #1D2433;   /* Tekst podstawowy (14,9:1 na białym) */
+  --color-text-muted:  #6B7280;   /* Tekst pomocniczy */
+  --color-border:      #E2E5EA;
+  --color-border-strong: #D5D9E0; /* obramowania makiet / modali */
+  --color-input-border:  #C7CDD6; /* obramowanie pól formularzy */
+
+  --color-success:     #2E7D32;
+  --color-success-bg:  #E7F2E8;
+  --color-success-text:#215A24;
+  --color-warning:     #B45309;
+  --color-warning-bg:  #FBEEDF;
+  --color-warning-text:#8A4106;
+  --color-error:       #C0392B;
+  --color-error-dark:  #A93226;   /* hover na przycisku Usuń */
+  --color-error-bg:    #F9E5E2;
+  --color-error-text:  #93261B;
+  --color-info:        #2563EB;
+  --color-info-bg:     #E4ECFB;
+  --color-info-text:   #1A46A8;
+  --color-neutral-bg:  #EEF0F3;
+  --color-neutral-text:#4B5563;
+
+  --bg-primary:    #FFFFFF;
+  --bg-secondary:  #F5F6F8;
+  --text-primary:  #1D2433;
+  --text-muted:    #6B7280;
+  --border-color:  #E2E5EA;
+
+  /* Aliasy semantyczne — używane w inline-stylach komponentów.
+     Wskazują na tokeny bazowe, więc dark mode działa automatycznie. */
+  --bg-success:    var(--color-success-bg);
+  --bg-warning:    var(--color-warning-bg);
+  --bg-error:      var(--color-error-bg);
+  --color-danger:  var(--color-error);
+
+  /* Promienie — ostre karty (powaga urzędowa), zaokrąglone kontrolki */
+  --radius-card:    0px;
+  --radius-control: 4px;
+  --radius-pill:    99px;
+
+  --sidebar-width: 252px;
+  --header-height: 56px;
+
+  --shadow-card:  0 1px 3px rgba(27,42,74,0.06), 0 2px 12px rgba(27,42,74,0.06);
+  --shadow-hover: 0 4px 16px rgba(27,42,74,0.13), 0 1px 4px rgba(27,42,74,0.08);
+  --shadow-modal: 0 8px 32px rgba(13,20,36,0.20), 0 24px 64px rgba(13,20,36,0.16);
+
+  --font-base: 'Open Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  /* Mono: stack systemowy — pełny IBM Plex Mono dodamy po dostarczeniu plików
+     woff2 (osobny zip). Bez zewnętrznych CDN. */
+  --font-mono: 'Cascadia Mono', Consolas, 'SFMono-Regular', Menlo, 'DejaVu Sans Mono', monospace;
+}
+
+[data-theme="dark"] {
+  --color-navy:        #16223C;
+  --color-navy-dark:   #0E1728;
+  --color-navy-light:  #243B5E;
+  --color-gold:        #D9A441;
+  --color-gold-dark:   #C9A227;
+  --color-gold-light:  #E4B863;
+
+  --color-bg:          #121A2B;
+  --color-card:        #1A2438;
+  --color-table-head:  #1E293F;
+
+  --color-text:        #E5E9F0;
+  --color-text-muted:  #8A94A6;
+  --color-border:      #2A3650;
+  --color-border-strong: #33415F;
+  --color-input-border:  #33415F;
+
+  --color-success-bg:  rgba(46, 125, 50,  0.18);
+  --color-success-text:#7DD187;
+  --color-warning-bg:  rgba(180, 83,  9,  0.18);
+  --color-warning-text:#E0A45E;
+  --color-error-bg:    rgba(192, 57,  43,  0.18);
+  --color-error-text:  #E8938A;
+  --color-info-bg:     rgba(37,  99,  235, 0.18);
+  --color-info-text:   #7FA5F0;
+  --color-neutral-bg:  rgba(255,255,255,0.06);
+  --color-neutral-text:#8A94A6;
+
+  --bg-primary:    #1A2438;
+  --bg-secondary:  #121A2B;
+  --text-primary:  #E5E9F0;
+  --text-muted:    #8A94A6;
+  --border-color:  #2A3650;
+
+  --shadow-card:  0 2px 8px rgba(0,0,0,0.35);
+  --shadow-hover: 0 6px 24px rgba(0,0,0,0.55);
+  --shadow-modal: 0 24px 64px rgba(0,0,0,0.6);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-base);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+/* Bez Tailwind preflight przeglądarka nie dziedziczy czcionki dla elementów formularzy.
+   Ten reset jest odpowiednikiem tego co robi Tailwind — wszystkie kontrolki biorą Inter z body. */
+button, input, select, textarea, optgroup {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+}
+
+/* Layout shell — Układ A (nawigacja boczna): granatowe menu pełnej wysokości
+   po lewej z lockupem u góry, biały pasek treści nad obszarem głównym. */
+.app-shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  grid-template-rows: var(--header-height) 1fr;
+  grid-template-areas: "sidebar header" "sidebar main";
+  min-height: 100vh;
+}
+
+/* Górny pasek treści — biały, nazwa jednostki po lewej, użytkownik po prawej */
+.app-header {
+  grid-area: header;
+  background-color: var(--bg-primary);
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  gap: 14px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.app-header__org {
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+}
+.app-header__spacer { flex: 1; }
+
+.app-header__user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.app-header__avatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--color-navy); color: #fff;
+  display: grid; place-items: center;
+  font-size: 11px; font-weight: 700; flex: none;
+}
+
+.app-header__logout {
+  background: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: var(--radius-control);
+  font-size: 12px;
+  font-family: var(--font-base);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  transition: all 0.15s;
+}
+.app-header__logout:hover { color: var(--color-navy); background: var(--color-table-head); }
+[data-theme="dark"] .app-header__logout:hover { color: var(--color-text); }
+
+/* Sidebar — pełna wysokość, granat, lockup u góry + stopka na dole */
+.app-sidebar {
+  grid-area: sidebar;
+  background-color: var(--color-navy);
+  color: #C4CBD8;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  border-right: 1px solid rgba(255,255,255,0.06);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Lockup aplikacji u góry menu */
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 18px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.09);
+  text-decoration: none;
+  flex: none;
+}
+.sidebar-brand__text { display: flex; flex-direction: column; line-height: 1.1; }
+.sidebar-brand__main { font-size: 15px; font-weight: 700; color: #fff; line-height: 1.1; }
+.sidebar-brand__sub  { font-family: var(--font-mono); font-size: 8.5px; font-weight: 500; letter-spacing: 1.4px; color: #8A94A6; margin-top: 2px; }
+
+.sidebar-nav { flex: 1; overflow-y: auto; }
+
+.sidebar-footer {
+  margin-top: auto;
+  flex: none;
+  padding: 14px 18px;
+  border-top: 1px solid rgba(255,255,255,0.09);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: #8A94A6;
+}
+
+.sidebar-section { padding: 14px 0 8px; }
+
+.sidebar-section__label {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 1.8px;
+  text-transform: uppercase;
+  color: #8A94A6;
+  padding: 0 20px 8px;
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  color: #C4CBD8;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  transition: all 0.15s;
+  border-left: 3px solid transparent;
+  cursor: pointer;
+}
+
+.sidebar-link:hover { background: rgba(255,255,255,0.05); color: #fff; }
+
+.sidebar-link.active {
+  background: rgba(255, 255, 255, 0.08);
+  color: #FFFFFF;
+  border-left-color: var(--color-gold);
+  font-weight: 600;
+}
+.sidebar-link__icon { width: 17px; height: 17px; flex-shrink: 0; opacity: 0.75; }
+.sidebar-link.active .sidebar-link__icon { opacity: 1; }
+
+/* Main */
+.app-main { grid-area: main; padding: 28px 32px; overflow-y: auto; }
+
+/* Page header */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 28px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.page-header__title {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--color-navy);
+  letter-spacing: -0.3px;
+}
+[data-theme="dark"] .page-header__title { color: var(--color-gold-light); }
+
+.page-header__sub { font-size: 13px; color: var(--color-text-muted); margin-top: 3px; }
+
+/* Cards — ostre rogi (powaga urzędowa) */
+.card {
+  background: var(--color-card);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  padding: 20px 24px;
+  border: 1px solid var(--color-border);
+  transition: box-shadow 0.2s;
+}
+.card:hover { box-shadow: var(--shadow-hover); }
+.card--compact { padding: 14px 18px; }
+.card--featured { border-top: 3px solid var(--color-gold); }
+
+.card-grid-3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 20px; }
+.card-grid-2 { display: grid; grid-template-columns: repeat(2,1fr); gap: 20px; }
+@media (max-width: 1024px) { .card-grid-3 { grid-template-columns: repeat(2,1fr); } }
+@media (max-width: 900px) { .card-grid-3, .card-grid-2 { grid-template-columns: 1fr; } }
+
+/* Summary card — kafelek KPI z akcentem górnej krawędzi */
+.summary-card {
+  background: var(--color-card);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  padding: 20px 24px;
+  border: 1px solid var(--color-border);
+  border-top: 3px solid var(--color-navy);
+  transition: box-shadow 0.2s, transform 0.2s;
+}
+.summary-card:hover { box-shadow: var(--shadow-hover); transform: translateY(-1px); }
+.summary-card--gold  { border-top-color: var(--color-gold); }
+.summary-card--green { border-top-color: var(--color-success); }
+.summary-card--red   { border-top-color: var(--color-error); }
+.summary-card--blue  { border-top-color: var(--color-info); }
+.summary-card--orange { border-top-color: var(--color-warning); }
+.summary-card__label { font-size: 11px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--color-text-muted); margin-bottom: 8px; }
+.summary-card__value { font-size: 30px; font-weight: 800; color: var(--color-navy); line-height: 1; }
+[data-theme="dark"] .summary-card__value { color: var(--color-gold-light); }
+.summary-card__meta { font-size: 12px; color: var(--color-text-muted); margin-top: 8px; }
+
+/* Alerts */
+.alert { padding: 12px 14px; border-radius: var(--radius-control); font-size: 13px; font-weight: 500; }
+.alert--error   { background: var(--color-error-bg);   color: var(--color-error-text);   border: 1px solid var(--color-error); border-left-width: 3px; }
+.alert--success { background: var(--color-success-bg); color: var(--color-success-text); border: 1px solid var(--color-success); border-left-width: 3px; }
+.alert--info    { background: var(--color-info-bg);    color: var(--color-info-text);    border: 1px solid var(--color-info); border-left-width: 3px; }
+
+.alert-banner { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-radius: var(--radius-control); margin-bottom: 20px; font-size: 13px; }
+.alert-banner--error   { background: var(--color-error-bg);   border-left: 3px solid var(--color-error);   color: var(--color-error-text); }
+.alert-banner--warning { background: var(--color-warning-bg); border-left: 3px solid var(--color-warning); color: var(--color-warning-text); }
+
+/* Tables */
+.data-table, .table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.data-table th, .table th {
+  background: var(--color-table-head); color: var(--color-text-muted);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase;
+  padding: 10px 14px; text-align: left; border-bottom: 2px solid var(--color-border);
+}
+.data-table td, .table td { padding: 11px 14px; border-bottom: 1px solid var(--color-border); color: var(--color-text); }
+.data-table tbody tr:hover, .table tbody tr:hover { background: rgba(27,42,74,0.04); }
+[data-theme="dark"] .data-table tbody tr:hover,
+[data-theme="dark"] .table tbody tr:hover { background: rgba(217,164,65,0.06); }
+.data-table tbody tr:last-child td, .table tbody tr:last-child td { border-bottom: none; }
+
+/* Badges — statusy WODS (pill, bez uppercase dla lepszej czytelności PL) */
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: var(--radius-pill); font-size: 11px; font-weight: 600; letter-spacing: 0.2px; }
+.badge--success { background: var(--color-success-bg); color: var(--color-success-text); }
+.badge--warning { background: var(--color-warning-bg); color: var(--color-warning-text); }
+.badge--error   { background: var(--color-error-bg);   color: var(--color-error-text); }
+.badge--info    { background: var(--color-info-bg);    color: var(--color-info-text); }
+.badge--neutral { background: var(--color-neutral-bg); color: var(--color-neutral-text); }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 9px 18px;
+  border-radius: var(--radius-control); font-size: 13px; font-weight: 600; font-family: var(--font-base);
+  cursor: pointer; border: 1px solid transparent; transition: background 0.15s, box-shadow 0.15s, opacity 0.15s, border-color 0.15s;
+  text-decoration: none; line-height: 1; letter-spacing: 0.2px;
+}
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn--primary { background: var(--color-navy); color: white; border-color: var(--color-navy); }
+.btn--primary:hover:not(:disabled) { background: var(--color-navy-light); border-color: var(--color-navy-light); }
+/* Akcja główna pozostaje granatowa (złoto = akcent, nie tło przycisku wg identyfikacji WODS) */
+.btn--action { background: var(--color-navy); color: white; border-color: var(--color-navy); }
+.btn--action:hover:not(:disabled) { background: var(--color-navy-light); border-color: var(--color-navy-light); }
+.btn--ghost { background: transparent; color: var(--color-navy); border: 1px solid var(--color-input-border); }
+.btn--ghost:hover:not(:disabled) { background: var(--color-bg); border-color: var(--color-navy); }
+[data-theme="dark"] .btn--ghost { color: var(--color-text); }
+[data-theme="dark"] .btn--ghost:hover:not(:disabled) { background: rgba(255,255,255,0.06); border-color: var(--color-gold); }
+.btn--danger { background: var(--color-error); color: white; border-color: var(--color-error); }
+.btn--danger:hover:not(:disabled) { background: var(--color-error-dark); border-color: var(--color-error-dark); }
+.btn--success { background: var(--color-success); color: white; border-color: var(--color-success); }
+.btn--success:hover:not(:disabled) { background: #256B29; border-color: #256B29; }
+.btn--sm { padding: 6px 12px; font-size: 12px; }
+
+/* Forms */
+.form-group { margin-bottom: 18px; }
+.form-label { display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: var(--color-text-muted); margin-bottom: 6px; }
+.form-input, .form-select, .form-textarea, .form-control, .input {
+  width: 100%; padding: 8px 11px; border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-control); font-size: 13px; font-family: var(--font-base);
+  color: var(--color-text); background: var(--bg-primary);
+  transition: border-color 0.15s, box-shadow 0.15s; outline: none;
+}
+.input--sm { padding: 6px 10px; font-size: 13px; }
+.form-input:focus, .form-select:focus, .form-textarea:focus, .form-control:focus, .input:focus {
+  border-color: var(--color-navy); box-shadow: 0 0 0 3px rgba(27,42,74,0.12);
+}
+[data-theme="dark"] .form-input:focus, [data-theme="dark"] .form-select:focus,
+[data-theme="dark"] .form-textarea:focus, [data-theme="dark"] .form-control:focus,
+[data-theme="dark"] .input:focus {
+  border-color: var(--color-gold); box-shadow: 0 0 0 3px rgba(217,164,65,0.18);
+}
+.form-textarea { resize: vertical; min-height: 80px; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.form-check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
+.form-check input[type="checkbox"] { accent-color: var(--color-navy); }
+
+/* Modals */
+.modal-overlay { position: fixed; inset: 0; background: rgba(13,20,36,0.55); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(2px); }
+.modal { background: var(--bg-primary); border-radius: var(--radius-card); box-shadow: var(--shadow-modal); width: 100%; max-width: 720px; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--color-border-strong); }
+.modal--sm { max-width: 480px; }
+.modal--lg { max-width: 960px; }
+.modal__header { display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; border-bottom: 1px solid var(--color-border); background: var(--color-navy); color: white; }
+.modal__title { font-size: 13px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; }
+.modal__close { background: none; border: none; color: rgba(255,255,255,0.6); cursor: pointer; font-size: 22px; line-height: 1; padding: 0; transition: color 0.15s; }
+.modal__close:hover { color: white; }
+.modal__body { padding: 24px; overflow-y: auto; flex: 1; }
+.modal__footer { padding: 16px 24px; border-top: 1px solid var(--color-border); display: flex; justify-content: flex-end; gap: 10px; background: var(--bg-secondary); }
+
+/* Tabs */
+.tabs { border-bottom: 2px solid var(--color-border); display: flex; gap: 0; margin-bottom: 20px; }
+.tab-btn { padding: 10px 20px; background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -2px; font-size: 13px; font-weight: 600; font-family: var(--font-base); color: var(--color-text-muted); cursor: pointer; transition: all 0.15s; }
+.tab-btn:hover { color: var(--color-navy); }
+.tab-btn.active { color: var(--color-navy); border-bottom-color: var(--color-gold); }
+[data-theme="dark"] .tab-btn:hover  { color: var(--color-gold-light); }
+[data-theme="dark"] .tab-btn.active { color: var(--color-gold-light); }
+
+/* Accordion */
+.accordion-item { border: 1px solid var(--color-border); border-radius: var(--radius-control); margin-bottom: 8px; overflow: hidden; }
+.accordion-trigger { width: 100%; background: var(--color-card); border: none; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; font-family: var(--font-base); font-size: 14px; font-weight: 600; color: var(--color-navy); transition: background 0.15s; }
+[data-theme="dark"] .accordion-trigger { color: var(--color-gold-light); }
+.accordion-trigger:hover { background: var(--color-table-head); }
+.accordion-trigger.open { background: var(--color-table-head); border-bottom: 1px solid var(--color-border); }
+.accordion-content { padding: 0; background: var(--color-card); }
+
+/* Dark mode toggle */
+.dark-toggle { position: fixed; bottom: 24px; right: 24px; z-index: 500; width: 42px; height: 42px; border-radius: 50%; background: var(--color-navy); color: var(--color-gold); border: 2px solid var(--color-gold); cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 16px rgba(0,0,0,0.3); transition: all 0.2s; }
+.dark-toggle:hover { background: var(--color-gold); color: var(--color-navy); transform: scale(1.08); }
+
+/* Herb miasta na ekranie logowania — przełączanie wersji wg motywu.
+   herb-ciemny (ciemny rysunek) na jasnym tle, herb-bialy na ciemnym. */
+.login-herb--dark  { display: none; }
+.login-herb--light { display: block; }
+[data-theme="dark"] .login-herb--light { display: none; }
+[data-theme="dark"] .login-herb--dark  { display: block; }
+
+/* --- Ekran logowania — dokładne odwzorowanie makiety WODS (szup-login-*) ---
+   Kolory sterowane tokenami motywu, więc wariant jasny/ciemny działa automatycznie. */
+.szup-login {
+  position: relative;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg-secondary);
+  overflow-x: hidden;
+}
+.szup-login::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, var(--color-navy) 0, var(--color-navy) 168px, transparent 168px);
+  pointer-events: none;
+}
+.szup-login__card {
+  position: relative;
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-modal);
+  padding: 36px 36px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.szup-login__header { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.szup-login__herb { height: 96px; width: auto; margin-bottom: 2px; }
+.szup-login__name { font-size: 22px; font-weight: 700; color: var(--text-primary); text-align: center; line-height: 1.1; }
+.szup-login__sub {
+  font-family: var(--font-mono); font-weight: 500; font-size: 11px;
+  letter-spacing: 1.6px; color: var(--text-muted); margin-top: 3px;
+  text-align: center; white-space: nowrap;
+}
+.szup-login__tabs {
+  display: flex; border: 1px solid var(--color-border);
+  border-radius: 4px; overflow: hidden;
+}
+.szup-login__tab {
+  flex: 1; text-align: center; padding: 8px; font-size: 13px; font-weight: 600;
+  color: var(--text-muted); cursor: pointer; background: transparent; border: none; font-family: inherit;
+}
+.szup-login__tab--active { background: var(--color-navy); color: #fff; }
+.szup-login__form { display: flex; flex-direction: column; gap: 20px; }
+.szup-login__fields { display: flex; flex-direction: column; gap: 12px; }
+.szup-login__group { display: flex; flex-direction: column; gap: 5px; }
+.szup-login__group label { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.szup-login__group input {
+  font-family: inherit; font-size: 14px; padding: 11px 13px;
+  border: 1px solid var(--color-border); border-radius: 4px;
+  background: var(--bg-primary); color: var(--text-primary); outline: none;
+}
+[data-theme="dark"] .szup-login__group input { background: var(--bg-secondary); }
+.szup-login__group input:focus { border-color: #4A6DA8; box-shadow: 0 0 0 3px rgba(74,109,168,.18); }
+.szup-login__submit {
+  font-family: inherit; font-size: 14px; font-weight: 600; padding: 11px;
+  background: var(--color-navy); color: #fff; border: 1px solid var(--color-navy);
+  border-radius: 4px; cursor: pointer;
+}
+.szup-login__submit:hover:not(:disabled) { background: var(--color-navy-light); border-color: var(--color-navy-light); }
+.szup-login__submit:disabled { opacity: .7; cursor: default; }
+.szup-login__rodo {
+  display: flex; gap: 9px; align-items: flex-start; padding: 11px 12px;
+  background: var(--bg-secondary); border: 1px solid var(--color-border); border-radius: 4px;
+}
+.szup-login__rodo svg { flex: none; margin-top: 1px; color: var(--text-muted); }
+.szup-login__rodo span { font-size: 11.5px; line-height: 1.55; color: var(--text-muted); }
+.szup-login__testbanner {
+  display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px;
+  background: var(--color-error-bg); border: 1px solid var(--color-error);
+  border-radius: 4px; color: var(--color-error-text); font-size: 12px; line-height: 1.45;
+}
+.szup-login__error {
+  padding: 9px 12px; background: var(--color-error-bg); border: 1px solid var(--color-error);
+  border-radius: 4px; color: var(--color-error-text); font-size: 12px;
+}
+
+/* Section title */
+.section-title { border-left: 4px solid var(--color-gold); padding-left: 12px; margin-bottom: 20px; }
+.section-title__text { font-size: 12px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase; color: var(--color-navy); }
+[data-theme="dark"] .section-title__text { color: var(--color-gold-light); }
+.section-title__sub { font-size: 12px; color: var(--color-text-muted); margin-top: 3px; }
+
+/* Spinner */
+.spinner { width: 18px; height: 18px; border: 2px solid rgba(255,255,255,0.25); border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Utilities */
+.text-muted { color: var(--color-text-muted); }
+.mt-4 { margin-top: 16px; }
+.mt-6 { margin-top: 24px; }
+.mb-4 { margin-bottom: 16px; }
+.mb-6 { margin-bottom: 24px; }
+.flex { display: flex; }
+.items-center { align-items: center; }
+.justify-between { justify-content: space-between; }
+.gap-2 { gap: 8px; }
+.gap-3 { gap: 12px; }
+.w-full { width: 100%; }

@@ -1,0 +1,727 @@
+import { useEffect, useState } from 'react'
+import { RefreshCw, Check, X, ListChecks } from 'lucide-react'
+import { listRequests, workflowAction, listSystems, listPermissions, userPermissions } from '../api'
+import { fmtDate } from '../serverTime'
+import WorkflowRibbon from '../components/WorkflowRibbon'
+import DeclarationModal from '../components/DeclarationModal'
+import PermissionChanges, {
+  permChangeState, changeStyle, changeTextStyle, ChangeBadge,
+} from '../components/PermissionChanges'
+import PermInput, {
+  permInput, missingRequiredFields, splitAdminPerm, AdminPermRow,
+  adminGrantNames, confirmAdminRights, ADMIN_CONFIRM_ABORTED,
+  groupPerms, isPermVisible, PermGroupSection, SystemBlock,
+  isScopeGated, missingScopeSystems,
+} from '../components/ItemFields'
+
+const STATUS_LABELS = {
+  pending_selection: 'Wybór uprawnień',
+  pending_manager: 'Oczekuje',
+  pending_it: 'Realizacja IT',
+  completed: 'Zrealizowany',
+  rejected: 'Odrzucony',
+}
+const STATUS_BADGE = {
+  pending_selection: 'badge--warning',
+  pending_manager: 'badge--warning',
+  pending_it: 'badge--info',
+  completed: 'badge--success',
+  rejected: 'badge--error',
+}
+
+export default function Manager() {
+  const [requests, setRequests] = useState([])
+  const [loading, setLoading]   = useState(true)
+  const [err, setErr]           = useState(null)
+  const [openReq, setOpenReq]   = useState(null)   // jeden wspólny widok: podgląd + akcja
+
+  async function load() {
+    setLoading(true); setErr(null)
+    try {
+      // Pokazujemy WYŁĄCZNIE wnioski, na których bieżący użytkownik może działać
+      // jako kierownik (backend liczy can_act dla bieżącego węzła obiegu).
+      // Dzięki temu:
+      //  - po wyborze uprawnień przez kier. 1. stopnia wniosek znika z jego listy
+      //    i trafia od razu do kier. nadrzędnego (2-stopniowy),
+      //  - kroki realizacji IT (it_execute) tu nie wiszą — są w „Do realizacji".
+      const MANAGER_NODES = ['select_permissions', 'manager_approve', 'higher_manager_approve']
+      const r = await listRequests({ scope: 'manager' })
+      const active = (r.data || []).filter(
+        x => x.can_act && MANAGER_NODES.includes(x.current_node_type)
+      )
+      setRequests(active)
+    } catch (ex) {
+      setErr(ex.response?.data?.detail || 'Błąd ładowania')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-header__title">Wnioski do obsługi</div>
+          <div className="page-header__sub">Wnioski Twoich komórek — wybór uprawnień i akceptacja</div>
+        </div>
+        <button className="btn btn--ghost btn--sm" onClick={load} disabled={loading}>
+          <RefreshCw size={14} /> Odśwież
+        </button>
+      </div>
+
+      {err && <div className="alert alert--error mb-4">{err}</div>}
+
+      <div className="card">
+        {loading ? (
+          <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
+        ) : requests.length === 0 ? (
+          <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>Brak wniosków do obsługi</div>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>#</th><th>Pracownik</th><th>Stanowisko</th><th>Uprawnień</th>
+                <th>Status</th><th>Data złożenia</th><th>Złożył(a)</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {requests.map(r => (
+                <tr key={r.id}>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
+                  <td style={{ fontWeight: 600 }}>
+                    {r.worker_name}
+                    {r.kind === 'revoke' && (
+                      <span className="badge badge--warning" style={{ fontSize: 10, marginLeft: 8 }}>ustanie</span>
+                    )}
+                  </td>
+                  <td style={{ color: 'var(--color-text-muted)' }}>{r.worker_position || '—'}</td>
+                  <td>{r.items?.length || 0}</td>
+                  <td><span className={`badge ${STATUS_BADGE[r.status]||'badge--neutral'}`}>{STATUS_LABELS[r.status]||r.status}</span></td>
+                  <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{fmtDate(r.created_at)}</td>
+                  <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{r.requested_by_name || r.created_by_name}</td>
+                  <td>
+                    {r.status === 'pending_selection' ? (
+                      <button className="btn btn--action btn--sm" onClick={() => setOpenReq(r)}>
+                        <ListChecks size={13} /> {r.kind === 'revoke' ? 'Wybierz do odebrania' : 'Wybierz uprawnienia'}
+                      </button>
+                    ) : r.status === 'pending_manager' ? (
+                      <button className="btn btn--action btn--sm" onClick={() => setOpenReq(r)}>
+                        <Check size={13} /> Decyzja
+                      </button>
+                    ) : (
+                      <button className="btn btn--ghost btn--sm" onClick={() => setOpenReq(r)}>Podgląd</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {openReq && (
+        <RequestModal request={openReq} onClose={() => setOpenReq(null)}
+                      onDone={() => { setOpenReq(null); load() }} />
+      )}
+    </div>
+  )
+}
+
+
+// ---------------------------------------------------------------------------
+// Jeden wspólny widok wniosku dla kierownika: podgląd (dane, uprawnienia,
+// obieg) + akcja właściwa dla bieżącego kroku:
+//   - pending_selection → wybór uprawnień (nadanie) / do odebrania (ustanie)
+//   - pending_manager   → decyzja (zatwierdź / odrzuć)
+// ---------------------------------------------------------------------------
+function RequestModal({ request: r, onClose, onDone }) {
+  const isRevoke   = r.kind === 'revoke'
+  const isSelect   = r.status === 'pending_selection'
+  const isDecision = r.status === 'pending_manager'
+  // Dwie ścieżki zależne od flagi komórki „wymaga akceptacji wyższego rzędu":
+  //  - 2-stopniowa: kierownik → kierownik nadrzędny → IT
+  //  - 1-stopniowa: kierownik → IT (bez akceptacji wyższego rzędu)
+  const twoStage = !!r.requires_higher_approval
+
+  const [systems, setSystems]       = useState([])
+  const [permsBySys, setPermsBySys] = useState({})   // systemId → [permissions] (nadanie/zmiana)
+  const [revokeList, setRevokeList] = useState([])   // bieżące uprawnienia pracownika (ustanie)
+  const [held, setHeld]             = useState(() => new Set())  // co pracownik ma OBECNIE
+  const [picked, setPicked] = useState(() => new Set())
+  // "system_id:permission_id" → { nazwaPola: wartość } (pola dodatkowe pozycji)
+  const [fieldValues, setFieldValues] = useState({})
+  // Zakres, który pracownik ma OBECNIE — do wykrycia, czy kierownik go zmienił.
+  const [heldValues, setHeldValues] = useState({})
+  const [comment, setComment] = useState('')
+  // Odmowy pojedynczych pozycji (kierownik nadrzędny w obiegu 2-stopniowym):
+  // { [item_id]: komentarz }.
+  const [denials, setDenials] = useState({})
+  const toggleDeny = (id) => setDenials(prev => {
+    const next = { ...prev }
+    if (Object.prototype.hasOwnProperty.call(next, id)) delete next[id]
+    else next[id] = ''
+    return next
+  })
+  const setDenyComment = (id, v) => setDenials(prev => ({ ...prev, [id]: v }))
+  const [busy, setBusy]       = useState(false)
+  const [err, setErr]         = useState(null)
+  const [loading, setLoading] = useState(isSelect)
+  // Oświadczenie wnioskującego — gdy backend zażąda go (428), pokazujemy modal
+  // z jego treścią i ponawiamy akcję z podpisem. `declPending` = akcja do ponowienia.
+  const [declText, setDeclText] = useState('')
+  const [declPending, setDeclPending] = useState(null)
+
+  useEffect(() => {
+    if (!isSelect) return
+    let alive = true
+    ;(async () => {
+      try {
+        if (isRevoke) {
+          // Ustanie: pokaż BIEŻĄCE uprawnienia pracownika; domyślnie
+          // zaznacz wszystkie (typowe ustanie = odebranie całości).
+          const res = await userPermissions(r.worker_user_id)
+          const perms = res.data.permissions || []
+          if (!alive) return
+          setRevokeList(perms)
+          setPicked(new Set(perms.map(p => `${p.system_id}:${p.permission_id}`)))
+        } else {
+          // Nadanie / zmiana — STAN DOCELOWY:
+          // pre-zaznaczenie = obecne uprawnienia pracownika + pozycje „grant"
+          // z wniosku − pozycje „revoke" z wniosku.
+          const [sys, permsRes] = await Promise.all([
+            listSystems({ unit_id: r.unit_id, active_only: true }),
+            r.worker_user_id ? userPermissions(r.worker_user_id) : Promise.resolve({ data: { permissions: [] } }),
+          ])
+          const active = sys.data
+          const byId = {}
+          const results = await Promise.all(active.map(s => listPermissions(s.id)))
+          results.forEach((res2, i) => { byId[active[i].id] = res2.data })
+          if (!alive) return
+
+          const heldSet = new Set(
+            (permsRes.data.permissions || []).map(p => `${p.system_id}:${p.permission_id}`)
+          )
+          const target = new Set(heldSet)
+          for (const it of r.items || []) {
+            const key = `${it.system_id}:${it.permission_id}`
+            if ((it.kind || 'grant') === 'revoke') target.delete(key)
+            else target.add(key)
+          }
+          // Programy oznaczone „domyślnie zaznaczone" — dokładamy te, których
+          // pracownik nie ma. Pozycje jawnie odebrane w TYM wniosku zostają
+          // odznaczone (pętla wyżej ma pierwszeństwo nad domyślnymi).
+          const revokedHere = new Set(
+            (r.items || []).filter(it => (it.kind || 'grant') === 'revoke')
+              .map(it => `${it.system_id}:${it.permission_id}`)
+          )
+          for (const s of active.filter(x => x.default_checked)) {
+            for (const p of (byId[s.id] || [])) {
+              // Uprawnienia administracyjne NIGDY nie są zaznaczane z automatu —
+              // muszą być zawsze świadomą decyzją wnioskodawcy.
+              if (p.is_admin_option) continue
+              const key = `${s.id}:${p.id}`
+              if (!heldSet.has(key) && !revokedHere.has(key)) target.add(key)
+            }
+          }
+          setSystems(active)
+          setPermsBySys(byId)
+          setHeld(heldSet)
+          setPicked(target)
+
+          // Wartości kontrolek: najpierw OBECNY stan pracownika (dla pozycji
+          // już posiadanych), potem to, co zapisano wcześniej w tym wniosku.
+          const fv = {}
+          const heldVals = {}
+          for (const p of (permsRes.data.permissions || [])) {
+            const k = `${p.system_id}:${p.permission_id}`
+            if (p.custom_values && Object.keys(p.custom_values).length) {
+              heldVals[k] = { ...p.custom_values }
+              fv[k] = { ...(fv[k] || {}), ...p.custom_values }
+            }
+          }
+          for (const it of r.items || []) {
+            if (it.custom_values && Object.keys(it.custom_values).length) {
+              const k = `${it.system_id}:${it.permission_id}`
+              fv[k] = { ...(fv[k] || {}), ...it.custom_values }
+            }
+          }
+          setHeldValues(heldVals)
+          setFieldValues(fv)
+        }
+      } catch {
+        if (alive) setErr('Nie udało się pobrać listy uprawnień')
+      } finally {
+        if (alive) setLoading(false)
+      }
+    })()
+    return () => { alive = false }
+  }, [isSelect, isRevoke, r.unit_id, r.worker_user_id])
+
+  function togglePerm(systemId, permId) {
+    const key = `${systemId}:${permId}`
+    setPicked(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
+
+  // Programy „scope-gated" aktywowane przez wnioskodawcę (zaznaczony sam program).
+  const [openSys, setOpenSys] = useState(() => new Set())
+
+  /** Zaznacz/odznacz program wymagający wyboru zakresu. Odznaczenie czyści też
+   *  wszystkie jego wybrane poduprawnienia (żeby nie zostały „ukryte"). */
+  function toggleScope(s) {
+    const sid = s.id
+    const perms = permsBySys[sid] || []
+    const anySel = perms.some(p => picked.has(`${sid}:${p.id}`))
+    const active = openSys.has(sid) || anySel
+    if (active) {
+      setPicked(prev => {
+        const next = new Set(prev)
+        perms.forEach(p => next.delete(`${sid}:${p.id}`))
+        return next
+      })
+      setOpenSys(prev => { const n = new Set(prev); n.delete(sid); return n })
+    } else {
+      setOpenSys(prev => { const n = new Set(prev); n.add(sid); return n })
+    }
+  }
+
+  // Szukajka per grupa uprawnień: klucz „system_id|grupa" → fraza.
+  const [groupQuery, setGroupQuery] = useState({})
+
+  /** Zaznacz/odznacz hurtem widoczne pozycje grupy (przy setkach uprawnień). */
+  function toggleMany(keys) {
+    if (keys.length === 0) return
+    setPicked(prev => {
+      const next = new Set(prev)
+      const allOn = keys.every(k => next.has(k))
+      keys.forEach(k => (allOn ? next.delete(k) : next.add(k)))
+      return next
+    })
+  }
+
+  // Wartości pól dodatkowych (poziom/zakres dostępu) — osobno dla KAŻDEJ
+  // pozycji: klucz "system_id:permission_id" → { nazwaPola: wartość }.
+  function setFieldValue(key, label, val) {
+    setFieldValues(prev => ({ ...prev, [key]: { ...(prev[key] || {}), [label]: val } }))
+  }
+
+  // Krok wyboru: „select" = wybór i zatwierdzenie w jednym. Decyzja: approve/reject.
+  const mkItem = (k, kind) => {
+    const [sid, pid] = k.split(':').map(Number)
+    const item = { system_id: sid, permission_id: pid, kind }
+    // Pola dodatkowe dotyczą tylko nadawania — przy odbieraniu nie mają sensu.
+    if (kind === 'grant') {
+      const vals = fieldValues[k]
+      if (vals && Object.keys(vals).length) item.custom_values = vals
+    }
+    return item
+  }
+  // Dyf stanu docelowego (dla nadania/zmiany).
+  const toGrant  = [...picked].filter(k => !held.has(k))
+  const toRevoke = [...held].filter(k => !picked.has(k))
+
+  // Uprawnienia POSIADANE, którym zmieniono wartość kontrolki (np. inny zakres
+  // rejestrów). Traktujemy je jak ponowne nadanie z nową wartością — inaczej
+  // nie dałoby się zmienić samego zakresu bez odbierania i nadawania od nowa.
+  const scopeChanged = [...picked].filter(k => {
+    if (!held.has(k)) return false
+    const [sid, pid] = k.split(':').map(Number)
+    const p = (permsBySys[sid] || []).find(x => x.id === pid)
+    if (!p || (p.input_type || 'none') === 'none') return false
+    const now = (fieldValues[k] || {})[p.permission_name] || ''
+    const before = (heldValues[k] || {})[p.permission_name] || ''
+    return now !== before
+  })
+
+  // Sprawdź pola obowiązkowe nadawanych pozycji (backend waliduje to samo,
+  // ale lepiej powiedzieć od razu, niż po odrzuconym zapisie).
+  function missingRequired() {
+    return missingRequiredFields([...toGrant, ...scopeChanged], systems,
+                                fieldValues, permsBySys)
+  }
+
+  // Zbuduj payload akcji dla obiegu (bez oświadczenia — to dokłada się osobno).
+  function buildActionBody(action) {
+    if (isSelect) {
+      const items = isRevoke
+        ? [...picked].map(k => mkItem(k, 'revoke'))
+        : [...toGrant.map(k => mkItem(k, 'grant')),
+           ...scopeChanged.map(k => mkItem(k, 'grant')),
+           ...toRevoke.map(k => mkItem(k, 'revoke'))]
+      const wfAction = action === 'approve' ? 'select' : 'reject'
+      return { action: wfAction, comment, items }
+    }
+    const body = { action, comment }
+    // Odmowy pozycji dołączamy tylko przy zatwierdzaniu (kierownik nadrzędny).
+    if (action === 'approve') {
+      const ds = Object.entries(denials).map(([item_id, c]) => ({
+        item_id: Number(item_id), comment: (c || '').trim() || null,
+      }))
+      if (ds.length) body.denials = ds
+    }
+    return body
+  }
+
+  // Wyślij akcję; `declaration` dokładane, gdy zebrane w modalu. Backend jest
+  // twardą bramką: brak oświadczenia przy nadaniu → 428, wtedy otwieramy modal.
+  async function sendAction(action, declaration = null) {
+    const body = buildActionBody(action)
+    if (declaration) body.declaration = declaration
+    try {
+      await workflowAction(r.id, body)
+      onDone()
+    } catch (ex) {
+      const st = ex.response?.status
+      const det = ex.response?.data?.detail
+      if (st === 428 && det?.code === 'DECLARATION_REQUIRED') {
+        // Zbierz oświadczenie i ponów TĘ akcję.
+        setDeclText(det.declaration_text || '')
+        setDeclPending(action)
+        setBusy(false)
+        return
+      }
+      setErr((typeof det === 'string' ? det : det?.message) || 'Błąd operacji')
+      setBusy(false)
+    }
+  }
+
+  async function submit(action) {
+    if (isSelect && action === 'approve' && !isRevoke) {
+      // Nadanie uprawnień administracyjnych wymaga twardego potwierdzenia.
+      // Sprawdzamy PRZED `setBusy`, bo `prompt` blokuje interfejs.
+      const admins = adminGrantNames([...toGrant, ...scopeChanged], systems, permsBySys)
+      if (!confirmAdminRights(admins)) { setErr(ADMIN_CONFIRM_ABORTED); return }
+      const noScope = missingScopeSystems(systems, openSys, picked, permsBySys)
+      if (noScope.length) {
+        setErr('Zaznaczono program bez wybranego zakresu uprawnień: '
+               + noScope.join(', ') + '. Wybierz co najmniej jedno uprawnienie albo odznacz program.')
+        return
+      }
+      const miss = missingRequired()
+      if (miss.length) { setErr('Uzupełnij pola obowiązkowe: ' + miss.join('; ')); return }
+    }
+    setBusy(true); setErr(null)
+    await sendAction(action)
+  }
+
+  const title = isSelect
+    ? `${isRevoke ? 'Odebranie uprawnień' : 'Wybór uprawnień'} — wniosek #${r.id}`
+    : isDecision
+      ? `Decyzja — wniosek #${r.id}`
+      : `Wniosek #${r.id}`
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 680 }}>
+        <div className="modal__header">
+          <span className="modal__title">
+            <ListChecks size={15} style={{ marginRight: 8, verticalAlign: 'middle' }} />
+            {title}
+            {isRevoke && <span className="badge badge--warning" style={{ fontSize: 10, marginLeft: 8 }}>ustanie</span>}
+          </span>
+          <button className="modal__close" onClick={onClose}>×</button>
+        </div>
+
+        <div className="modal__body">
+          {/* --- Dane wniosku --- */}
+          <div className="form-row mb-4">
+            <div><div className="form-label">Pracownik</div><div style={{ fontWeight: 600 }}>{r.worker_name}</div></div>
+            <div><div className="form-label">Stanowisko</div><div>{r.worker_position || '—'}</div></div>
+          </div>
+          <div className="form-row mb-4">
+            <div><div className="form-label">Komórka</div><div>{r.department_name || '—'}</div></div>
+            <div><div className="form-label">Złożył(a)</div><div>{r.requested_by_name || r.created_by_name || '—'}</div></div>
+          </div>
+
+          {/* Zmiany uprawnień — poza krokiem wyboru (tam jest picker).
+              Kierownik nadrzędny widzi tu jasno, co jest NADAWANE, a co ODBIERANE. */}
+          {!isSelect && (
+            <div className="mb-4">
+              <div className="form-label">Zmiany uprawnień we wniosku</div>
+              {isDecision && twoStage && (
+                <p style={{ color: 'var(--color-text-muted)', fontSize: 12, margin: '4px 0 0' }}>
+                  Możesz odmówić nadania pojedynczej pozycji (z komentarzem) — reszta wniosku przejdzie dalej.
+                </p>
+              )}
+              <div style={{ marginTop: 8 }}>
+                <PermissionChanges items={r.items}
+                  deny={isDecision && twoStage
+                    ? { can: true, map: denials, toggle: toggleDeny, setComment: setDenyComment }
+                    : undefined} />
+              </div>
+            </div>
+          )}
+
+          {r.manager_comment && (
+            <div className="mb-4">
+              <div className="form-label">Komentarz kierownika</div>
+              <div style={{ background: 'var(--bg-secondary)', padding: '10px 14px', borderRadius: 6 }}>{r.manager_comment}</div>
+            </div>
+          )}
+
+          <div className="mb-4">
+            <div className="form-label">Obieg wniosku</div>
+            {/* Akcję obsługuje ten modal — ribbon pokazuje sam postęp i historię. */}
+            <WorkflowRibbon requestId={r.id} unitId={r.unit_id} showActions={false} />
+          </div>
+
+          {/* --- Akcja: wybór uprawnień --- */}
+          {isSelect && (
+            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--color-navy)', marginBottom: 6 }}>
+                {isRevoke ? 'Uprawnienia do odebrania' : 'Uprawnienia do nadania'}
+              </div>
+              <p style={{ color: 'var(--color-text-muted)', fontSize: 13, marginBottom: 8 }}>
+                {isRevoke
+                  ? 'Zaznacz uprawnienia do odebrania (domyślnie wszystkie).'
+                  : 'Zaznacz uprawnienia do nadania.'}
+              </p>
+              {/* Jawna informacja, dokąd trafi wniosek po zatwierdzeniu. */}
+              <div className={`alert ${twoStage ? 'alert--info' : 'alert--success'}`}
+                   style={{ fontSize: 12, marginBottom: 12 }}>
+                {twoStage
+                  ? 'Ścieżka dwustopniowa: po zatwierdzeniu wniosek trafi do akceptacji kierownika wyższego rzędu, a dopiero potem do realizacji przez IT.'
+                  : 'Ścieżka jednostopniowa: po zatwierdzeniu wniosek trafi bezpośrednio do realizacji przez IT (bez akceptacji wyższego rzędu).'}
+              </div>
+
+              {loading ? (
+                <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie uprawnień…</div>
+              ) : isRevoke ? (
+                revokeList.length === 0 ? (
+                  <div className="alert alert--warning">
+                    Ten pracownik nie ma obecnie żadnych nadanych uprawnień do odebrania.
+                  </div>
+                ) : (
+                  <div style={{ maxHeight: 'min(46vh, 420px)', overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 6, padding: 12, background: 'var(--bg-secondary)' }}>
+                    {revokeList.map(p => {
+                      const key = `${p.system_id}:${p.permission_id}`
+                      return (
+                        <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', padding: '4px 0' }}>
+                          <input type="checkbox" checked={picked.has(key)}
+                                 style={{ width: 16, height: 16, flexShrink: 0 }}
+                                 onChange={() => togglePerm(p.system_id, p.permission_id)} />
+                          <span style={{ fontWeight: 600, color: 'var(--color-navy)' }}>{p.system_name}</span>
+                          <span style={{ color: 'var(--color-text-muted)' }}>›</span>
+                          <span>{p.permission_name}</span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                )
+              ) : systems.length === 0 ? (
+                <div className="alert alert--warning">Brak zdefiniowanych systemów — poproś administratora o konfigurację.</div>
+              ) : (
+                <div style={{ maxHeight: 'min(46vh, 420px)', overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 6, padding: 12, background: 'var(--bg-secondary)' }}>
+                  {systems.map(s => {
+                    const perms = permsBySys[s.id] || []
+                    // „Tylko dostęp" = jedna pozycja na cały program.
+                    const { main, admin } = splitAdminPerm(perms)
+                    const adminKey = admin ? `${s.id}:${admin.id}` : null
+                    if (s.access_only) {
+                      const p = main[0]
+                      if (!p) return null
+                      const key = `${s.id}:${p.id}`
+                      return (
+                        <SystemBlock
+                          key={s.id} name={s.name} description={s.description}
+                          checked={picked.has(key)}
+                          onToggle={() => togglePerm(s.id, p.id)}
+                          headerStyle={{
+                            ...changeStyle(permChangeState(key, held, picked)),
+                            ...changeTextStyle(permChangeState(key, held, picked)),
+                          }}
+                          badges={<>
+                            <span className="badge badge--info" style={{ fontSize: 10 }}>
+                              dostęp
+                            </span>
+                            {s.default_checked && (
+                              <span className="badge badge--warning" style={{ fontSize: 10 }}
+                                    title="Zaznaczone automatycznie — możesz odznaczyć">
+                                domyślne
+                              </span>
+                            )}
+                            <ChangeBadge st={permChangeState(key, held, picked)} />
+                          </>}
+                        >
+                          <AdminPermRow
+                            perm={admin} checked={picked.has(adminKey)} indent={0}
+                            onToggle={() => togglePerm(s.id, admin.id)}
+                            extra={<ChangeBadge st={permChangeState(adminKey, held, picked)} />}
+                          />
+                        </SystemBlock>
+                      )
+                    }
+                    // Program z listą uprawnień. Domyślnie bez zbiorczego
+                    // checkboxa (zaznaczanie per grupa). Jeśli program wymaga
+                    // wyboru zakresu (require_scope) — dokładamy checkbox
+                    // nagłówka: dopóki nieaktywny, treść jest wyszarzona.
+                    const allKeys = main.map(x => `${s.id}:${x.id}`)
+                    const selHere = allKeys.filter(k => picked.has(k)).length
+                    const gated = isScopeGated(s)
+                    const anySel = selHere > 0 || (adminKey && picked.has(adminKey))
+                    const active = !gated || openSys.has(s.id) || anySel
+                    return (
+                      <SystemBlock
+                        key={s.id} name={s.name} description={s.description}
+                        showCheckbox={gated}
+                        checked={active}
+                        onToggle={() => toggleScope(s)}
+                        locked={gated && !active}
+                        lockedHint={gated && !active
+                          ? 'Zaznacz program, aby wybrać zakres uprawnień.' : null}
+                        badges={<>
+                          {selHere > 0 && (
+                            <span className="badge badge--success" style={{ fontSize: 10 }}>
+                              wybrano: {selHere}
+                            </span>
+                          )}
+                          {gated && active && !anySel && (
+                            <span className="badge badge--warning" style={{ fontSize: 10 }}
+                                  title="Wybierz co najmniej jedno uprawnienie">
+                              wybierz zakres
+                            </span>
+                          )}
+                        </>}
+                      >
+                        {main.length === 0 && !admin ? (
+                          <div style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>Brak uprawnień</div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            {groupPerms(main).map(({ group, items }) => {
+                              const gkey = `${s.id}|${group}`
+                              const q = (groupQuery[gkey] || '').toLowerCase()
+                              const visible = items
+                                .filter(p => isPermVisible(p, `${s.id}:${p.id}`, held, picked))
+                                .filter(p => !q || p.permission_name.toLowerCase().includes(q))
+                              const selCount = items.filter(
+                                p => picked.has(`${s.id}:${p.id}`)).length
+                              return (
+                                <PermGroupSection
+                                  key={gkey} group={group} count={items.length}
+                                  selectedCount={selCount}
+                                  query={groupQuery[gkey] || ''}
+                                  onQuery={v => setGroupQuery(x => ({ ...x, [gkey]: v }))}
+                                  onToggleAll={() => toggleMany(
+                                    visible.map(p => `${s.id}:${p.id}`))}
+                                >
+                                  {visible.length === 0 && (
+                                    <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                                      Brak pozycji pasujących do wyszukiwania.
+                                    </div>
+                                  )}
+                                  {visible.map(p => {
+                              const key = `${s.id}:${p.id}`
+                              return (
+                                <div key={p.id}>
+                                <label style={{
+                                  display: 'flex', alignItems: 'center', gap: 8, fontSize: 14,
+                                  cursor: 'pointer', ...changeStyle(permChangeState(key, held, picked)),
+                                }}>
+                                  <input type="checkbox" checked={picked.has(key)}
+                                         style={{ width: 16, height: 16, flexShrink: 0 }}
+                                         onChange={() => togglePerm(s.id, p.id)} />
+                                  <span style={changeTextStyle(permChangeState(key, held, picked))}>
+                                    {p.permission_name}
+                                  </span>
+                                  <ChangeBadge st={permChangeState(key, held, picked)} />
+                                  {p.is_active === false && (
+                                    <span className="badge badge--warning" style={{ fontSize: 9 }}
+                                          title="Pozycja wycofana w systemie źródłowym">
+                                      wycofane
+                                    </span>
+                                  )}
+                                  {p.description && <span style={{ color: 'var(--color-text-muted)' }}>— {p.description}</span>}
+                                </label>
+                                  <PermInput
+                                    input={permInput(p)} name={p.permission_name}
+                                    show={picked.has(key)}
+                                    values={fieldValues[key] || {}}
+                                    onChange={(label, v) => setFieldValue(key, label, v)}
+                                  />
+                                </div>
+                              )
+                                  })}
+                                </PermGroupSection>
+                              )
+                            })}
+                            <AdminPermRow
+                              perm={admin} checked={picked.has(adminKey)} indent={0}
+                              onToggle={() => togglePerm(s.id, admin.id)}
+                              extra={<ChangeBadge st={permChangeState(adminKey, held, picked)} />}
+                            />
+                          </div>
+                        )}
+                      </SystemBlock>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* --- Komentarz (dla obu akcji) --- */}
+          {(isSelect || isDecision) && (
+            <div className="form-group" style={{ marginTop: 14 }}>
+              <label className="form-label">Komentarz (opcjonalny)</label>
+              <textarea className="form-control" style={{ minHeight: 60 }}
+                        value={comment} onChange={e => setComment(e.target.value)} />
+            </div>
+          )}
+
+          {err && <div className="alert alert--error">{err}</div>}
+        </div>
+
+        <div className="modal__footer">
+          <button className="btn btn--ghost" onClick={onClose} disabled={busy}>
+            {(isSelect || isDecision) ? 'Anuluj' : 'Zamknij'}
+          </button>
+          {(isSelect || isDecision) && (
+            <button className="btn btn--danger" onClick={() => submit('reject')} disabled={busy}>
+              <X size={14} /> Odrzuć
+            </button>
+          )}
+          {isSelect && (
+            <button className="btn btn--success" onClick={() => submit('approve')}
+                    disabled={busy || (isRevoke
+                      ? picked.size === 0
+                      : (toGrant.length === 0 && toRevoke.length === 0))}>
+              <Check size={14} />
+              {(() => {
+                const cnt = isRevoke
+                  ? `${picked.size}`
+                  : `+${toGrant.length} / −${toRevoke.length}`
+                return twoStage
+                  ? ` Wyślij do akceptacji (${cnt})`
+                  : ` Zatwierdź i przekaż do realizacji (${cnt})`
+              })()}
+            </button>
+          )}
+          {isDecision && (
+            <button className="btn btn--success" onClick={() => submit('approve')} disabled={busy}>
+              <Check size={14} /> Zatwierdź
+            </button>
+          )}
+        </div>
+      </div>
+
+      {declPending && (
+        <DeclarationModal
+          text={declText}
+          busy={busy}
+          onClose={() => { setDeclPending(null); setBusy(false) }}
+          onConfirm={(declaration) => {
+            setBusy(true)
+            const action = declPending
+            setDeclPending(null)
+            sendAction(action, declaration)
+          }}
+        />
+      )}
+    </div>
+  )
+}

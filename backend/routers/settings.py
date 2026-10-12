@@ -1,0 +1,576 @@
+"""
+Router: Ustawienia SMTP i LDAP — admin only.
+"""
+from __future__ import annotations
+
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
+from sqlmodel import Session, select
+
+from database import get_session
+from models import AppSettings, EmailSettings, LdapSettings, SecuritySeverity, User
+from services.auth_service import get_current_user
+from services.permissions import require_admin, require_superadmin
+
+router = APIRouter()
+
+
+# Domyślna treść oświadczenia wnioskującego. Nadpisywalna w Ustawieniach
+# (AppSettings.declaration_text); zmiana NIE działa wstecz — każde złożone
+# oświadczenie zamraża własną kopię.
+DEFAULT_DECLARATION_TEXT = """\
+OŚWIADCZENIE WNIOSKUJĄCEGO O NADANIE UPRAWNIEŃ DO SYSTEMÓW TELEINFORMATYCZNYCH
+
+Jako osoba wnioskująca o nadanie uprawnień do systemów teleinformatycznych oświadczam, że:
+
+1. Pracownik, którego dotyczy wniosek o nadanie uprawnień posiada aktualne i stosowne \
+upoważnienie do przetwarzania danych osobowych nadane przez Administratora danych,
+2. Zakres wnioskowanych uprawnień w systemach teleinformatycznych jest zgodny z zakresem \
+obowiązków służbowych pracownika oraz nie wykracza poza konieczny zakres dostępu niezbędny \
+do realizacji powierzonych mu zadań.
+3. Jestem świadomy/a, że:
+   - do korzystania z systemów teleinformatycznych zawierających dane osobowe mogą być \
+dopuszczone wyłącznie osoby posiadające wymagane upoważnienia i zapewniające bezpieczeństwo \
+przetwarzanych danych,
+   - nadanie dostępu do systemów teleinformatycznych nie może naruszać przepisów o ochronie \
+danych osobowych ani wewnętrznych regulacji jednostki.
+4. Zobowiązuję się niezwłocznie poinformować komórkę IT o każdej zmianie statusu pracownika \
+(np. zmiana stanowiska, zakresu obowiązków, odwołanie upoważnienia, zakończenie zatrudnienia), \
+mającej wpływ na zasadność lub zakres przyznanych mu uprawnień w systemach teleinformatycznych, \
+w celu odpowiedniego zmodyfikowania lub cofnięcia dostępu.
+5. Oświadczam, że informacje zawarte we wniosku o nadanie uprawnień oraz niniejszym \
+oświadczeniu są zgodne ze stanem faktycznym."""
+
+
+def effective_declaration_text(session: Session) -> str:
+    """Aktualna treść oświadczenia: z ustawień, a gdy pusta — domyślna."""
+    cfg = session.exec(select(AppSettings)).first()
+    val = (cfg.declaration_text or "").strip() if cfg else ""
+    return val or DEFAULT_DECLARATION_TEXT
+
+
+@router.get("/declaration-text")
+def get_declaration_text(
+    _: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Aktualna treść oświadczenia — dla KAŻDEGO zalogowanego (kierownik musi
+    ją zobaczyć w modalu przed podpisaniem, a nie jest adminem)."""
+    return {"declaration_text": effective_declaration_text(session)}
+
+
+# ---------------------------------------------------------------------------
+# Email
+# ---------------------------------------------------------------------------
+
+class EmailSettingsSchema(BaseModel):
+    enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: Optional[str] = None
+    from_address: str = ""
+    to_address: str = ""
+    use_tls: bool = True
+    sender_as_actor: bool = True
+
+
+class EmailSettingsRead(BaseModel):
+    id: Optional[int]
+    enabled: bool
+    smtp_host: str
+    smtp_port: int
+    smtp_user: str
+    from_address: str
+    to_address: str
+    use_tls: bool
+    sender_as_actor: bool
+    has_password: bool
+
+
+def _email_read(cfg: EmailSettings) -> "EmailSettingsRead":
+    # `to_address`/`sender_as_actor` doszły migracją, na istniejących bazach
+    # w starym wierszu mogą być NULL — koalescujemy, inaczej walidacja
+    # (pola nie-nullowalne) wywala GET /email i formularz jest pusty.
+    return EmailSettingsRead(
+        id=cfg.id, enabled=cfg.enabled, smtp_host=cfg.smtp_host,
+        smtp_port=cfg.smtp_port, smtp_user=cfg.smtp_user,
+        from_address=cfg.from_address, to_address=(cfg.to_address or ""),
+        use_tls=cfg.use_tls,
+        sender_as_actor=(True if cfg.sender_as_actor is None else cfg.sender_as_actor),
+        has_password=bool(cfg.smtp_password_enc),
+    )
+
+
+@router.get("/email", response_model=EmailSettingsRead)
+def get_email(
+    _: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+):
+    cfg = session.exec(select(EmailSettings)).first()
+    if not cfg:
+        cfg = EmailSettings()
+        session.add(cfg); session.commit(); session.refresh(cfg)
+    return _email_read(cfg)
+
+
+@router.put("/email", response_model=EmailSettingsRead)
+def update_email(
+    data: EmailSettingsSchema,
+    _: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+):
+    from services.crypto import encrypt
+    cfg = session.exec(select(EmailSettings)).first()
+    if not cfg:
+        cfg = EmailSettings()
+
+    cfg.enabled      = data.enabled
+    cfg.smtp_host    = data.smtp_host
+    cfg.smtp_port    = data.smtp_port
+    cfg.smtp_user    = data.smtp_user
+    cfg.from_address = data.from_address
+    cfg.to_address   = data.to_address
+    cfg.use_tls      = data.use_tls
+    cfg.sender_as_actor = data.sender_as_actor
+    if data.smtp_password is not None:
+        cfg.smtp_password_enc = encrypt(data.smtp_password) if data.smtp_password else ""
+
+    session.add(cfg); session.commit(); session.refresh(cfg)
+    return _email_read(cfg)
+
+
+@router.post("/email/test")
+def test_email(
+    _: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+):
+    from services.email_alerts import _send
+    cfg = session.exec(select(EmailSettings)).first()
+    if not cfg or not cfg.from_address:
+        return {"ok": False, "error": "Brak adresu nadawcy (From) — uzupełnij i zapisz ustawienia."}
+    # Wyślij na wskazany adres CC (żeby było gdzie sprawdzić dostarczenie),
+    # a gdy nieustawiony — na adres nadawcy. `raise_errors=True`, żeby test
+    # pokazał PRAWDZIWY błąd SMTP zamiast po cichu zwracać „ok".
+    target = (cfg.to_address or "").strip() or cfg.from_address
+    try:
+        _send(target, "[SZUP] Test połączenia SMTP",
+              "Wiadomość testowa z systemu SZUP. Jeśli ją widzisz — konfiguracja SMTP działa.",
+              raise_errors=True)
+        return {"ok": True, "sent_to": target}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+# ---------------------------------------------------------------------------
+# LDAP
+# ---------------------------------------------------------------------------
+
+class LdapSettingsSchema(BaseModel):
+    enabled: bool = False
+    host: str = ""
+    port: int = 389
+    use_ssl: bool = False
+    base_dn: str = ""
+    bind_dn: str = ""
+    bind_password: Optional[str] = None
+    user_search_base: str = ""
+    user_filter: str = "(sAMAccountName={username})"
+    sso_enabled: bool = False
+    sso_auto: bool = False
+
+
+class LdapSettingsRead(BaseModel):
+    id: Optional[int]
+    enabled: bool
+    host: str
+    port: int
+    use_ssl: bool
+    base_dn: str
+    bind_dn: str
+    user_search_base: str
+    user_filter: str
+    has_password: bool
+    sso_enabled: bool = False
+    sso_auto: bool = False
+
+
+def _ldap_read(cfg: LdapSettings) -> "LdapSettingsRead":
+    return LdapSettingsRead(
+        id=cfg.id, enabled=cfg.enabled, host=cfg.host, port=cfg.port,
+        use_ssl=cfg.use_ssl, base_dn=cfg.base_dn, bind_dn=cfg.bind_dn,
+        user_search_base=cfg.user_search_base, user_filter=cfg.user_filter,
+        has_password=bool(cfg.bind_password_enc),
+        sso_enabled=bool(getattr(cfg, "sso_enabled", False)),
+        sso_auto=bool(getattr(cfg, "sso_auto", False)),
+    )
+
+
+@router.get("/ldap", response_model=LdapSettingsRead)
+def get_ldap(
+    _: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+):
+    cfg = session.exec(select(LdapSettings)).first()
+    if not cfg:
+        cfg = LdapSettings()
+        session.add(cfg); session.commit(); session.refresh(cfg)
+    return _ldap_read(cfg)
+
+
+@router.put("/ldap", response_model=LdapSettingsRead)
+def update_ldap(
+    data: LdapSettingsSchema,
+    _: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+):
+    from services.crypto import encrypt
+    cfg = session.exec(select(LdapSettings)).first()
+    if not cfg:
+        cfg = LdapSettings()
+
+    cfg.enabled          = data.enabled
+    cfg.host             = data.host
+    cfg.port             = data.port
+    cfg.use_ssl          = data.use_ssl
+    cfg.base_dn          = data.base_dn
+    cfg.bind_dn          = data.bind_dn
+    cfg.user_search_base = data.user_search_base
+    cfg.user_filter      = data.user_filter
+    cfg.sso_enabled      = data.sso_enabled
+    cfg.sso_auto         = data.sso_auto
+    if data.bind_password is not None:
+        cfg.bind_password_enc = encrypt(data.bind_password) if data.bind_password else None
+
+    session.add(cfg); session.commit(); session.refresh(cfg)
+    return _ldap_read(cfg)
+
+
+def _effective_helpdesk(cfg: Optional[AppSettings]) -> str:
+    """Adres helpdesku faktycznie używany: z ustawień, a gdy pusty — domyślny."""
+    from services.email_alerts import HELPDESK_EMAIL
+    val = (cfg.helpdesk_email or "").strip() if cfg else ""
+    return val or HELPDESK_EMAIL
+
+
+class AppSettingsSchema(BaseModel):
+    test_mode: bool = False
+    helpdesk_email: Optional[str] = None
+    # Puste/pominięte → nie zmieniaj treści oświadczenia (albo zostaw domyślną).
+    declaration_text: Optional[str] = None
+    # Harmonogram nocnej migawki (pominięte → bez zmian).
+    snapshot_enabled: Optional[bool] = None
+    snapshot_hour: Optional[int] = None
+    snapshot_minute: Optional[int] = None
+
+
+class AppSettingsRead(BaseModel):
+    id: Optional[int]
+    test_mode: bool
+    helpdesk_email: Optional[str] = None
+    # Adres używany faktycznie, gdy pole wyżej jest puste (domyślny z konfiguracji).
+    helpdesk_email_effective: Optional[str] = None
+    # Treść oświadczenia — własna z ustawień albo domyślna, gdy pole puste.
+    declaration_text: str = ""
+    declaration_is_default: bool = True
+    # Harmonogram migawek.
+    snapshot_enabled: bool = True
+    snapshot_hour: int = 23
+    snapshot_minute: int = 50
+    # Twardy wyłącznik środowiskowy (env) — gdy True, harmonogram nie działa
+    # niezależnie od ustawień; front pokazuje wtedy ostrzeżenie.
+    snapshot_env_disabled: bool = False
+
+
+def _app_read(cfg: AppSettings, session: Session) -> "AppSettingsRead":
+    import os
+    own = (cfg.declaration_text or "").strip()
+    return AppSettingsRead(
+        id=cfg.id, test_mode=bool(cfg.test_mode),
+        helpdesk_email=cfg.helpdesk_email,
+        helpdesk_email_effective=_effective_helpdesk(cfg),
+        declaration_text=own or DEFAULT_DECLARATION_TEXT,
+        declaration_is_default=not own,
+        snapshot_enabled=bool(cfg.snapshot_enabled) if cfg.snapshot_enabled is not None else True,
+        snapshot_hour=cfg.snapshot_hour if cfg.snapshot_hour is not None else 23,
+        snapshot_minute=cfg.snapshot_minute if cfg.snapshot_minute is not None else 50,
+        snapshot_env_disabled=(os.getenv("SZUP_SNAPSHOTS", "1") == "0"),
+    )
+
+
+@router.get("/app", response_model=AppSettingsRead)
+def get_app_settings(
+    _: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+):
+    cfg = session.exec(select(AppSettings)).first()
+    if not cfg:
+        cfg = AppSettings()
+        session.add(cfg); session.commit(); session.refresh(cfg)
+    return _app_read(cfg, session)
+
+
+@router.put("/app", response_model=AppSettingsRead)
+def update_app_settings(
+    data: AppSettingsSchema,
+    current_user: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+):
+    from services.security_events import emit as emit_security_event
+
+    cfg = session.exec(select(AppSettings)).first()
+    if not cfg:
+        cfg = AppSettings()
+
+    prev = bool(cfg.test_mode)
+    cfg.test_mode = bool(data.test_mode)
+    # Puste pole = wróć do adresu domyślnego (z konfiguracji wdrożenia).
+    cfg.helpdesk_email = (data.helpdesk_email or "").strip() or None
+    if data.declaration_text is not None:
+        # Puste = wróć do treści domyślnej. Zmiana NIE działa wstecz —
+        # już złożone oświadczenia mają własną, zamrożoną kopię.
+        cfg.declaration_text = (data.declaration_text or "").strip() or None
+    # Harmonogram migawek — zapisz i wybudź wątek, żeby zadziałało bez restartu.
+    snapshot_changed = False
+    if data.snapshot_enabled is not None:
+        cfg.snapshot_enabled = bool(data.snapshot_enabled); snapshot_changed = True
+    if data.snapshot_hour is not None:
+        cfg.snapshot_hour = min(23, max(0, int(data.snapshot_hour))); snapshot_changed = True
+    if data.snapshot_minute is not None:
+        cfg.snapshot_minute = min(59, max(0, int(data.snapshot_minute))); snapshot_changed = True
+    session.add(cfg); session.commit(); session.refresh(cfg)
+
+    if snapshot_changed:
+        try:
+            from services import scheduler
+            scheduler.reconfigure()
+        except Exception:
+            pass
+
+    if prev != cfg.test_mode:
+        # Włączenie/wyłączenie trybu testowego ZAWSZE leci jako security event — kluczowa operacja.
+        emit_security_event(
+            session,
+            event_type="settings.test_mode",
+            source="settings",
+            severity=SecuritySeverity.critical if cfg.test_mode else SecuritySeverity.high,
+            summary=(
+                f"Tryb testowy {'WŁĄCZONY' if cfg.test_mode else 'wyłączony'} "
+                f"przez {current_user.username}"
+            ),
+            details={"enabled": cfg.test_mode},
+            user_id=current_user.id,
+        )
+
+    return _app_read(cfg, session)
+
+
+@router.post("/ldap/test")
+def test_ldap(
+    _: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+):
+    from ldap3 import Server, Connection, ALL
+    from services.crypto import decrypt
+
+    cfg = session.exec(select(LdapSettings)).first()
+    if not cfg or not cfg.host:
+        return {"ok": False, "error": "Brak konfiguracji LDAP"}
+    try:
+        bind_password = decrypt(cfg.bind_password_enc) if cfg.bind_password_enc else ""
+        server = Server(cfg.host, port=cfg.port, use_ssl=cfg.use_ssl, get_info=ALL)
+        with Connection(server, user=cfg.bind_dn, password=bind_password, auto_bind=True):
+            return {"ok": True, "message": f"Połączono z {cfg.host}:{cfg.port}"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Reset do ustawień fabrycznych — WYŁĄCZNIE superadmin
+# ---------------------------------------------------------------------------
+
+class FactoryResetRequest(BaseModel):
+    password: str                    # potwierdzenie hasłem wykonującego
+    confirm: str                     # musi być dokładnie "RESET"
+    wipe_requests: bool = True       # wnioski + pozycje + instancje obiegu
+    wipe_structure: bool = True      # jednostki, wydziały, zastępcy, przypisania HR
+    wipe_users: bool = True          # wszyscy użytkownicy PRÓCZ wykonującego
+    wipe_software: bool = False      # rejestr oprogramowania (systemy + uprawnienia)
+    wipe_audit: bool = False         # audit log + zdarzenia bezpieczeństwa
+
+
+class FactoryResetResult(BaseModel):
+    deleted: dict[str, int]
+    details: list[str]
+
+
+@router.post("/factory-reset", response_model=FactoryResetResult)
+def factory_reset(
+    data: FactoryResetRequest,
+    request: Request,
+    current_user: User = Depends(require_superadmin),
+    session: Session = Depends(get_session),
+):
+    """Przywraca system do stanu „fabrycznego".
+
+    Operacja NIEODWRACALNA — dostępna wyłącznie dla superadmina i wymagająca
+    potwierdzenia hasłem oraz frazą „RESET". Konto wykonującego jest ZAWSZE
+    zachowywane (inaczej nikt nie mógłby się zalogować po resecie).
+    Domyślne szablony obiegu i typy wniosków odtworzy `init_db()` przy starcie.
+    """
+    from sqlalchemy import text
+    from models import AuthType
+    from services.auth_service import verify_password
+    from services.audit import record_event, request_meta
+    from services.security_events import emit as emit_security_event
+
+    if data.confirm.strip() != "RESET":
+        raise HTTPException(400, 'Potwierdź operację wpisując dokładnie: RESET')
+
+    # Weryfikacja tożsamości wykonującego — hasłem lokalnym albo przez AD.
+    ok = False
+    if current_user.auth_type == AuthType.ldap:
+        from services.ldap_service import authenticate_ldap
+        cfg = session.exec(select(LdapSettings)).first()
+        if cfg and cfg.enabled:
+            try:
+                ok = bool(authenticate_ldap(cfg, current_user.username, data.password))
+            except Exception:
+                ok = False
+    else:
+        ok = bool(current_user.password_hash) and verify_password(
+            data.password, current_user.password_hash)
+    if not ok:
+        raise HTTPException(403, "Nieprawidłowe hasło — reset przerwany")
+
+    meta = request_meta(request)
+    deleted: dict[str, int] = {}
+    details: list[str] = []
+
+    def _count(table: str) -> int:
+        try:
+            row = session.exec(text(f'SELECT COUNT(*) FROM "{table}"')).first()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0
+
+    def _wipe(table: str, where: str = "") -> None:
+        sql = f'DELETE FROM "{table}"' + (f" WHERE {where}" if where else "")
+        before = _count(table)
+        try:
+            session.exec(text(sql))
+            after = _count(table)
+            n = max(0, before - after)
+            if n:
+                deleted[table] = deleted.get(table, 0) + n
+                details.append(f"{table}: usunięto {n}")
+        except Exception as exc:
+            details.append(f"⚠ {table}: {exc}")
+
+    # Rozwiąż powiązania krzyżowe TYLKO dla tego, co faktycznie kasujemy.
+    # KRYTYCZNE: te UPDATE-y muszą być bramkowane flagami wipe_*. Odpalane
+    # bezwarunkowo (dawny błąd) odpinały całą strukturę — kierowników, hierarchię
+    # wydziałów i przypisania pracowników do komórek — nawet przy samym
+    # czyszczeniu wniosków (gdy struktura miała zostać nietknięta).
+    cid = int(current_user.id)
+    cross_updates: list[str] = []
+    if data.wipe_users:
+        # Kasujemy użytkowników (prócz wykonującego) — zdejmij referencje DO nich
+        # z rekordów, które przetrwają. Managerstwa wykonującego nie ruszamy.
+        cross_updates.append(
+            f'UPDATE "department" SET manager_user_id = NULL WHERE manager_user_id <> {cid}')
+        cross_updates.append(
+            f'UPDATE "accessrequest" SET assigned_to_user_id = NULL WHERE assigned_to_user_id <> {cid}')
+    if data.wipe_structure:
+        # Kasujemy wydziały/jednostki — zdejmij referencje DO nich.
+        cross_updates.append('UPDATE "department" SET parent_dept_id = NULL')
+        cross_updates.append('UPDATE "user" SET department_id = NULL')
+    for stmt in cross_updates:
+        try:
+            session.exec(text(stmt))
+        except Exception:
+            pass
+
+    # 1) Wnioski i obieg (dzieci → rodzice).
+    if data.wipe_requests:
+        _wipe("namechangerequest")
+        _wipe("permissionsnapshot")
+        _wipe("permissiondeclaration")
+        _wipe("workflowstep")
+        _wipe("workflowinstance")
+        _wipe("requestitem")
+        _wipe("accessrequest")
+
+    # 2) Rejestr oprogramowania.
+    if data.wipe_software:
+        # RequestItem wskazuje na systemy/uprawnienia — wymagamy czystki wniosków.
+        if not data.wipe_requests:
+            raise HTTPException(400,
+                "Czyszczenie rejestru oprogramowania wymaga też wyczyszczenia wniosków.")
+        _wipe("systempermission")
+        _wipe("permissionsystemunit")
+        _wipe("permissionsystem")
+        # Słownik dostawców — umowy przed dostawcami (FK).
+        _wipe("vendorcontract")
+        _wipe("softwarevendor")
+
+    # 3) Użytkownicy — PRÓCZ wykonującego (i bez naruszania wniosków, które
+    #    mogły zostać, gdy wipe_requests=False).
+    if data.wipe_users:
+        if not data.wipe_requests:
+            raise HTTPException(400,
+                "Czyszczenie użytkowników wymaga też wyczyszczenia wniosków "
+                "(wnioski wskazują na autorów i pracowników).")
+        _wipe("userunit", f"user_id <> {int(current_user.id)}")
+        _wipe("departmentdeputy", f"user_id <> {int(current_user.id)}")
+        _wipe("revokedtoken")
+        _wipe("user", f"id <> {int(current_user.id)}")
+
+    # 4) Struktura organizacyjna.
+    if data.wipe_structure:
+        _wipe("departmentdeputy")
+        _wipe("userunit")
+        _wipe("department")
+        _wipe("unit")
+
+    # 5) Audyt / zdarzenia bezpieczeństwa (append-only triggery trzeba zdjąć;
+    #    init_db() odtworzy je przy następnym starcie backendu).
+    if data.wipe_audit:
+        for trg in ("auditlog_no_update", "auditlog_no_delete"):
+            try:
+                session.exec(text(f'DROP TRIGGER IF EXISTS "{trg}"'))
+            except Exception:
+                pass
+        _wipe("auditlog")
+        _wipe("securityevent")
+
+    session.commit()
+
+    # Odtwórz triggery audytu od razu, żeby nie czekać na restart.
+    if data.wipe_audit:
+        try:
+            from database import _install_auditlog_triggers
+            _install_auditlog_triggers()
+        except Exception:
+            pass
+
+    # Ślad operacji (po czystce, żeby nie został skasowany).
+    try:
+        record_event(session, action="settings.factory_reset",
+                     user_id=current_user.id, username=current_user.username,
+                     ip=meta["ip"], user_agent=meta["user_agent"],
+                     details={"deleted": deleted})
+        emit_security_event(
+            session, event_type="settings.factory_reset", source="settings",
+            severity=SecuritySeverity.critical,
+            summary=f"PRZYWRÓCENIE USTAWIEŃ FABRYCZNYCH przez {current_user.username}",
+            details={"deleted": deleted}, user_id=current_user.id, ip=meta["ip"],
+        )
+    except Exception:
+        pass
+
+    if not details:
+        details.append("Brak danych do usunięcia — system był już pusty.")
+    return FactoryResetResult(deleted=deleted, details=details)

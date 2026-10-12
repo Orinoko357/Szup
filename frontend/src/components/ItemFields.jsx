@@ -1,0 +1,430 @@
+import { useEffect, useRef, useState } from 'react'
+
+/**
+ * Kontrolka doprecyzowująca POJEDYNCZE uprawnienie na wniosku.
+ *
+ * Uprawnienia dzielą się na dwa rodzaje i oba stoją na jednej liście:
+ *   - z importu z systemu dziedzinowego → zwykły checkbox (`input.type === 'none'`),
+ *   - dodane ręcznie przez IT → checkbox + lista wyboru albo pole do wpisania.
+ *
+ * Kontrolka pojawia się dopiero po ZAZNACZENIU uprawnienia — także przy
+ * pozycji już posiadanej, żeby dało się zmienić samą wartość bez odbierania
+ * i nadawania od nowa. Przy pozycjach odbieranych nie ma jej wcale.
+ */
+export default function PermInput({ input, name, show, values, onChange, compact = false }) {
+  const type = input?.type || 'none'
+  if (!show || type === 'none') return null
+  const fs = compact ? 12 : 13
+  const opts = input?.options || []
+  const val = values?.[name] ?? ''
+  const set = v => onChange(name, v)
+
+  return (
+    <div style={{
+      marginLeft: compact ? 20 : 24, marginTop: 4, marginBottom: 6,
+      padding: compact ? 6 : 8, borderLeft: '2px solid var(--color-gold)',
+      background: 'var(--color-card)', borderRadius: 4,
+    }}>
+      {input?.description && (
+        <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginBottom: 3 }}>
+          {input.description}
+        </div>
+      )}
+      {type === 'multiselect' ? (
+        <MultiSelect options={opts} value={val} onChange={set} fontSize={fs} />
+      ) : type === 'radio' ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px' }}>
+          {opts.map(o => (
+            <label key={o} style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              fontSize: fs, cursor: 'pointer', userSelect: 'none',
+            }}>
+              <input type="radio" checked={val === o} onChange={() => set(o)} />
+              {o}
+            </label>
+          ))}
+        </div>
+      ) : type === 'select' ? (
+        <select className="form-control" style={{ fontSize: fs }}
+                value={val} onChange={e => set(e.target.value)}>
+          <option value="">— wybierz —</option>
+          {opts.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      ) : type === 'textarea' ? (
+        <textarea className="form-control" style={{ fontSize: fs, minHeight: 60 }}
+                  value={val} onChange={e => set(e.target.value)} />
+      ) : (
+        <input className="form-control" style={{ fontSize: fs }}
+               value={val} onChange={e => set(e.target.value)} />
+      )}
+    </div>
+  )
+}
+
+
+/**
+ * Kafel oprogramowania na wniosku — wspólna oprawa dla OBU sposobów
+ * opisania uprawnień: listy predefiniowanej i pól wnioskodawcy.
+ *
+ * Dzięki temu kierownik widzi zawsze to samo: ramkę z nazwą programu,
+ * checkboxem i sekcjami w środku. Różnica jest tylko w tym, co robi
+ * checkbox w nagłówku:
+ *   - program opisany polami → zaznacza sam program (to jest pozycja wniosku),
+ *   - program z listą uprawnień → zaznacza/odznacza wszystkie jego pozycje
+ *     (stan pośredni, gdy część jest wybrana). NIE tworzy osobnej pozycji
+ *     „dostęp do programu" — inaczej zmieniłoby to znaczenie wniosku.
+ */
+export function SystemBlock({
+  name, badges, description, checked, indeterminate = false, onToggle,
+  headerStyle, compact = false, showCheckbox = true, children,
+  locked = false, lockedHint = null,
+}) {
+  const box = useRef(null)
+  useEffect(() => {
+    if (box.current) box.current.indeterminate = indeterminate && !checked
+  }, [indeterminate, checked])
+
+  // Program z listą uprawnień NIE ma zbiorczego checkboxa — zaznaczanie jest
+  // per grupa. Checkbox nagłówka zostaje tylko tam, gdzie sam program jest
+  // pojedynczą pozycją wniosku („tylko dostęp" / pola wnioskodawcy).
+  const Header = showCheckbox ? 'label' : 'div'
+  return (
+    <div style={{
+      border: '1px solid var(--color-border)', borderRadius: 8,
+      marginBottom: 10, background: 'var(--bg-primary)',
+    }}>
+      <Header style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        cursor: showCheckbox ? 'pointer' : 'default',
+        padding: compact ? '6px 8px' : '8px 10px', borderRadius: '8px 8px 0 0',
+        fontWeight: 600, fontSize: compact ? 13 : 15, ...headerStyle,
+      }}>
+        {showCheckbox && (
+          <input ref={box} type="checkbox" checked={checked} onChange={onToggle}
+                 style={{ width: 16, height: 16, flexShrink: 0 }} />
+        )}
+        <span style={{ color: 'var(--color-navy)' }}>{name}</span>
+        {badges}
+      </Header>
+      {description && (
+        <div style={{
+          fontSize: 11, color: 'var(--color-text-muted)',
+          padding: compact ? '0 8px 4px 32px' : '0 10px 6px 34px',
+        }}>
+          {description}
+        </div>
+      )}
+      <div style={{ padding: compact ? '0 8px 8px' : '0 10px 10px' }}>
+        {locked && lockedHint && (
+          <div style={{
+            fontSize: 12, color: 'var(--color-text-muted)', fontStyle: 'italic',
+            padding: '2px 0 6px',
+          }}>
+            {lockedHint}
+          </div>
+        )}
+        <div style={locked ? {
+          opacity: 0.45, pointerEvents: 'none', filter: 'grayscale(0.4)', userSelect: 'none',
+        } : undefined}>
+          {children}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Lista wielokrotnego wyboru — checkboxy zamiast `<select multiple>`, bo to
+ * czytelniejsze i nie wymaga trzymania Ctrl przy klikaniu.
+ *
+ * Wartość jest tekstem rozdzielonym przecinkami (tak samo jak w bazie), więc
+ * pole zachowuje się jak każde inne z punktu widzenia formularza i walidacji.
+ */
+function MultiSelect({ options, value, onChange, fontSize }) {
+  const picked = String(value || '')
+    .split(',').map(s => s.trim()).filter(Boolean)
+
+  function toggle(opt) {
+    const next = picked.includes(opt)
+      ? picked.filter(p => p !== opt)
+      // Kolejność zgodna z definicją pola — niezależna od kolejności klikania.
+      : options.filter(o => o === opt || picked.includes(o))
+    onChange(next.join(', '))
+  }
+
+  if (options.length === 0) {
+    return <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
+      Brak zdefiniowanych opcji.
+    </div>
+  }
+  return (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', gap: '4px 14px',
+      border: '1px solid var(--color-border)', borderRadius: 4,
+      padding: '6px 8px', background: 'var(--color-card)',
+    }}>
+      {options.map(o => (
+        <label key={o} style={{
+          display: 'flex', alignItems: 'center', gap: 5,
+          fontSize, cursor: 'pointer', userSelect: 'none',
+        }}>
+          <input type="checkbox" checked={picked.includes(o)}
+                 onChange={() => toggle(o)} />
+          {o}
+        </label>
+      ))}
+    </div>
+  )
+}
+
+
+/**
+ * Rozdziel listę uprawnień systemu na zwykłe pozycje i „super uprawnienia".
+ *
+ * Pozycja administratora jest utrzymywana automatycznie przy KAŻDYM
+ * oprogramowaniu (o ile nie odznaczono jej w rejestrze), więc nie może być
+ * mieszana ze zwykłą listą — w systemach „tylko dostęp" i opisywanych polami
+ * lista ma dokładnie jedną pozycję i admin dopisałby się jako druga, myląca.
+ *
+ * Rozpoznajemy po fladze z API (`is_admin_option`), nie po polskiej nazwie.
+ */
+export function splitAdminPerm(perms) {
+  const list = Array.isArray(perms) ? perms : []
+  return {
+    main: list.filter(p => !p.is_admin_option),
+    admin: list.find(p => p.is_admin_option) || null,
+  }
+}
+
+/**
+ * Checkbox „Uprawnienia administratora" — wspólny dla wszystkich ścieżek
+ * wyboru zakresu, żeby wyglądał i zachowywał się wszędzie tak samo.
+ */
+export function AdminPermRow({ perm, checked, onToggle, indent = 20, extra = null }) {
+  if (!perm) return null
+  return (
+    <label style={{
+      display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
+      cursor: 'pointer', marginLeft: indent, marginTop: 3,
+    }} title="Pełne uprawnienia administracyjne — nadawaj tylko, gdy to konieczne">
+      <input type="checkbox" checked={checked} onChange={onToggle} />
+      <span style={{ color: 'var(--color-error)', fontWeight: 600 }}>
+        {perm.permission_name}
+      </span>
+      {extra}
+    </label>
+  )
+}
+
+
+/**
+ * Podział uprawnień systemu na grupy (np. „Rejestry opłat").
+ *
+ * Programy dziedzinowe potrafią mieć setki pozycji zaimportowanych z kilku
+ * list — bez podziału na sekcje wybór uprawnień jest nie do przejścia.
+ * Pozycje bez grupy (dodane ręcznie) idą pierwsze, pod pustą nazwą.
+ */
+export function groupPerms(perms) {
+  const map = new Map()
+  const orderOf = new Map()   // grupa → ustawiona kolejność (group_order)
+  for (const p of (perms || [])) {
+    const g = p.group_name || ''
+    if (!map.has(g)) map.set(g, [])
+    map.get(g).push(p)
+    const go = p.group_order
+    if (go != null && (!orderOf.has(g) || go < orderOf.get(g))) orderOf.set(g, go)
+  }
+  return [...map.entries()]
+    .sort(([a], [b]) => {
+      // Pozycje bez grupy zawsze na górze.
+      if (a === '') return -1
+      if (b === '') return 1
+      // Grupy z ustawioną kolejnością wg group_order; reszta alfabetycznie za nimi.
+      const oa = orderOf.has(a) ? orderOf.get(a) : Infinity
+      const ob = orderOf.has(b) ? orderOf.get(b) : Infinity
+      if (oa !== ob) return oa - ob
+      return a.localeCompare(b, 'pl')
+    })
+    .map(([group, items]) => ({ group, items }))
+}
+
+/**
+ * Czy pozycję pokazać wnioskodawcy. Wygaszone (wycofane ze źródła) znikają
+ * z wyboru — CHYBA że pracownik je posiada albo są zaznaczone na wniosku.
+ * Bez tego posiadane uprawnienie zniknęłoby z ekranu i wyglądałoby na odbierane.
+ */
+export function isPermVisible(p, key, held, picked) {
+  if (p.is_active !== false) return true
+  return Boolean(held?.has?.(key) || picked?.has?.(key))
+}
+
+/**
+ * Zwijana sekcja grupy uprawnień: nagłówek z licznikiem zaznaczonych,
+ * szukajka w obrębie grupy i zaznaczanie hurtem widocznych pozycji.
+ *
+ * Rozwija się sama, gdy zawiera zaznaczone pozycje — inaczej kierownik
+ * nie zobaczyłby, że wniosek już coś z tej grupy obejmuje.
+ */
+export function PermGroupSection({
+  group, count, selectedCount, children, onToggleAll, compact = false,
+  query, onQuery, searchable = true,
+}) {
+  const [open, setOpen] = useState(selectedCount > 0)
+  const wasSelected = useRef(selectedCount > 0)
+  useEffect(() => {
+    if (selectedCount > 0 && !wasSelected.current) setOpen(true)
+    wasSelected.current = selectedCount > 0
+  }, [selectedCount])
+
+  // Pojedyncza grupa bez nazwy = program bez importu. Nie ma czego zwijać.
+  if (!group && count <= 12) return children
+
+  const fs = compact ? 12 : 13
+  return (
+    <div style={{
+      border: '1px solid var(--color-border)', borderRadius: 6,
+      marginBottom: 8, background: 'var(--color-card)',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px',
+        cursor: 'pointer', userSelect: 'none',
+      }} onClick={() => setOpen(v => !v)}>
+        <span style={{ fontSize: 11, color: 'var(--color-text-muted)', width: 12 }}>
+          {open ? '▾' : '▸'}
+        </span>
+        <span style={{ fontWeight: 600, fontSize: fs, color: 'var(--color-navy)' }}>
+          {group || 'Uprawnienia'}
+        </span>
+        <span className="badge badge--info" style={{ fontSize: 9 }}>{count}</span>
+        {selectedCount > 0 && (
+          <span className="badge badge--success" style={{ fontSize: 9 }}>
+            zaznaczone: {selectedCount}
+          </span>
+        )}
+        {/* Zaznacz/odznacz WSZYSTKIE w tej grupie (nie w całym programie). */}
+        {onToggleAll && count > 1 && (
+          <button type="button" className="btn btn--ghost btn--sm"
+                  style={{ marginLeft: 'auto', fontSize: 11 }}
+                  onClick={e => { e.stopPropagation(); setOpen(true); onToggleAll() }}>
+            {selectedCount >= count ? 'Odznacz wszystkie' : 'Zaznacz wszystkie'}
+          </button>
+        )}
+      </div>
+      {open && (
+        <div style={{ padding: '0 8px 8px' }}>
+          {searchable && count > 12 && (
+            <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+              <input className="form-control" style={{ fontSize: fs, flex: 1 }}
+                     placeholder="Szukaj w grupie…"
+                     value={query} onChange={e => onQuery(e.target.value)} />
+            </div>
+          )}
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+/**
+ * Nazwy systemów, dla których wśród `keys` znalazły się uprawnienia
+ * administracyjne. `permsBySys`: { system_id: [uprawnienia] }.
+ */
+export function adminGrantNames(keys, systems, permsBySys) {
+  const names = []
+  for (const k of keys) {
+    const [sid, pid] = String(k).split(':').map(Number)
+    const p = (permsBySys[sid] || []).find(x => x.id === pid)
+    if (!p?.is_admin_option) continue
+    names.push(systems.find(s => s.id === sid)?.name || `system #${sid}`)
+  }
+  return [...new Set(names)]
+}
+
+/**
+ * Twarde potwierdzenie nadania uprawnień administracyjnych.
+ *
+ * Świadomie NIE jest to zwykłe „OK/Anuluj" — konto administracyjne w systemie
+ * dziedzinowym to najpoważniejsze uprawnienie, jakie urząd nadaje, więc
+ * wymagamy przepisania słowa. To wyklucza przypadkowe wysłanie wniosku
+ * (np. odruchowe kliknięcie w potwierdzenie).
+ *
+ * Zwraca `true` tylko przy wpisaniu POTWIERDZAM i zatwierdzeniu OK.
+ */
+export function confirmAdminRights(names) {
+  if (names.length === 0) return true
+  const answer = window.prompt(
+    'Próbujesz wysłać wniosek o uprawnienia administracyjne dla:\n\n'
+    + names.map(n => `  • ${n}`).join('\n')
+    + '\n\nCzy potwierdzasz?\nWpisz POTWIERDZAM i naciśnij OK.'
+  )
+  return (answer || '').trim().toUpperCase() === 'POTWIERDZAM'
+}
+
+/** Komunikat po nieudanym/anulowanym potwierdzeniu — jeden dla całej aplikacji. */
+export const ADMIN_CONFIRM_ABORTED =
+  'Nie potwierdzono uprawnień administracyjnych — wniosek nie został wysłany. '
+  + 'Aby kontynuować, wpisz POTWIERDZAM, albo odznacz te uprawnienia.'
+
+/**
+ * Czy program wymaga świadomego wyboru zakresu: flaga `require_scope` z rejestru,
+ * dla programów z listą poduprawnień (nie „tylko dostęp"). Taki program jest na
+ * wniosku domyślnie wyszarzony — trzeba zaznaczyć sam program, a potem wybrać
+ * co najmniej jedno uprawnienie.
+ */
+export function isScopeGated(system) {
+  return Boolean(system?.require_scope) && !system?.access_only
+}
+
+/**
+ * Programy „scope-gated", które wnioskodawca AKTYWOWAŁ (zaznaczył sam program),
+ * ale nie wybrał w nich żadnego uprawnienia. Zwraca nazwy — do zablokowania
+ * wysyłki z czytelnym komunikatem.
+ *
+ * `openIds` — Set id systemów rozwiniętych przez wnioskodawcę.
+ * `picked`  — Set kluczy „system_id:permission_id".
+ * `permsBySys` — { system_id: [uprawnienia] }.
+ */
+export function missingScopeSystems(systems, openIds, picked, permsBySys = {}) {
+  const out = []
+  for (const s of (systems || [])) {
+    if (!isScopeGated(s) || !openIds?.has?.(s.id)) continue
+    // Dowolne zaznaczenie (uprawnienie zwykłe LUB administratora) liczy się jako
+    // wybrany zakres — chodzi tylko o to, by program nie był pusty.
+    const perms = permsBySys[s.id] || []
+    const anyPicked = perms.some(p => picked.has(`${s.id}:${p.id}`))
+    if (!anyPicked) out.push(s.name)
+  }
+  return out
+}
+
+/** Definicja kontrolki uprawnienia w formacie zwracanym przez API. */
+export function permInput(p) {
+  return {
+    type: p?.input_type || 'none',
+    options: p?.options || [],
+    required: Boolean(p?.input_required),
+    description: p?.description || null,
+  }
+}
+
+/**
+ * Uprawnienia wymagające uzupełnienia, a nie uzupełnione — dla zestawu
+ * kluczy „system_id:permission_id". Zwraca etykiety „Program — Uprawnienie"
+ * (backend waliduje to samo, ale lepiej powiedzieć od razu).
+ */
+export function missingRequiredFields(keys, systems, fieldValues, permsBySys = {}) {
+  const miss = []
+  for (const k of keys) {
+    const [sid, pid] = k.split(':').map(Number)
+    const p = (permsBySys[sid] || []).find(x => x.id === pid)
+    if (!p?.input_required || (p.input_type || 'none') === 'none') continue
+    const v = (fieldValues[k] || {})[p.permission_name]
+    if (!v || !String(v).trim()) {
+      const sys = systems.find(x => x.id === sid)
+      miss.push(`${sys?.name || ''} — ${p.permission_name}`)
+    }
+  }
+  return miss
+}
