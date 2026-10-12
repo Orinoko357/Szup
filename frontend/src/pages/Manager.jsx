@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { RefreshCw, Check, X, ListChecks } from 'lucide-react'
-import { listRequests, workflowAction, listSystems, listPermissions, userPermissions } from '../api'
+import { listRequests, workflowAction, listSystems, listPermissions, userPermissions, denyRequestItem } from '../api'
 import { fmtDate } from '../serverTime'
 import WorkflowRibbon from '../components/WorkflowRibbon'
 import DeclarationModal from '../components/DeclarationModal'
@@ -35,8 +35,9 @@ export default function Manager() {
   const [err, setErr]           = useState(null)
   const [openReq, setOpenReq]   = useState(null)   // jeden wspólny widok: podgląd + akcja
 
-  async function load() {
-    setLoading(true); setErr(null)
+  async function load({ silent = false } = {}) {
+    if (!silent) setLoading(true)
+    setErr(null)
     try {
       // Pokazujemy WYŁĄCZNIE wnioski, na których bieżący użytkownik może działać
       // jako kierownik (backend liczy can_act dla bieżącego węzła obiegu).
@@ -50,10 +51,13 @@ export default function Manager() {
         x => x.can_act && MANAGER_NODES.includes(x.current_node_type)
       )
       setRequests(active)
+      // Po cichym odświeżeniu zsynchronizuj otwarty wniosek, żeby odmowy
+      // pojedynczych pozycji były widoczne także po ponownym otwarciu okna.
+      setOpenReq(prev => (prev ? (active.find(x => x.id === prev.id) || prev) : prev))
     } catch (ex) {
       setErr(ex.response?.data?.detail || 'Błąd ładowania')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -123,7 +127,8 @@ export default function Manager() {
 
       {openReq && (
         <RequestModal request={openReq} onClose={() => setOpenReq(null)}
-                      onDone={() => { setOpenReq(null); load() }} />
+                      onDone={() => { setOpenReq(null); load() }}
+                      onRefresh={() => load({ silent: true })} />
       )}
     </div>
   )
@@ -136,7 +141,7 @@ export default function Manager() {
 //   - pending_selection → wybór uprawnień (nadanie) / do odebrania (ustanie)
 //   - pending_manager   → decyzja (zatwierdź / odrzuć)
 // ---------------------------------------------------------------------------
-function RequestModal({ request: r, onClose, onDone }) {
+function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   const isRevoke   = r.kind === 'revoke'
   const isSelect   = r.status === 'pending_selection'
   const isDecision = r.status === 'pending_manager'
@@ -165,6 +170,36 @@ function RequestModal({ request: r, onClose, onDone }) {
     return next
   })
   const setDenyComment = (id, v) => setDenials(prev => ({ ...prev, [id]: v }))
+  // Lokalna kopia pozycji — po natychmiastowym zapisie odmowy odświeżamy
+  // pojedynczą pozycję w miejscu (badge „odmówiono"), bez zamykania okna.
+  const [items, setItems] = useState(r.items || [])
+  useEffect(() => { setItems(r.items || []) }, [r.id])
+  const [denyBusy, setDenyBusy] = useState(null)
+  async function saveDeny(id) {
+    setDenyBusy(id); setErr(null)
+    try {
+      const res = await denyRequestItem(r.id, id, {
+        denied: true, comment: (denials[id] || '').trim() || null,
+      })
+      const upd = res.data?.item
+      if (upd) setItems(prev => prev.map(it => (it.id === id ? { ...it, ...upd } : it)))
+      setDenials(prev => { const n = { ...prev }; delete n[id]; return n })
+      onRefresh?.()
+    } catch (ex) {
+      setErr(ex.response?.data?.detail || 'Nie udało się zapisać odmowy')
+    } finally { setDenyBusy(null) }
+  }
+  async function removeDeny(id) {
+    setDenyBusy(id); setErr(null)
+    try {
+      const res = await denyRequestItem(r.id, id, { denied: false })
+      const upd = res.data?.item
+      if (upd) setItems(prev => prev.map(it => (it.id === id ? { ...it, ...upd } : it)))
+      onRefresh?.()
+    } catch (ex) {
+      setErr(ex.response?.data?.detail || 'Nie udało się cofnąć odmowy')
+    } finally { setDenyBusy(null) }
+  }
   const [busy, setBusy]       = useState(false)
   const [err, setErr]         = useState(null)
   const [loading, setLoading] = useState(isSelect)
@@ -449,9 +484,10 @@ function RequestModal({ request: r, onClose, onDone }) {
                 </p>
               )}
               <div style={{ marginTop: 8 }}>
-                <PermissionChanges items={r.items}
+                <PermissionChanges items={items}
                   deny={isDecision && twoStage
-                    ? { can: true, map: denials, toggle: toggleDeny, setComment: setDenyComment }
+                    ? { can: true, map: denials, toggle: toggleDeny, setComment: setDenyComment,
+                        save: saveDeny, remove: removeDeny, busyId: denyBusy }
                     : undefined} />
               </div>
             </div>

@@ -184,6 +184,10 @@ export const deleteRequestType      = (id)     => api.delete(`/request-types/${i
 // --- Workflow — stan instancji dla wniosku ---
 export const getRequestWorkflow     = (rid)    => api.get(`/requests/${rid}/workflow`)
 export const workflowAction         = (rid, d) => api.post(`/requests/${rid}/workflow/action`, d)
+// Odmowa POJEDYNCZEJ pozycji od ręki (bez kończenia wniosku). denied=false cofa.
+export const denyRequestItem        = (rid, iid, d) => api.post(`/requests/${rid}/items/${iid}/deny`, d)
+// Realizacja etapowa: odhaczenie pojedynczej pozycji przez IT. fulfilled=false cofa.
+export const fulfillRequestItem     = (rid, iid, d) => api.post(`/requests/${rid}/items/${iid}/fulfill`, d)
 
 // --- Rejestr nadanych uprawnień + oświadczenia ---
 export const listGrantedRegistry = (params)        => api.get('/registry/granted', { params })

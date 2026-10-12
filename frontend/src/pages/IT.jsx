@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Wrench, RefreshCw, CheckCircle, Link2, UserPlus, Plus } from 'lucide-react'
 import {
   listRequests, workflowAction, linkRequestWorker, listItStaff, assignRequest,
-  listSystems,
+  listSystems, denyRequestItem, fulfillRequestItem,
 } from '../api'
 
 /** Kierownik IT = osoba mająca JEDNOCZEŚNIE rolę „manager" i „it_staff".
@@ -53,13 +53,18 @@ function RequestsTab() {
   const [filter, setFilter]     = useState('pending_it')
   const [openReq, setOpenReq]   = useState(null)   // jeden wspólny widok: podgląd + realizacja
 
-  async function load() {
-    setLoading(true)
+  async function load({ silent = false } = {}) {
+    if (!silent) setLoading(true)
     try {
       const params = filter !== 'all' ? { status: filter } : {}
       const r = await listRequests(params)
       setRequests(r.data)
-    } finally { setLoading(false) }
+      // Po cichym odświeżeniu (np. po zapisie odmowy/realizacji pojedynczej
+      // pozycji) zsynchronizuj też otwarty wniosek, żeby po zamknięciu i
+      // ponownym otwarciu stan pozycji zgadzał się z bazą.
+      setOpenReq(prev => (prev ? (r.data.find(x => x.id === prev.id) || prev) : prev))
+      return r.data
+    } finally { if (!silent) setLoading(false) }
   }
 
   useEffect(() => { load() }, [filter])
@@ -117,7 +122,8 @@ function RequestsTab() {
       </div>
       {openReq && (
         <RequestModal request={openReq} onClose={() => setOpenReq(null)}
-                      onDone={() => { setOpenReq(null); load() }} />
+                      onDone={() => { setOpenReq(null); load() }}
+                      onRefresh={() => load({ silent: true })} />
       )}
     </>
   )
@@ -136,7 +142,7 @@ function _guessAdUsername(r) {
 // Jeden wspólny widok wniosku dla IT: podgląd (dane, uprawnienia, obieg) oraz
 // akcja właściwa dla statusu — realizacja/odebranie (pending_it) albo
 // dowiązanie konta (completed bez worker_user_id).
-function RequestModal({ request: r, onClose, onDone }) {
+function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   const isRevoke   = r.kind === 'revoke'
   const canRealize = r.status === 'pending_it'
   const canLink    = r.status === 'completed' && !r.worker_user_id
@@ -145,13 +151,25 @@ function RequestModal({ request: r, onClose, onDone }) {
   const needsAd = !r.worker_user_id
 
   // Pozycje wniosku — PermissionChanges rozbija je po kierunku (nadanie/odebranie).
-  const items = r.items || []
+  // Trzymamy lokalną kopię, żeby po natychmiastowym zapisie odmowy odświeżyć
+  // pojedynczą pozycję w miejscu (badge „odmówiono"), bez zamykania okna.
+  const [items, setItems] = useState(r.items || [])
+  useEffect(() => { setItems(r.items || []) }, [r.id])
+  // Postęp realizacji etapowej — liczone po pozycjach NADANIA.
+  const grantItems = items.filter(it => (it.kind || 'grant') !== 'revoke')
+  const grantProgress = {
+    total: grantItems.length,
+    done: grantItems.filter(it => it.fulfilled && !it.denied).length,
+    denied: grantItems.filter(it => it.denied).length,
+    get pending() { return this.total - this.done - this.denied },
+  }
 
   const isItManager = useIsItManager()
   const [comment, setComment]       = useState('')
   const [adUsername, setAdUsername] = useState(() => (needsAd ? _guessAdUsername(r) : ''))
-  // Odmowy pojedynczych pozycji przez IT przy realizacji: { [item_id]: komentarz }.
+  // Szkice odmów (otwarte pola komentarza): { [item_id]: komentarz }.
   const [denials, setDenials] = useState({})
+  const [denyBusy, setDenyBusy] = useState(null)   // id pozycji aktualnie zapisywanej
   const toggleDeny = (id) => setDenials(prev => {
     const next = { ...prev }
     if (Object.prototype.hasOwnProperty.call(next, id)) delete next[id]
@@ -159,6 +177,45 @@ function RequestModal({ request: r, onClose, onDone }) {
     return next
   })
   const setDenyComment = (id, v) => setDenials(prev => ({ ...prev, [id]: v }))
+  // Zapisuje odmowę OD RAZU i aktualizuje pozycję na liście (potwierdzenie dla realizatora).
+  async function saveDeny(id) {
+    setDenyBusy(id); setErr(null)
+    try {
+      const res = await denyRequestItem(r.id, id, {
+        denied: true, comment: (denials[id] || '').trim() || null,
+      })
+      const upd = res.data?.item
+      if (upd) setItems(prev => prev.map(it => (it.id === id ? { ...it, ...upd } : it)))
+      setDenials(prev => { const n = { ...prev }; delete n[id]; return n })
+      onRefresh?.()
+    } catch (ex) {
+      setErr(ex.response?.data?.detail || 'Nie udało się zapisać odmowy')
+    } finally { setDenyBusy(null) }
+  }
+  async function removeDeny(id) {
+    setDenyBusy(id); setErr(null)
+    try {
+      const res = await denyRequestItem(r.id, id, { denied: false })
+      const upd = res.data?.item
+      if (upd) setItems(prev => prev.map(it => (it.id === id ? { ...it, ...upd } : it)))
+      onRefresh?.()
+    } catch (ex) {
+      setErr(ex.response?.data?.detail || 'Nie udało się cofnąć odmowy')
+    } finally { setDenyBusy(null) }
+  }
+  // Realizacja etapowa: odhaczenie / cofnięcie pojedynczej pozycji przez IT.
+  async function setFulfill(id, done) {
+    setDenyBusy(id); setErr(null)
+    try {
+      const res = await fulfillRequestItem(r.id, id, { fulfilled: done })
+      const upd = res.data?.item
+      if (upd) setItems(prev => prev.map(it => (it.id === id ? { ...it, ...upd } : it)))
+      onRefresh?.()
+    } catch (ex) {
+      setErr(ex.response?.data?.detail
+        || (done ? 'Nie udało się odhaczyć pozycji' : 'Nie udało się cofnąć realizacji'))
+    } finally { setDenyBusy(null) }
+  }
   const [busy, setBusy] = useState(false)
   const [err, setErr]   = useState(null)
 
@@ -215,6 +272,15 @@ function RequestModal({ request: r, onClose, onDone }) {
   async function realize() {
     const u = adUsername.trim()
     if (needsAd && !u) { setErr('Wpisz sAMAccountName pracownika (login AD)'); return }
+
+    // Praca etapowa: jeśli zostały pozycje nadania ani nieodhaczone, ani
+    // nieodmówione — upewnij się, że realizator chce zamknąć wniosek teraz.
+    if (!isRevoke && grantProgress.pending > 0) {
+      const ok = window.confirm(
+        `Pozostało ${grantProgress.pending} pozycji bez decyzji (nieodhaczonych i `
+        + `nieodmówionych). Zamknąć wniosek teraz? Pozostałe zostaną nadane.`)
+      if (!ok) return
+    }
 
     // Pozycje dołożone przez IT — zawsze „grant" (IT nie odbiera uprawnień).
     const addedKeys = [...addPicked]
@@ -299,11 +365,33 @@ function RequestModal({ request: r, onClose, onDone }) {
           <div className="mb-4">
             <div className="form-label">Zmiany uprawnień do wykonania</div>
             <p style={{ color: 'var(--color-text-muted)', fontSize: 12, margin: '4px 0 0' }}>
-              Możesz odmówić realizacji pojedynczej pozycji (z komentarzem) — reszta zostanie nadana.
+              Możesz realizować wniosek etapami: odhacz zrobione pozycje („Zrobione")
+              albo odmów (z komentarzem) — każda decyzja zapisuje się od razu.
             </p>
+            {canRealize && grantProgress.total > 0 && (
+              <div style={{ fontSize: 12, marginTop: 6, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--color-success)' }}>
+                  ✓ zrealizowane: <strong>{grantProgress.done}/{grantProgress.total}</strong>
+                </span>
+                {grantProgress.denied > 0 && (
+                  <span style={{ color: 'var(--color-error-text)' }}>
+                    odmówione: <strong>{grantProgress.denied}</strong>
+                  </span>
+                )}
+                {grantProgress.pending > 0 && (
+                  <span style={{ color: 'var(--color-text-muted)' }}>
+                    bez decyzji: <strong>{grantProgress.pending}</strong>
+                  </span>
+                )}
+              </div>
+            )}
             <div style={{ marginTop: 8 }}>
               <PermissionChanges items={items}
-                deny={{ can: true, map: denials, toggle: toggleDeny, setComment: setDenyComment }} />
+                deny={{ can: canRealize, map: denials, toggle: toggleDeny, setComment: setDenyComment,
+                        save: saveDeny, remove: removeDeny, busyId: denyBusy }}
+                fulfill={canRealize
+                  ? { can: true, set: setFulfill, busyId: denyBusy }
+                  : undefined} />
             </div>
           </div>
 

@@ -375,6 +375,12 @@ class RequestItem(SQLModel, table=True):
     deny_comment: Optional[str] = None
     denied_by_user_id: Optional[int] = Field(default=None, foreign_key="user.id")
     denied_at: Optional[datetime] = None
+    # Realizacja POJEDYNCZEJ pozycji przez IT — do pracy etapowej (częściowej).
+    # IT odhacza wykonane pozycje na bieżąco (zapis w bazie) PRZED zamknięciem
+    # całego wniosku. Wyklucza się z `denied` (odmowa vs zrobione).
+    fulfilled: bool = Field(default=False, index=True)
+    fulfilled_by_user_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    fulfilled_at: Optional[datetime] = None
 
 
 # ---------------------------------------------------------------------------

@@ -347,6 +347,12 @@ def _get_items(session: Session, request_id: int) -> list:
             du = session.get(User, denied_by_id)
             if du:
                 denied_by_name = du.full_name or du.username
+        fulfilled_by_id = getattr(item, "fulfilled_by_user_id", None)
+        fulfilled_by_name = None
+        if fulfilled_by_id:
+            fu = session.get(User, fulfilled_by_id)
+            if fu:
+                fulfilled_by_name = fu.full_name or fu.username
         result.append({
             "id": item.id,
             "system_id": item.system_id,
@@ -362,6 +368,12 @@ def _get_items(session: Session, request_id: int) -> list:
             "denied": bool(getattr(item, "denied", False)),
             "deny_comment": getattr(item, "deny_comment", None),
             "denied_by_name": denied_by_name,
+            "denied_at": (item.denied_at.isoformat()
+                          if getattr(item, "denied_at", None) else None),
+            "fulfilled": bool(getattr(item, "fulfilled", False)),
+            "fulfilled_by_name": fulfilled_by_name,
+            "fulfilled_at": (item.fulfilled_at.isoformat()
+                             if getattr(item, "fulfilled_at", None) else None),
         })
     return result
 
@@ -1359,7 +1371,28 @@ def workflow_action(
             x.deny_comment = want[x.id]
             x.denied_by_user_id = current_user.id
             x.denied_at = datetime.utcnow()
+            x.fulfilled = False
+            x.fulfilled_by_user_id = None
+            x.fulfilled_at = None
             session.add(x)
+        session.flush()
+
+    # Zamknięcie realizacji przez IT (execute na it_execute) — każda pozycja
+    # NADANIA, która nie została odmówiona, zostaje odhaczona jako zrealizowana.
+    # Dzięki temu po częściowej/etapowej pracy stan końcowy jest spójny
+    # (wszystko „zrealizowano" albo „odmówiono"), a rejestr i audyt się zgadzają.
+    if data.action == "execute":
+        now = datetime.utcnow()
+        for x in session.exec(
+            select(RequestItem).where(RequestItem.request_id == r.id)
+            .where(col(RequestItem.denied) == False)  # noqa: E712
+            .where((col(RequestItem.kind) == "grant") | (col(RequestItem.kind).is_(None)))
+        ).all():
+            if not x.fulfilled:
+                x.fulfilled = True
+                x.fulfilled_by_user_id = current_user.id
+                x.fulfilled_at = now
+                session.add(x)
         session.flush()
 
     # Oświadczenie wnioskującego — gdy TA akcja kieruje wniosek do IT i wniosek
@@ -1381,6 +1414,181 @@ def workflow_action(
     out = serialize_instance(session, inst)
     out["workflow_enabled"] = True
     return out
+
+
+class ItemDenyIn(BaseModel):
+    denied: bool = True              # True = odmów, False = cofnij odmowę
+    comment: Optional[str] = None
+
+
+@router.post("/{request_id}/items/{item_id}/deny")
+def set_item_denial(
+    request_id: int,
+    item_id: int,
+    data: ItemDenyIn,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Zapisuje (albo cofa) odmowę POJEDYNCZEJ pozycji od ręki — bez kończenia
+    całego wniosku. Dzięki temu kierownik nadrzędny / realizator IT widzi od
+    razu, że odmowa się zapisała (badge „odmówiono"). Dozwolone tylko na węźle,
+    na którym ta osoba faktycznie może działać (higher_manager_approve /
+    it_execute) — reguły jak w `workflow_action`."""
+    from models import WorkflowInstance
+    from services.audit import record_event
+    from services.workflow import can_act, find_node
+
+    r = session.get(AccessRequest, request_id)
+    if not r:
+        raise HTTPException(404, "Wniosek nie istnieje")
+    _check_access(current_user, r, session)
+
+    item = session.get(RequestItem, item_id)
+    if not item or item.request_id != request_id:
+        raise HTTPException(404, "Pozycja nie należy do tego wniosku.")
+
+    inst = session.exec(
+        select(WorkflowInstance).where(WorkflowInstance.request_id == request_id)
+    ).first()
+    if not inst or not inst.current_node_id:
+        raise HTTPException(400, "Wniosek nie ma aktywnego obiegu.")
+
+    node = find_node(json.loads(inst.template_snapshot), inst.current_node_id)
+    ntype = (node or {}).get("type")
+    if ntype not in ("higher_manager_approve", "it_execute"):
+        raise HTTPException(400,
+            "Odmowa pozycji jest możliwa tylko przy zatwierdzaniu przez "
+            "kierownika nadrzędnego albo realizacji przez IT.")
+
+    dept = session.get(Department, r.department_id) if r.department_id else None
+    ok, reason = can_act(node, r, dept, current_user, session)
+    if not ok:
+        raise HTTPException(403, reason or "Brak uprawnień do działania na tym etapie.")
+
+    # Odmówić można tylko pozycji nadania — odebranie samo w sobie nic nie nadaje.
+    if (getattr(item, "kind", "grant") or "grant") == "revoke":
+        raise HTTPException(400, "Odmówić można tylko pozycji nadania uprawnienia.")
+
+    if data.denied:
+        item.denied = True
+        item.deny_comment = (data.comment or "").strip() or None
+        item.denied_by_user_id = current_user.id
+        item.denied_at = datetime.utcnow()
+        # Odmowa i „zrealizowano" wykluczają się — czyścimy ewentualne odhaczenie.
+        item.fulfilled = False
+        item.fulfilled_by_user_id = None
+        item.fulfilled_at = None
+        ev = "request_item.denied"
+    else:
+        item.denied = False
+        item.deny_comment = None
+        item.denied_by_user_id = None
+        item.denied_at = None
+        ev = "request_item.deny_revoked"
+    session.add(item)
+
+    try:
+        perm_obj = session.get(SystemPermission, item.permission_id)
+        sys_obj = session.get(PermissionSystem, item.system_id)
+        record_event(
+            session, action=ev,
+            user_id=current_user.id, username=current_user.username,
+            target_type="request_item", target_id=item.id,
+            details={"request_id": request_id,
+                     "permission": perm_obj.permission_name if perm_obj else item.permission_id,
+                     "system": sys_obj.name if sys_obj else item.system_id,
+                     "comment": item.deny_comment},
+            commit=False,
+        )
+    except Exception:
+        pass
+
+    session.commit()
+    updated = next((x for x in _get_items(session, request_id) if x["id"] == item_id), None)
+    return {"item": updated}
+
+
+class ItemFulfillIn(BaseModel):
+    fulfilled: bool = True           # True = odhacz jako zrobione, False = cofnij
+
+
+@router.post("/{request_id}/items/{item_id}/fulfill")
+def set_item_fulfilled(
+    request_id: int,
+    item_id: int,
+    data: ItemFulfillIn,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Odhacza (albo cofa) realizację POJEDYNCZEJ pozycji przez IT — praca
+    etapowa. Zapis w bazie OD RAZU, zanim zamknie się cały wniosek, żeby IT
+    mogło realizować wniosek częściami i widziało, co już zrobione. Dozwolone
+    tylko na węźle `it_execute` i tylko dla osoby, która może tam działać."""
+    from models import WorkflowInstance
+    from services.audit import record_event
+    from services.workflow import can_act, find_node
+
+    r = session.get(AccessRequest, request_id)
+    if not r:
+        raise HTTPException(404, "Wniosek nie istnieje")
+    _check_access(current_user, r, session)
+
+    item = session.get(RequestItem, item_id)
+    if not item or item.request_id != request_id:
+        raise HTTPException(404, "Pozycja nie należy do tego wniosku.")
+
+    inst = session.exec(
+        select(WorkflowInstance).where(WorkflowInstance.request_id == request_id)
+    ).first()
+    if not inst or not inst.current_node_id:
+        raise HTTPException(400, "Wniosek nie ma aktywnego obiegu.")
+
+    node = find_node(json.loads(inst.template_snapshot), inst.current_node_id)
+    ntype = (node or {}).get("type")
+    if ntype != "it_execute":
+        raise HTTPException(400,
+            "Odhaczanie realizacji pozycji jest możliwe tylko na etapie "
+            "realizacji przez IT.")
+
+    dept = session.get(Department, r.department_id) if r.department_id else None
+    ok, reason = can_act(node, r, dept, current_user, session)
+    if not ok:
+        raise HTTPException(403, reason or "Brak uprawnień do działania na tym etapie.")
+
+    if data.fulfilled and getattr(item, "denied", False):
+        raise HTTPException(400,
+            "Ta pozycja jest odmówiona — najpierw cofnij odmowę, aby ją zrealizować.")
+
+    if data.fulfilled:
+        item.fulfilled = True
+        item.fulfilled_by_user_id = current_user.id
+        item.fulfilled_at = datetime.utcnow()
+        ev = "request_item.fulfilled"
+    else:
+        item.fulfilled = False
+        item.fulfilled_by_user_id = None
+        item.fulfilled_at = None
+        ev = "request_item.fulfill_revoked"
+    session.add(item)
+
+    try:
+        perm_obj = session.get(SystemPermission, item.permission_id)
+        sys_obj = session.get(PermissionSystem, item.system_id)
+        record_event(
+            session, action=ev,
+            user_id=current_user.id, username=current_user.username,
+            target_type="request_item", target_id=item.id,
+            details={"request_id": request_id,
+                     "permission": perm_obj.permission_name if perm_obj else item.permission_id,
+                     "system": sys_obj.name if sys_obj else item.system_id},
+            commit=False,
+        )
+    except Exception:
+        pass
+
+    session.commit()
+    updated = next((x for x in _get_items(session, request_id) if x["id"] == item_id), None)
+    return {"item": updated}
 
 
 @router.get("/{request_id}/workflow/verify")

@@ -9,6 +9,24 @@
  *   posiada    → szary badge „posiada” (bez zmian)
  */
 
+// Data+godzina do tooltipów (kto i kiedy odmówił / zrealizował pozycję).
+function fmtDT(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d)) return ''
+  return d.toLocaleString('pl-PL', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  })
+}
+
+// Tekst tooltipa badge'a: „Osoba — 12.10.2026, 14:30".
+function actorTitle(name, iso) {
+  const dt = fmtDT(iso)
+  if (name && dt) return `${name} — ${dt}`
+  return name || dt || undefined
+}
+
 export function splitItems(items = []) {
   const grants  = items.filter(it => (it.kind || 'grant') !== 'revoke')
   const revokes = items.filter(it => (it.kind || 'grant') === 'revoke')
@@ -17,16 +35,19 @@ export function splitItems(items = []) {
 
 // --- Widok pozycji wniosku pogrupowany po kierunku --------------------------
 // `deny` (opcjonalne) włącza tryb ODMOWY pojedynczych pozycji (kierownik
-// nadrzędny / IT): { can, map, toggle, setComment }, gdzie `map` to
-// { [item_id]: komentarz } aktualnie odmawianych pozycji.
-export default function PermissionChanges({ items = [], emptyText = 'Brak', deny }) {
+// nadrzędny / IT): { can, map, toggle, setComment, save, remove, busyId }.
+//   map     — { [item_id]: komentarz } pozycji z OTWARTYM szkicem odmowy
+//   save(id)   — zapisuje odmowę OD RAZU (POST .../deny), bez kończenia wniosku
+//   remove(id) — cofa zapisaną odmowę (POST .../deny { denied:false })
+//   busyId  — id pozycji aktualnie zapisywanej (blokuje przyciski)
+export default function PermissionChanges({ items = [], emptyText = 'Brak', deny, fulfill }) {
   const { grants, revokes } = splitItems(items)
   if (items.length === 0) {
     return <div style={{ color: 'var(--color-text-muted)' }}>{emptyText}</div>
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {grants.length  > 0 && <Group kind="grant"  items={grants} deny={deny} />}
+      {grants.length  > 0 && <Group kind="grant"  items={grants} deny={deny} fulfill={fulfill} />}
       {revokes.length > 0 && <Group kind="revoke" items={revokes} />}
     </div>
   )
@@ -53,20 +74,26 @@ function groupBySystemAndGroup(items) {
     }))
 }
 
-function PermRow({ it, isRevoke, deny }) {
+function PermRow({ it, isRevoke, deny, fulfill }) {
   const cv = it.custom_values && typeof it.custom_values === 'object'
     ? Object.entries(it.custom_values).filter(([, v]) => v)
     : []
-  // Pozycja już odmówiona (zapisana w bazie).
+  // Pozycja już odmówiona / zrealizowana (zapisana w bazie).
   const persistedDenied = !!it.denied
-  // Czy można odmówić TERAZ (tryb akcji): tylko nadania, które nie są jeszcze odmówione.
-  const canDenyNow = deny?.can && !isRevoke && !persistedDenied && it.id != null
+  const persistedFulfilled = !!it.fulfilled && !persistedDenied
+  // Czy można odmówić TERAZ (tryb akcji): tylko nadania, nieodmówione i niezrealizowane.
+  const canDenyNow = deny?.can && !isRevoke && !persistedDenied && !persistedFulfilled && it.id != null
   const denyingNow = deny?.map && Object.prototype.hasOwnProperty.call(deny.map, it.id)
+  const canFulfill = fulfill?.can && !isRevoke && it.id != null && typeof fulfill?.set === 'function'
+  const busy = (deny?.busyId ?? fulfill?.busyId) === it.id
+  const canSave = typeof deny?.save === 'function'       // natychmiastowy zapis dostępny
+  const canUndo = typeof deny?.remove === 'function'
   const struck = isRevoke || persistedDenied || denyingNow
+  const rowBg = persistedFulfilled ? 'var(--color-success-bg)'
+    : (persistedDenied || denyingNow) ? 'var(--color-error-bg)' : 'transparent'
   return (
     <div style={{ padding: '5px 12px 5px 40px', fontSize: 14,
-                  borderTop: '0.5px solid var(--color-border)',
-                  background: (persistedDenied || denyingNow) ? 'var(--color-error-bg)' : 'transparent' }}>
+                  borderTop: '0.5px solid var(--color-border)', background: rowBg }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ textDecoration: struck ? 'line-through' : 'none',
                        color: (persistedDenied || denyingNow) ? 'var(--color-error-text)' : 'inherit' }}>
@@ -81,24 +108,43 @@ function PermRow({ it, isRevoke, deny }) {
         )}
         {persistedDenied && (
           <span className="badge badge--error" style={{ fontSize: 10, textDecoration: 'none' }}
-                title={it.denied_by_name ? `Odmówił: ${it.denied_by_name}` : undefined}>
+                title={actorTitle(it.denied_by_name, it.denied_at)}>
             odmówiono
           </span>
         )}
-        {canDenyNow && (
-          <button type="button" className="btn btn--ghost btn--sm"
-                  style={{ fontSize: 11, marginLeft: 'auto' }}
-                  onClick={() => deny.toggle(it.id)}>
-            Odmów
-          </button>
+        {persistedFulfilled && (
+          <span className="badge badge--success" style={{ fontSize: 10, textDecoration: 'none' }}
+                title={actorTitle(it.fulfilled_by_name, it.fulfilled_at)}>
+            zrealizowano
+          </span>
         )}
-        {denyingNow && (
-          <button type="button" className="btn btn--ghost btn--sm"
-                  style={{ fontSize: 11, marginLeft: 'auto' }}
-                  onClick={() => deny.toggle(it.id)}>
-            Cofnij odmowę
-          </button>
-        )}
+        {/* Przyciski akcji — po prawej. */}
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
+          {persistedFulfilled && canFulfill && (
+            <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
+                    style={{ fontSize: 11 }} onClick={() => fulfill.set(it.id, false)}>
+              {busy ? 'Cofam…' : 'Cofnij'}
+            </button>
+          )}
+          {canFulfill && !persistedFulfilled && !persistedDenied && !denyingNow && (
+            <button type="button" className="btn btn--success btn--sm" disabled={busy}
+                    style={{ fontSize: 11 }} onClick={() => fulfill.set(it.id, true)}>
+              {busy ? 'Zapisuję…' : '✓ Zrobione'}
+            </button>
+          )}
+          {persistedDenied && canUndo && (
+            <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
+                    style={{ fontSize: 11 }} onClick={() => deny.remove(it.id)}>
+              {busy ? 'Cofam…' : 'Cofnij odmowę'}
+            </button>
+          )}
+          {canDenyNow && !denyingNow && (
+            <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
+                    style={{ fontSize: 11 }} onClick={() => deny.toggle(it.id)}>
+              Odmów
+            </button>
+          )}
+        </span>
       </div>
       {/* Komentarz do odmowy — zapisany (read-only) albo wpisywany teraz. */}
       {persistedDenied && it.deny_comment && (
@@ -107,10 +153,32 @@ function PermRow({ it, isRevoke, deny }) {
         </div>
       )}
       {denyingNow && (
-        <input className="form-control" style={{ fontSize: 12, marginTop: 4 }}
-               placeholder="Powód odmowy (opcjonalnie)"
-               value={deny.map[it.id] || ''}
-               onChange={e => deny.setComment(it.id, e.target.value)} />
+        <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <input className="form-control" style={{ fontSize: 12 }}
+                 placeholder="Powód odmowy (opcjonalnie)" autoFocus disabled={busy}
+                 value={deny.map[it.id] || ''}
+                 onChange={e => deny.setComment(it.id, e.target.value)}
+                 onKeyDown={e => { if (e.key === 'Enter' && canSave && !busy) deny.save(it.id) }} />
+          {canSave ? (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="button" className="btn btn--danger btn--sm" disabled={busy}
+                      style={{ fontSize: 11 }} onClick={() => deny.save(it.id)}>
+                {busy ? 'Zapisuję…' : 'Zapisz odmowę'}
+              </button>
+              <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
+                      style={{ fontSize: 11 }} onClick={() => deny.toggle(it.id)}>
+                Anuluj
+              </button>
+            </div>
+          ) : (
+            // Tryb zgodności: brak natychmiastowego zapisu → odmowa poleci z całą akcją.
+            <button type="button" className="btn btn--ghost btn--sm"
+                    style={{ fontSize: 11, alignSelf: 'flex-start' }}
+                    onClick={() => deny.toggle(it.id)}>
+              Cofnij odmowę
+            </button>
+          )}
+        </div>
       )}
       {cv.length > 0 && !struck && (
         <div style={{ marginTop: 4, textDecoration: 'none' }}>
@@ -126,7 +194,7 @@ function PermRow({ it, isRevoke, deny }) {
   )
 }
 
-function Group({ kind, items, deny }) {
+function Group({ kind, items, deny, fulfill }) {
   const isRevoke = kind === 'revoke'
   const color = isRevoke ? 'var(--color-error)'    : 'var(--color-success)'
   const bg    = isRevoke ? 'var(--color-error-bg)' : 'var(--color-success-bg)'
@@ -166,7 +234,7 @@ function Group({ kind, items, deny }) {
               )}
               {g.items.map(it => (
                 <PermRow key={it.id ?? `${it.system_id}:${it.permission_id}`}
-                         it={it} isRevoke={isRevoke} deny={deny} />
+                         it={it} isRevoke={isRevoke} deny={deny} fulfill={fulfill} />
               ))}
             </div>
           ))}
