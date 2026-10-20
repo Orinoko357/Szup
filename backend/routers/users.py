@@ -337,7 +337,9 @@ def users_by_department(
       - kierownik: tylko wydziały, którymi kieruje (bezpośrednio/zastępczo/2-st.),
       - HR: tylko jednostki (unit) przypisane temu pracownikowi kadr.
     """
-    if not has_role(current_user, "superadmin", "hr", "manager"):
+    from services.permissions import user_is_hr
+    hr_cap = user_is_hr(session, current_user)
+    if not (has_role(current_user, "superadmin", "manager") or hr_cap):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Brak uprawnień")
     dept = session.get(Department, department_id)
     if not dept:
@@ -350,8 +352,8 @@ def users_by_department(
             direct_ids, escalated_ids = managed_dept_ids(session, current_user)
             if department_id in {*direct_ids, *escalated_ids}:
                 allowed = True
-        # Ścieżka HR — zakres jednostek (unit).
-        if not allowed and has_role(current_user, "hr"):
+        # Ścieżka HR (rola lub komórka kadrowa) — zakres jednostek (unit).
+        if not allowed and hr_cap:
             scoped_units = hr_scoped_unit_ids(session, current_user)
             if scoped_units is None or dept.unit_id in scoped_units:
                 allowed = True
@@ -429,13 +431,38 @@ def my_workers(
             # 2-stopniowy obieg? Front wie wtedy, że oświadczenie podpisze
             # dopiero kierownik II stopnia, więc nie pokazuje go przy tworzeniu.
             "requires_higher_approval": bool(d.requires_higher_approval) if d else False,
+            "is_self": False,
             # Aktualnie posiadane uprawnienia (nadane − odebrane). Kierownik
             # widzi je na liście, a formularz nowego wniosku ma je wstępnie
             # zaznaczone (wniosek o zmianę = modyfikacja obecnego stanu).
             "permissions": _effective_permissions(session, u.id)["permissions"],
         })
-    # posortuj: najpierw bezpośredni, potem po imieniu/nazwisku
-    result.sort(key=lambda r: (r["is_escalated"], (r["full_name"] or r["username"] or "").lower()))
+
+    # Kierownik może też wnioskować SAM DLA SIEBIE — dodajemy jego własny wpis
+    # (na górze listy), nawet jeśli jego komórka nie jest wśród zarządzanych.
+    me = current_user
+    md = depts_map.get(me.department_id) or (
+        session.get(Department, me.department_id) if me.department_id else None)
+    mun = (units_map.get(md.unit_id) if (md and md.unit_id) else None) or (
+        session.get(Unit, md.unit_id) if (md and md.unit_id) else None)
+    result.insert(0, {
+        "id": me.id,
+        "username": me.username,
+        "full_name": me.full_name,
+        "email": me.email,
+        "department_id": me.department_id,
+        "department_name": md.name if md else None,
+        "unit_id": md.unit_id if md else None,
+        "unit_name": mun.name if mun else None,
+        "is_escalated": False,
+        "requires_higher_approval": bool(md.requires_higher_approval) if md else False,
+        "is_self": True,
+        "permissions": _effective_permissions(session, me.id)["permissions"],
+    })
+
+    # posortuj: najpierw SAM kierownik, potem bezpośredni, dalej po nazwisku.
+    result.sort(key=lambda r: (not r.get("is_self"), r["is_escalated"],
+                               (r["full_name"] or r["username"] or "").lower()))
     return result
 
 
@@ -855,6 +882,9 @@ class LdapUserPreviewItem(BaseModel):
     # True, gdy ten sam login (sAMAccountName) występuje w AD więcej niż raz —
     # importujemy tylko pierwsze wystąpienie, resztę pomijamy.
     duplicate: bool = False
+    # True, gdy OU użytkownika mieści się w ZAIMPORTOWANEJ strukturze (powiązana
+    # jednostka/komórka). Tylko tacy użytkownicy są importowalni.
+    in_structure: bool = False
 
 
 class LdapUserImportRequest(BaseModel):
@@ -889,6 +919,20 @@ def _build_dn_to_unit_map(session: Session) -> dict[str, int]:
     return out
 
 
+# Komunikat, gdy struktura organizacyjna nie została jeszcze pobrana z AD.
+_NO_STRUCTURE_MSG = (
+    "Najpierw pobierz jednostki organizacyjne z AD (Jednostki → import struktury). "
+    "Użytkowników można zaimportować/zsynchronizować dopiero po powiązaniu struktury — "
+    "importujemy wyłącznie osoby z powiązanych jednostek organizacyjnych."
+)
+
+
+def _require_structure(dept_by_dn: dict, unit_by_dn: dict) -> None:
+    """Wymuś, że struktura OU jest już zaimportowana (powiązana po ldap_dn)."""
+    if not dept_by_dn and not unit_by_dn:
+        raise HTTPException(409, _NO_STRUCTURE_MSG)
+
+
 @router.post("/ldap/preview", response_model=list[LdapUserPreviewItem])
 def ldap_users_preview(
     data: LdapUserPreviewRequest,
@@ -918,6 +962,7 @@ def ldap_users_preview(
 
     dept_by_dn = _build_dn_to_dept_map(session)
     unit_by_dn = _build_dn_to_unit_map(session)
+    _require_structure(dept_by_dn, unit_by_dn)
     dept_names = {d.id: d.name for d in session.exec(select(Department)).all()}
     unit_names = {u.id: u.name for u in session.exec(select(Unit)).all()}
     existing = {u.username: u for u in session.exec(select(User)).all()}
@@ -973,6 +1018,7 @@ def ldap_users_preview(
             unit_name=unit_names.get(unit_id) if unit_id else None,
             status=status_v,
             duplicate=is_dup,
+            in_structure=(dept_id is not None or unit_id is not None),
         ))
     return out
 
@@ -1006,16 +1052,28 @@ def ldap_users_import(
 
     wanted = set(data.usernames)
     dept_by_dn = _build_dn_to_dept_map(session)
+    unit_by_dn = _build_dn_to_unit_map(session)
+    _require_structure(dept_by_dn, unit_by_dn)
 
     from services.ldap_service import parent_dn as _parent_of
 
-    def _resolve_dept(start_dn: str) -> Optional[int]:
+    def _resolve_dept_unit(start_dn: str) -> tuple[Optional[int], Optional[int]]:
+        """Nearest dopasowany Department (+ obejmujący Unit) w górę po DN."""
         current = normalize_dn(start_dn)
         while current:
             if current in dept_by_dn:
-                return dept_by_dn[current]
+                d_id = dept_by_dn[current]
+                u_id = None
+                up = current
+                while up:
+                    if up in unit_by_dn:
+                        u_id = unit_by_dn[up]; break
+                    up = normalize_dn(_parent_of(up))
+                return d_id, u_id
+            if current in unit_by_dn:
+                return None, unit_by_dn[current]
             current = normalize_dn(_parent_of(current))
-        return None
+        return None, None
 
     created = updated = skipped = conflicts = 0
     details: list[str] = []
@@ -1038,7 +1096,13 @@ def ldap_users_import(
             continue
         processed_names.add(u["username"])
 
-        dept_id = _resolve_dept(u["parent_dn"])
+        dept_id, unit_id = _resolve_dept_unit(u["parent_dn"])
+        # Importujemy WYŁĄCZNIE osoby z powiązanych jednostek organizacyjnych —
+        # jeśli OU użytkownika nie mieści się w zaimportowanej strukturze, pomijamy.
+        if dept_id is None and unit_id is None:
+            skipped += 1
+            details.append(f"⚠ {u['username']} — poza powiązaną strukturą OU, pominięty")
+            continue
         ndn = normalize_dn(u["dn"])
 
         existing = session.exec(select(User).where(User.username == u["username"])).first()

@@ -332,6 +332,7 @@ def _get_items(session: Session, request_id: int) -> list:
             "type": (getattr(perm_obj, "input_type", None) or "none") if perm_obj else "none",
             "options": _parse_options(getattr(perm_obj, "options", None)) if perm_obj else [],
             "required": bool(getattr(perm_obj, "input_required", False)) if perm_obj else False,
+            "prompt": getattr(perm_obj, "input_prompt", None) if perm_obj else None,
         }
         # Pozycje dołożone przez IT na etapie realizacji — front je oznacza,
         # żeby było widać, co doszło poza pierwotnym wnioskiem kierownika.
@@ -360,6 +361,7 @@ def _get_items(session: Session, request_id: int) -> list:
             "permission_id": item.permission_id,
             "permission_name": perm_obj.permission_name if perm_obj else None,
             "group_name": getattr(perm_obj, "group_name", None) if perm_obj else None,
+            "subgroup_name": getattr(perm_obj, "subgroup_name", None) if perm_obj else None,
             "kind": getattr(item, "kind", "grant") or "grant",
             "custom_values": cvals,
             "input": pinput,
@@ -474,10 +476,14 @@ def list_requests(
 ):
     stmt = select(AccessRequest)
 
+    # Perspektywa "mine" — wyłącznie wnioski, które TEN użytkownik złożył
+    # (np. kierownik wnioskujący dla swoich pracowników). Działa dla każdej roli.
+    if scope == "mine":
+        stmt = stmt.where(AccessRequest.created_by_id == current_user.id)
     # Gdy użytkownik jawnie prosi o perspektywę "manager" (panel kierownika),
     # ZAWSZE zawężamy do wydziałów, którymi kieruje — nawet jeśli ma dodatkowo
     # rolę it_staff. Admin/superadmin zawsze widzi wszystko.
-    if scope == "manager" and not is_admin(current_user):
+    elif scope == "manager" and not is_admin(current_user):
         if not has_role(current_user, "manager"):
             return []
         direct_ids, escalated_ids = _managed_dept_ids(session, current_user)
@@ -506,12 +512,11 @@ def list_requests(
     rows = session.exec(stmt).all()
     out = [_serialize_request(r, _get_items(session, r.id), session) for r in rows]
 
-    # W perspektywie kierownika dołącz informację o bieżącym węźle obiegu i o tym,
-    # czy TEN użytkownik może na nim działać. Dzięki temu panel „Moje wnioski"
-    # pokazuje wyłącznie wnioski wymagające jego działania — po wyborze uprawnień
-    # przez kierownika 1. stopnia wniosek trafia od razu do kierownika nadrzędnego
-    # (nie wisi już u kierownika 1. stopnia).
-    if scope == "manager":
+    # W perspektywie kierownika/„moje" dołącz informację o bieżącym węźle obiegu
+    # i o tym, czy TEN użytkownik może na nim działać. Dzięki temu panel potrafi
+    # rozdzielić wnioski „do obsługi" (can_act) od „w realizacji" (it_execute) i
+    # pokazać etap w „Moich wnioskach".
+    if scope in ("manager", "mine"):
         from models import WorkflowInstance, WorkflowInstanceStatus
         from services.workflow import can_act, find_node
         import json as _json
@@ -684,12 +689,15 @@ def get_request(
     return _serialize_request(r, _get_items(session, r.id), session)
 
 
-def _require_request_creator(current_user: User = Depends(get_current_user)) -> User:
-    # Wariant A: wnioski składa HR lub kierownik (operacyjnie). Administrator
-    # konfiguruje system i NIE tworzy wniosków; superadmin — break-glass.
-    if not has_role(current_user, "superadmin", "hr", "manager"):
+def _require_request_creator(current_user: User = Depends(get_current_user),
+                             session: Session = Depends(get_session)) -> User:
+    # Wariant A: wnioski składa HR (rola lub komórka kadrowa) albo kierownik.
+    # Administrator konfiguruje system i NIE tworzy wniosków; superadmin — break-glass.
+    from services.permissions import user_is_hr
+    if not (has_role(current_user, "superadmin", "manager")
+            or user_is_hr(session, current_user)):
         raise HTTPException(status.HTTP_403_FORBIDDEN,
-            "Wymagana rola HR lub kierownika")
+            "Wymagana rola HR (lub komórka kadrowa) albo kierownika")
     return current_user
 
 
@@ -737,13 +745,15 @@ def create_request(
         #  - pracownik HR — tylko dla przypisanych mu jednostek.
         # Superadmin (break-glass) — bez ograniczeń.
         if not has_role(current_user, "superadmin"):
-            if has_role(current_user, "manager") and not has_role(current_user, "hr"):
+            from services.permissions import user_is_hr
+            hr_cap = user_is_hr(session, current_user)
+            if has_role(current_user, "manager") and not hr_cap:
                 direct_ids, escalated_ids = managed_dept_ids(session, current_user)
                 unit_ids = unit_manager_dept_ids(session, current_user)
                 if data.department_id not in {*direct_ids, *escalated_ids, *unit_ids}:
                     raise HTTPException(status.HTTP_403_FORBIDDEN,
                         "Możesz składać wnioski tylko dla pracowników swoich wydziałów")
-            elif has_role(current_user, "hr"):
+            elif hr_cap:
                 scoped_units = hr_scoped_unit_ids(session, current_user)
                 if scoped_units is not None and data.unit_id not in scoped_units:
                     raise HTTPException(status.HTTP_403_FORBIDDEN,
@@ -838,10 +848,13 @@ def create_request(
         return _serialize_request(req, _get_items(session, req.id), session)
     # --- Koniec ścieżki workflow ----------------------------------------
 
-    # Czy to kierownik wystawia wniosek „ze swojej linii"? (Nie admin/HR.)
+    # Czy to kierownik wystawia wniosek „ze swojej linii"? (Nie admin/HR —
+    # także nie pracownik komórki kadrowej, który działa jak HR.)
+    from services.permissions import user_is_hr as _user_is_hr
     is_pure_manager = (
         has_role(current_user, "manager")
-        and not has_role(current_user, "superadmin", "admin", "hr")
+        and not has_role(current_user, "superadmin", "admin")
+        and not _user_is_hr(session, current_user)
     )
 
     # Routing statusu:

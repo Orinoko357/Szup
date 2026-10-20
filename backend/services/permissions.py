@@ -4,9 +4,26 @@ Role/permission helpers dla SZUP.
 from __future__ import annotations
 
 from fastapi import Depends, HTTPException, status
+from sqlmodel import Session
 
+from database import get_session
 from models import User, has_role
 from services.auth_service import get_current_user
+
+
+def user_is_hr(session: Session, user: User) -> bool:
+    """Zdolność HR: rola 'hr'/'superadmin' ALBO przynależność do komórki
+    oznaczonej jako KADROWA (Department.is_hr). Dzięki temu nie trzeba nadawać
+    roli HR per osoba — wystarczy oznaczyć komórkę."""
+    if has_role(user, "superadmin", "hr"):
+        return True
+    dept_id = getattr(user, "department_id", None)
+    if dept_id:
+        from models import Department
+        d = session.get(Department, dept_id)
+        if d and getattr(d, "is_hr", False):
+            return True
+    return False
 
 
 def require_superadmin(current_user: User = Depends(get_current_user)) -> User:
@@ -25,9 +42,11 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
 # administratora — administrator KONFIGURUJE system, a nie działa operacyjnie.
 # Superadmin pozostaje break-glass (może wszystko). Kto ma działać operacyjnie,
 # dostaje właściwą rolę operacyjną (hr / manager / it_staff).
-def require_hr(current_user: User = Depends(get_current_user)) -> User:
-    if not has_role(current_user, "superadmin", "hr"):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Wymagana rola HR")
+def require_hr(current_user: User = Depends(get_current_user),
+               session: Session = Depends(get_session)) -> User:
+    if not user_is_hr(session, current_user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Wymagana rola HR lub przynależność do komórki kadrowej")
     return current_user
 
 

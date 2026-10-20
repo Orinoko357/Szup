@@ -343,7 +343,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
+      <div className="modal" style={{ maxWidth: 'min(94vw, 900px)', width: '100%' }}>
         <div className="modal__header">
           <span className="modal__title">
             {title}

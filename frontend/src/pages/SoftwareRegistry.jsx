@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import {
   Package, Plus, Trash2, RefreshCw, Edit2, Save, X,
   Building2, ShieldCheck, KeyRound, Copy, Truck, FileSpreadsheet, ListPlus,
@@ -10,12 +10,12 @@ import {
   copySystemPermissions, setSystemDefaultPermissions,
   listActiveUnits, listVendors,
   setPermissionGroupState, renamePermissionGroup, deletePermissionGroup,
-  setPermissionGroupOrder,
+  setPermissionGroupOrder, assignPermissionSubgroup,
 } from '../api'
 import PermissionImportModal from '../components/PermissionImportModal'
 import PermissionGroupModal from '../components/PermissionGroupModal'
 import CopyGroupModal from '../components/CopyGroupModal'
-import { groupPerms } from '../components/ItemFields'
+import { groupPerms, subgroupPerms, subgroupNames } from '../components/ItemFields'
 
 /**
  * Rejestr oprogramowania — osobna zakładka dla IT / admin.
@@ -34,10 +34,10 @@ import { groupPerms } from '../components/ItemFields'
  */
 const INPUT_TYPES = [
   ['none', 'Zwykły checkbox (bez doprecyzowania)'],
+  ['text', 'Checkbox + doprecyzowanie (jedna linia)'],
+  ['textarea', 'Checkbox + doprecyzowanie (wiele linii)'],
   ['radio', 'Jeden wariant z listy (opcje widoczne)'],
   ['select', 'Jeden wariant z listy (rozwijana)'],
-  ['text', 'Pole tekstowe'],
-  ['textarea', 'Pole opisowe (wiele linii)'],
 ]
 // „multiselect" nie jest już do wyboru przy pojedynczym uprawnieniu — wybór
 // WIELU wariantów to po prostu grupa uprawnień (przycisk „Nowa grupa").
@@ -45,6 +45,14 @@ const INPUT_TYPES = [
 const INPUT_TYPE_LABELS = {
   ...Object.fromEntries(INPUT_TYPES),
   multiselect: 'Wielokrotny wybór',
+}
+// Krótkie etykiety na badge przy pozycji (pełne nazwy z listy są za długie).
+const INPUT_BADGE_LABELS = {
+  text: 'doprecyzowanie',
+  textarea: 'doprecyzowanie',
+  radio: 'wybór z listy',
+  select: 'wybór z listy',
+  multiselect: 'wielokrotny wybór',
 }
 const INPUT_OPTION_TYPES = ['radio', 'select', 'multiselect']
 
@@ -64,7 +72,8 @@ function splitOptions(text) {
  * Używane i przy dodawaniu, i przy edycji pozycji — jedna definicja, żeby oba
  * przepływy zachowywały się identycznie.
  */
-function PermControlFields({ type, setType, options, setOptions, required, setRequired }) {
+function PermControlFields({ type, setType, options, setOptions, required, setRequired,
+                             prompt = '', setPrompt }) {
   return (
     <>
       <div className="form-group" style={{ margin: 0, minWidth: 190 }}>
@@ -84,6 +93,17 @@ function PermControlFields({ type, setType, options, setOptions, required, setRe
                         placeholder={['Odczyt', 'Zapis', 'Administracja'].join('\n')} />
             </div>
           )}
+          {/* Podpowiedź pokazywana wnioskującemu po zaznaczeniu uprawnienia. */}
+          {setPrompt && (
+            <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 220 }}>
+              <label className="form-label">Podpowiedź (co wpisać/wybrać)</label>
+              <input className="form-control" style={{ fontSize: 13 }}
+                     value={prompt} onChange={e => setPrompt(e.target.value)}
+                     placeholder={type === 'text' ? 'np. Podaj login AD (jan.kowalski)'
+                       : type === 'textarea' ? 'np. Wpisz rejestry/moduły do udostępnienia'
+                       : 'np. Wybierz poziom dostępu'} />
+            </div>
+          )}
           <label style={{ display: 'flex', alignItems: 'center', gap: 6,
                           fontSize: 13, cursor: 'pointer', marginTop: 4 }}>
             <input type="checkbox" checked={required}
@@ -98,7 +118,7 @@ function PermControlFields({ type, setType, options, setOptions, required, setRe
 
 
 /** Wiersz uprawnienia: podgląd + edycja w miejscu (nazwa, opis, grupa, kontrolka). */
-function PermRow({ p, onChanged }) {
+function PermRow({ p, onChanged, selected = false, onToggleSel }) {
   const [editing, setEditing]   = useState(false)
   const [name, setName]         = useState(p.permission_name)
   const [desc, setDesc]         = useState(p.description || '')
@@ -106,13 +126,16 @@ function PermRow({ p, onChanged }) {
   const [opts, setOpts]         = useState((p.options || []).join('\n'))
   const [required, setRequired] = useState(!!p.input_required)
   const [group, setGroup]       = useState(p.group_name || '')
+  const [subgroup, setSubgroup] = useState(p.subgroup_name || '')
+  const [prompt, setPrompt]     = useState(p.input_prompt || '')
   const [busy, setBusy]         = useState(false)
 
   function cancel() {
     setName(p.permission_name); setDesc(p.description || '')
     setType(p.input_type && p.input_type !== 'none' ? p.input_type : 'none')
     setOpts((p.options || []).join('\n')); setRequired(!!p.input_required)
-    setGroup(p.group_name || ''); setEditing(false)
+    setGroup(p.group_name || ''); setSubgroup(p.subgroup_name || '')
+    setPrompt(p.input_prompt || ''); setEditing(false)
   }
 
   async function save() {
@@ -123,9 +146,11 @@ function PermRow({ p, onChanged }) {
         permission_name: name.trim(),
         description: desc.trim(),
         group_name: group.trim(),
+        subgroup_name: subgroup.trim(),
         input_type: type,
         options: INPUT_OPTION_TYPES.includes(type) ? splitOptions(opts) : [],
         input_required: required,
+        input_prompt: type !== 'none' ? prompt.trim() : '',
       })
       setEditing(false); onChanged()
     } catch (ex) {
@@ -155,13 +180,19 @@ function PermRow({ p, onChanged }) {
               <input className="form-control" value={desc}
                      onChange={e => setDesc(e.target.value)} />
             </div>
-            <div className="form-group" style={{ margin: 0, minWidth: 170 }}>
+            <div className="form-group" style={{ margin: 0, minWidth: 160 }}>
               <label className="form-label">Grupa</label>
               <input className="form-control" list="szup-perm-groups" value={group}
                      onChange={e => setGroup(e.target.value)} placeholder="bez grupy" />
             </div>
+            <div className="form-group" style={{ margin: 0, minWidth: 160 }}>
+              <label className="form-label">Podgrupa</label>
+              <input className="form-control" list="szup-perm-subgroups" value={subgroup}
+                     onChange={e => setSubgroup(e.target.value)} placeholder="bez podgrupy" />
+            </div>
             <PermControlFields type={type} setType={setType} options={opts} setOptions={setOpts}
-                               required={required} setRequired={setRequired} />
+                               required={required} setRequired={setRequired}
+                               prompt={prompt} setPrompt={setPrompt} />
             <div style={{ display: 'flex', gap: 6 }}>
               <button className="btn btn--primary btn--sm" onClick={save} disabled={busy}>
                 <Save size={12} /> Zapisz
@@ -177,8 +208,14 @@ function PermRow({ p, onChanged }) {
   }
 
   return (
-    <tr style={{ opacity: p.is_active === false ? 0.5 : 1 }}>
+    <tr style={{ opacity: p.is_active === false ? 0.5 : 1,
+                 background: selected ? 'var(--color-success-bg)' : undefined }}>
       <td style={{ fontWeight: 600 }}>
+        {onToggleSel && !p.is_admin_option && (
+          <input type="checkbox" checked={selected} onChange={onToggleSel}
+                 style={{ marginRight: 8, verticalAlign: 'middle' }}
+                 title="Zaznacz do operacji masowej" />
+        )}
         {p.permission_name}
         {p.is_active === false && (
           <span className="badge badge--warning" style={{ fontSize: 9, marginLeft: 6 }}>
@@ -187,8 +224,8 @@ function PermRow({ p, onChanged }) {
         )}
         {p.input_type && p.input_type !== 'none' && (
           <span className="badge badge--info" style={{ fontSize: 9, marginLeft: 6 }}
-                title={(p.options || []).join(', ')}>
-            {INPUT_TYPE_LABELS[p.input_type] || p.input_type}
+                title={INPUT_TYPE_LABELS[p.input_type] || p.input_type}>
+            {INPUT_BADGE_LABELS[p.input_type] || p.input_type}
             {(p.options || []).length > 0 && ` (${p.options.length})`}
             {p.input_required && ' • wymagane'}
           </span>
@@ -208,14 +245,18 @@ function PermRow({ p, onChanged }) {
 }
 
 
-/** Inline dodawanie uprawnienia WEWNĄTRZ grupy (albo bez grupy). */
-function GroupAddPerm({ systemId, group, onAdded }) {
+/** Inline dodawanie uprawnienia WEWNĄTRZ grupy (albo bez grupy), opcjonalnie
+ *  do podgrupy. `subgroup` prefilluje pole podgrupy (przy „dodaj do podgrupy"),
+ *  `label` nadpisuje tekst przycisku. */
+function GroupAddPerm({ systemId, group, subgroup = '', label, onAdded }) {
   const [open, setOpen]         = useState(false)
   const [name, setName]         = useState('')
   const [desc, setDesc]         = useState('')
+  const [sub, setSub]           = useState(subgroup)
   const [type, setType]         = useState('none')
   const [opts, setOpts]         = useState('')
   const [required, setRequired] = useState(false)
+  const [prompt, setPrompt]     = useState('')
   const [busy, setBusy]         = useState(false)
 
   async function submit(e) {
@@ -227,13 +268,15 @@ function GroupAddPerm({ systemId, group, onAdded }) {
         permission_name: name.trim(),
         description: desc.trim() || null,
         group_name: group || null,
+        subgroup_name: sub.trim() || null,
         input_type: type,
         options: INPUT_OPTION_TYPES.includes(type) ? splitOptions(opts) : [],
         input_required: required,
+        input_prompt: type !== 'none' ? (prompt.trim() || null) : null,
       })
       // Zostawiamy formularz otwarty — po dodaniu jednej pozycji zwykle dokłada
-      // się kolejne z tej samej grupy; czyścimy tylko nazwę/opis/opcje.
-      setName(''); setDesc(''); setType('none'); setOpts(''); setRequired(false)
+      // się kolejne z tej samej grupy/podgrupy; czyścimy tylko nazwę/opis/opcje.
+      setName(''); setDesc(''); setType('none'); setOpts(''); setRequired(false); setPrompt('')
       onAdded()
     } catch (ex) {
       alert(ex.response?.data?.detail || 'Błąd zapisu')
@@ -244,7 +287,7 @@ function GroupAddPerm({ systemId, group, onAdded }) {
     return (
       <button className="btn btn--ghost btn--sm" style={{ marginLeft: 8, marginTop: 4 }}
               onClick={() => setOpen(true)}>
-        <Plus size={12} /> Dodaj uprawnienie{group ? ` do „${group}"` : ''}
+        <Plus size={12} /> {label || `Dodaj uprawnienie${group ? ` do „${group}"` : ''}`}
       </button>
     )
   }
@@ -268,8 +311,14 @@ function GroupAddPerm({ systemId, group, onAdded }) {
           <label className="form-label">Opis</label>
           <input className="form-control" value={desc} onChange={e => setDesc(e.target.value)} />
         </div>
+        <div className="form-group" style={{ margin: 0, minWidth: 150 }}>
+          <label className="form-label">Podgrupa (opcjonalnie)</label>
+          <input className="form-control" list="szup-perm-subgroups" value={sub}
+                 onChange={e => setSub(e.target.value)} placeholder="bez podgrupy" />
+        </div>
         <PermControlFields type={type} setType={setType} options={opts} setOptions={setOpts}
-                           required={required} setRequired={setRequired} />
+                           required={required} setRequired={setRequired}
+                           prompt={prompt} setPrompt={setPrompt} />
         <div style={{ display: 'flex', gap: 6 }}>
           <button type="submit" className="btn btn--primary btn--sm" disabled={busy}>
             <Plus size={12} /> Dodaj
@@ -281,6 +330,45 @@ function GroupAddPerm({ systemId, group, onAdded }) {
         </div>
       </div>
     </form>
+  )
+}
+
+
+/** Pasek operacji masowej: przypisz zaznaczone uprawnienia do podgrupy. */
+function BulkSubgroupBar({ systemId, selectedIds, onDone }) {
+  const [sub, setSub]   = useState('')
+  const [busy, setBusy] = useState(false)
+  async function apply(clear) {
+    setBusy(true)
+    try {
+      await assignPermissionSubgroup(systemId, selectedIds, clear ? '' : sub.trim())
+      setSub(''); onDone()
+    } catch (ex) {
+      alert(ex.response?.data?.detail || 'Nie udało się przypisać podgrupy')
+    } finally { setBusy(false) }
+  }
+  return (
+    <div style={{
+      display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',
+      background: 'var(--color-success-bg)', border: '1px solid var(--color-success)',
+      borderRadius: 6, padding: '6px 10px', margin: '4px 0 8px',
+    }}>
+      <strong style={{ fontSize: 12 }}>Zaznaczono: {selectedIds.length}</strong>
+      <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>→ przypisz do podgrupy:</span>
+      <input className="form-control" list="szup-perm-subgroups"
+             style={{ maxWidth: 220, fontSize: 13 }} value={sub}
+             onChange={e => setSub(e.target.value)}
+             placeholder="nazwa podgrupy"
+             onKeyDown={e => { if (e.key === 'Enter' && sub.trim() && !busy) apply(false) }} />
+      <button className="btn btn--primary btn--sm" disabled={busy || !sub.trim()}
+              onClick={() => apply(false)}>
+        <ListPlus size={12} /> Przypisz
+      </button>
+      <button className="btn btn--ghost btn--sm" disabled={busy}
+              onClick={() => apply(true)} title="Wyjmij zaznaczone z podgrupy">
+        Wyjmij z podgrupy
+      </button>
+    </div>
   )
 }
 
@@ -355,19 +443,23 @@ export default function SoftwareRegistry() {
   // all_units) pokazujemy osobno, żeby nie zniknęły z zarządzania.
   const passExtra = s =>
     (!onlyUnconfigured || unconfigured(s)) && (!onlyNoVendor || !s.vendor_id)
+  // Nieaktywne oprogramowanie ląduje na dole listy (sort stabilny — reszta
+  // zachowuje dotychczasową kolejność).
+  const byActive = arr =>
+    [...arr].sort((a, b) => (a.is_active === false ? 1 : 0) - (b.is_active === false ? 1 : 0))
   const unitSections = units
     .filter(u => !filterUnit || u.id === Number(filterUnit))
     .map(u => ({
       unit: u,
-      items: systems.filter(
-        s => !s.all_units && (s.unit_ids || []).includes(u.id) && passExtra(s)),
+      items: byActive(systems.filter(
+        s => !s.all_units && (s.unit_ids || []).includes(u.id) && passExtra(s))),
     }))
     .filter(g => g.items.length > 0)
-  const generalSystems = systems.filter(s => s.all_units && passExtra(s))
+  const generalSystems = byActive(systems.filter(s => s.all_units && passExtra(s)))
   const orphanSystems = filterUnit
     ? []
-    : systems.filter(
-        s => !s.all_units && (s.unit_ids || []).length === 0 && passExtra(s))
+    : byActive(systems.filter(
+        s => !s.all_units && (s.unit_ids || []).length === 0 && passExtra(s)))
 
   async function load() {
     setLoading(true)
@@ -1068,6 +1160,8 @@ function SystemRow({ system: s, units, vendors = [], allSystems = [], selected =
     <div className="card" style={{
       padding: 0,
       borderLeft: selected ? '3px solid var(--color-gold)' : undefined,
+      // Nieaktywne oprogramowanie — lekko wyszarzone (ląduje też na dole listy).
+      opacity: s.is_active === false ? 0.55 : 1,
     }}>
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -1288,6 +1382,12 @@ function PermissionsPanel({ system: s }) {
   const [showCopyGroup, setShowCopyGroup] = useState(false)
   const [renaming, setRenaming] = useState(null)      // nazwa grupy w edycji
   const [renameValue, setRenameValue] = useState('')
+  // Zaznaczone uprawnienia do operacji masowej (przypisanie podgrupy).
+  const [selPerms, setSelPerms] = useState(() => new Set())
+  const toggleSel = (id) => setSelPerms(prev => {
+    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n
+  })
+  const clearSel = () => setSelPerms(new Set())
 
   async function load() {
     setLoading(true)
@@ -1415,6 +1515,10 @@ function PermissionsPanel({ system: s }) {
               <option key={g} value={g} />
             ))}
           </datalist>
+          {/* Nazwy podgrup do podpowiedzi. */}
+          <datalist id="szup-perm-subgroups">
+            {subgroupNames(ownPerms).map(sg => <option key={sg} value={sg} />)}
+          </datalist>
 
           {ownPerms.length === 0 ? (
             <div style={{
@@ -1432,6 +1536,13 @@ function PermissionsPanel({ system: s }) {
               const activeCount = items.filter(p => p.is_active !== false).length
               const namedGroups = groups.map(g => g.group).filter(Boolean)
               const gi = namedGroups.indexOf(group)
+              const selIdsInGroup = items.filter(p => selPerms.has(p.id)).map(p => p.id)
+              const allShownSel = shown.length > 0 && shown.every(p => selPerms.has(p.id))
+              const toggleAllInGroup = () => setSelPerms(prev => {
+                const n = new Set(prev)
+                shown.forEach(p => allShownSel ? n.delete(p.id) : n.add(p.id))
+                return n
+              })
               return (
                 <div key={group || '_'} style={{
                   marginBottom: 16,
@@ -1516,6 +1627,23 @@ function PermissionsPanel({ system: s }) {
                     </div>
                   )}
 
+                  {shown.length > 0 && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center',
+                                  flexWrap: 'wrap', margin: '2px 0 6px 2px' }}>
+                      <button className="btn btn--ghost btn--sm" style={{ fontSize: 11 }}
+                              onClick={toggleAllInGroup}>
+                        {allShownSel ? 'Odznacz wszystkie' : 'Zaznacz wszystkie'}
+                      </button>
+                      <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
+                        — zaznacz pozycje, aby masowo przypisać je do podgrupy
+                      </span>
+                    </div>
+                  )}
+                  {selIdsInGroup.length > 0 && (
+                    <BulkSubgroupBar systemId={s.id} selectedIds={selIdsInGroup}
+                                     onDone={() => { clearSel(); load() }} />
+                  )}
+
                   {shown.length === 0 ? (
                     <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginLeft: 8 }}>
                       Brak pozycji pasujących do wyszukiwania.
@@ -1530,12 +1658,44 @@ function PermissionsPanel({ system: s }) {
                         </tr>
                       </thead>
                       <tbody>
-                        {shown.map(p => <PermRow key={p.id} p={p} onChanged={load} />)}
+                        {/* Drugi poziom sekcji: podgrupy wewnątrz grupy. Pozycje bez
+                            podgrupy idą pierwsze (bez pod-nagłówka). */}
+                        {subgroupPerms(shown).map(({ subgroup, items: subItems }) => (
+                          <Fragment key={subgroup || '_nosub'}>
+                            {subgroup && (
+                              <tr>
+                                <td colSpan={3} style={{
+                                  background: 'var(--bg-primary)', padding: '4px 8px 4px 24px',
+                                  fontSize: 11, textTransform: 'uppercase', letterSpacing: '.03em',
+                                  color: 'var(--color-text-muted)', fontWeight: 600,
+                                }}>
+                                  ↳ {subgroup}
+                                  <span className="badge badge--neutral"
+                                        style={{ fontSize: 9, marginLeft: 6 }}>
+                                    {subItems.length}
+                                  </span>
+                                </td>
+                              </tr>
+                            )}
+                            {subItems.map(p => (
+                              <PermRow key={p.id} p={p} onChanged={load}
+                                       selected={selPerms.has(p.id)}
+                                       onToggleSel={() => toggleSel(p.id)} />
+                            ))}
+                          </Fragment>
+                        ))}
                       </tbody>
                     </table>
                   )}
 
-                  <GroupAddPerm systemId={s.id} group={group} onAdded={load} />
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <GroupAddPerm systemId={s.id} group={group} onAdded={load} />
+                    {subgroupPerms(items).filter(x => x.subgroup).map(({ subgroup }) => (
+                      <GroupAddPerm key={subgroup} systemId={s.id} group={group}
+                                    subgroup={subgroup} label={`Dodaj do „${subgroup}"`}
+                                    onAdded={load} />
+                    ))}
+                  </div>
                 </div>
               )
             })

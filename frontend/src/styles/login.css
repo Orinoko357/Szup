@@ -1,0 +1,217 @@
+/*
+ * Ekran logowania SZUP — 1:1 z dbac / wods-transfer / intranetem:
+ * granatowy pas u góry, karta, herb + sygnet WODS + nazwa aplikacji, złoty
+ * przycisk Windows (SSO), rozwijane "— lub — logowanie klasyczne", nota RODO.
+ */
+
+.wl-page {
+  --wl-navy: #1B2A4A;
+  --wl-gold: #C9A227;
+  --wl-gold-hover: #B8901F;
+  --wl-bg: #F5F6F8;
+  --wl-border: #E2E5EA;
+  --wl-input-border: #C7CDD6;
+  --wl-text: #1D2433;
+  --wl-muted: #6B7280;
+  --wl-card: #FFFFFF;
+  --wl-input: #FFFFFF;
+
+  position: relative;
+  min-height: 100vh;
+  background: var(--wl-bg);
+  font-family: 'Open Sans', system-ui, sans-serif;
+  padding: 7vh 16px 40px;
+  box-sizing: border-box;
+}
+[data-theme="dark"] .wl-page {
+  --wl-bg: #121A2B;
+  --wl-border: #2A3650;
+  --wl-input-border: #35425E;
+  --wl-text: #E5E9F0;
+  --wl-muted: #8A94A6;
+  --wl-card: #1A2438;
+  --wl-input: #121A2B;
+}
+
+/* Granatowy pas u góry */
+.wl-page::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 260px;
+  background: var(--wl-navy);
+}
+
+.wl-card {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  width: 400px;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 36px 36px 28px;
+  background: var(--wl-card);
+  border: 1px solid var(--wl-border);
+  box-shadow: 0 8px 32px rgba(13, 20, 36, 0.18);
+}
+
+/* Lockup */
+.wl-lockup { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.wl-herb { height: 96px; width: auto; display: block; margin-bottom: 2px; }
+.wl-herb--dark { display: none; }
+[data-theme="dark"] .wl-herb--light { display: none; }
+[data-theme="dark"] .wl-herb--dark { display: block; }
+.wl-name { font-size: 19px; font-weight: 700; color: var(--wl-text); line-height: 1.1; }
+.wl-sub {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9.5px; font-weight: 500; letter-spacing: 1.6px;
+  color: var(--wl-muted); margin-top: -6px; text-align: center;
+}
+
+.wl-body { margin-top: 20px; }
+
+/* Baner trybu testowego */
+.wl-testbanner {
+  display: flex; gap: 9px; align-items: flex-start;
+  margin-bottom: 14px; padding: 9px 12px;
+  background: #FFF4D6; border: 1px solid #E6C34D; border-left: 3px solid #C9A227;
+  border-radius: 4px; color: #6B5312; font-size: 11.5px; line-height: 1.45;
+}
+
+/* Główny CTA — Windows (SSO) */
+.wl-sso {
+  display: block; width: 100%; box-sizing: border-box;
+  margin-top: 4px; padding: 11px 16px;
+  background: var(--wl-gold); border: 1px solid var(--wl-gold); border-radius: 4px;
+  color: var(--wl-navy);
+  font: 700 13.5px/1.2 'Open Sans', system-ui, sans-serif;
+  text-align: center; cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.wl-sso:hover, .wl-sso:focus-visible { background: var(--wl-gold-hover); border-color: var(--wl-gold-hover); outline: none; }
+
+/* "— lub — logowanie klasyczne" */
+.wl-toggle {
+  display: block; width: 100%;
+  margin: 14px 0 0; padding: 8px 0;
+  background: transparent; border: none; cursor: pointer;
+  font: 600 12px 'Open Sans', system-ui, sans-serif;
+  color: var(--wl-muted); text-align: center;
+  transition: color 0.2s ease;
+}
+.wl-toggle .wl-or { font-weight: 400; margin-right: 4px; opacity: 0.85; }
+.wl-toggle::after {
+  content: '';
+  display: inline-block; width: 6px; height: 6px; margin-left: 8px;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 0.2s ease;
+}
+.wl-toggle.is-open::after { transform: translateY(1px) rotate(-135deg); }
+.wl-toggle:hover, .wl-toggle:focus-visible { color: var(--wl-text); outline: none; }
+
+.wl-classic {
+  overflow: hidden;
+  max-height: 0; opacity: 0;
+  transition: max-height 0.28s ease, opacity 0.2s ease;
+}
+.wl-classic.is-open { max-height: 620px; opacity: 1; }
+.wl-classic--static { max-height: none; opacity: 1; overflow: visible; }
+
+/* Pola */
+.wl-field { margin-top: 12px; }
+.wl-field:first-child { margin-top: 4px; }
+.wl-field label {
+  display: block;
+  color: var(--wl-text);
+  font-size: 12px; font-weight: 600;
+  margin-bottom: 6px; line-height: 1.4;
+}
+.wl-input, .wl-select {
+  box-sizing: border-box; width: 100%;
+  background: var(--wl-input);
+  border: 1px solid var(--wl-input-border); border-radius: 4px;
+  color: var(--wl-text);
+  padding: 9px 12px;
+  font: 13px/1.4 'Open Sans', system-ui, sans-serif;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.wl-input:focus, .wl-select:focus {
+  border-color: #4A6DA8;
+  box-shadow: 0 0 0 3px rgba(74, 109, 168, 0.18);
+  outline: none;
+}
+.wl-select {
+  appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%236B7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center; background-size: 14px;
+  padding-right: 36px;
+}
+.wl-select option { background: var(--wl-input); color: var(--wl-text); }
+
+.wl-pw { position: relative; }
+.wl-pw .wl-input { padding-right: 42px; }
+.wl-eye {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--wl-muted);
+}
+.wl-eye:hover, .wl-eye:focus-visible { color: var(--wl-text); outline: none; }
+
+/* Logowanie login+hasłem — akcja drugorzędna (outline), gdy jest SSO */
+.wl-submit {
+  display: block; width: 100%; height: 40px; margin-top: 18px;
+  background: transparent;
+  border: 1px solid var(--wl-input-border); border-radius: 4px;
+  color: var(--wl-text);
+  font: 600 13px 'Open Sans', system-ui, sans-serif;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.wl-submit:hover, .wl-submit:focus-visible {
+  background: rgba(127, 140, 160, 0.10);
+  border-color: var(--wl-muted);
+  outline: none;
+}
+.wl-submit:disabled { opacity: 0.6; cursor: wait; }
+/* Bez SSO formularz jest jedyną drogą — przycisk główny (granat) */
+.wl-submit--primary { background: var(--wl-navy); border-color: var(--wl-navy); color: #fff; }
+.wl-submit--primary:hover, .wl-submit--primary:focus-visible { background: #243B5E; border-color: #243B5E; }
+
+/* Link drugorzędny (np. powrót do trybu testowego) */
+.wl-link {
+  display: block; width: 100%; margin-top: 10px; padding: 6px 0;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--wl-muted); font: 600 12px 'Open Sans', system-ui, sans-serif;
+  text-align: center;
+}
+.wl-link:hover { color: var(--wl-text); }
+
+/* Komunikaty */
+.wl-msg {
+  margin-top: 14px; padding: 9px 12px;
+  border: 1px solid var(--wl-border); border-left: 3px solid #2563EB; border-radius: 4px;
+  background: var(--wl-bg); color: var(--wl-text);
+  font-size: 12.5px; line-height: 1.5;
+}
+.wl-msg--error { border-left-color: #C0392B; background: #F9E5E2; color: #93261B; border-color: #F1C9C3; }
+[data-theme="dark"] .wl-msg--error { background: #3A1D1A; color: #F3B4AA; border-color: #5A2A24; }
+
+/* Nota prawna */
+.wl-rodo {
+  box-sizing: border-box;
+  margin: 18px 0 0;
+  display: flex; gap: 9px; align-items: flex-start;
+  padding: 11px 12px;
+  background: var(--wl-bg);
+  border: 1px solid var(--wl-border); border-radius: 4px;
+  color: var(--wl-muted);
+  font-size: 10.5px; line-height: 1.55;
+}
+.wl-rodo svg { flex: none; margin-top: 1px; }
+
+@media (max-width: 460px) {
+  .wl-card { padding: 28px 20px 22px; }
+}

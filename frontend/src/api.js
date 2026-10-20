@@ -82,6 +82,11 @@ export const testLdap          = ()       => api.post('/settings/ldap/test')
 export const factoryReset      = (data)   => api.post('/settings/factory-reset', data, { timeout: 120000 })
 export const getAppSettings    = ()       => api.get('/settings/app')
 export const updateAppSettings = (data)   => api.put('/settings/app', data)
+// Szablony powiadomień e-mail (treść z makrami).
+export const listNotificationTemplates = ()          => api.get('/settings/notifications')
+export const saveNotificationTemplate  = (key, data) => api.put(`/settings/notifications/${key}`, data)
+export const resetNotificationTemplate = (key)       => api.delete(`/settings/notifications/${key}`)
+export const testNotificationTemplate  = (key)       => api.post(`/settings/notifications/${key}/test`)
 
 // --- Jednostki i wydziały ---
 export const listUnits         = ()              => api.get('/units/')
@@ -141,6 +146,10 @@ export const deletePermissionGroup = (systemId, groupName) =>
 // Ustaw kolejność grup (pełna lista nazw w żądanej kolejności).
 export const setPermissionGroupOrder = (systemId, groups) =>
   api.post(`/systems/${systemId}/permissions/group-order`, { groups })
+// Masowe przypisanie zaznaczonych uprawnień do podgrupy (albo wyjęcie z niej).
+export const assignPermissionSubgroup = (systemId, permissionIds, subgroupName) =>
+  api.post(`/systems/${systemId}/permissions/subgroup-assign`,
+           { permission_ids: permissionIds, subgroup_name: subgroupName })
 // Skopiuj JEDNĄ grupę uprawnień z innego programu do tego.
 export const copyPermissionGroup = (systemId, data) =>
   api.post(`/systems/${systemId}/copy-group`, data)

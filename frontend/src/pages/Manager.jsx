@@ -10,7 +10,7 @@ import PermissionChanges, {
 import PermInput, {
   permInput, missingRequiredFields, splitAdminPerm, AdminPermRow,
   adminGrantNames, confirmAdminRights, ADMIN_CONFIRM_ABORTED,
-  groupPerms, isPermVisible, PermGroupSection, SystemBlock,
+  groupPerms, subgroupPerms, isPermVisible, PermGroupSection, SystemBlock,
   isScopeGated, missingScopeSystems,
 } from '../components/ItemFields'
 
@@ -29,8 +29,26 @@ const STATUS_BADGE = {
   rejected: 'badge--error',
 }
 
+const MANAGER_NODES = ['select_permissions', 'manager_approve', 'higher_manager_approve']
+const NODE_LABELS = {
+  select_permissions: 'Wybór uprawnień',
+  manager_approve: 'Akceptacja kierownika',
+  higher_manager_approve: 'Akceptacja wyższego rzędu',
+  it_execute: 'Realizacja IT',
+}
+
+// Postęp realizacji pozycji NADANIA — do pokazania w „Moich wnioskach".
+function grantProgressOf(r) {
+  const g = (r.items || []).filter(it => (it.kind || 'grant') !== 'revoke')
+  const done = g.filter(it => it.fulfilled && !it.denied).length
+  const denied = g.filter(it => it.denied).length
+  return { total: g.length, done, denied }
+}
+
 export default function Manager() {
-  const [requests, setRequests] = useState([])
+  const [tab, setTab]           = useState('handle')   // handle | mine
+  const [managerReqs, setManagerReqs] = useState([])   // wnioski z moich komórek (scope=manager)
+  const [myReqs, setMyReqs]     = useState([])          // wnioski złożone przeze mnie (scope=mine)
   const [loading, setLoading]   = useState(true)
   const [err, setErr]           = useState(null)
   const [openReq, setOpenReq]   = useState(null)   // jeden wspólny widok: podgląd + akcja
@@ -39,21 +57,15 @@ export default function Manager() {
     if (!silent) setLoading(true)
     setErr(null)
     try {
-      // Pokazujemy WYŁĄCZNIE wnioski, na których bieżący użytkownik może działać
-      // jako kierownik (backend liczy can_act dla bieżącego węzła obiegu).
-      // Dzięki temu:
-      //  - po wyborze uprawnień przez kier. 1. stopnia wniosek znika z jego listy
-      //    i trafia od razu do kier. nadrzędnego (2-stopniowy),
-      //  - kroki realizacji IT (it_execute) tu nie wiszą — są w „Do realizacji".
-      const MANAGER_NODES = ['select_permissions', 'manager_approve', 'higher_manager_approve']
-      const r = await listRequests({ scope: 'manager' })
-      const active = (r.data || []).filter(
-        x => x.can_act && MANAGER_NODES.includes(x.current_node_type)
-      )
-      setRequests(active)
-      // Po cichym odświeżeniu zsynchronizuj otwarty wniosek, żeby odmowy
-      // pojedynczych pozycji były widoczne także po ponownym otwarciu okna.
-      setOpenReq(prev => (prev ? (active.find(x => x.id === prev.id) || prev) : prev))
+      const [rMgr, rMine] = await Promise.all([
+        listRequests({ scope: 'manager' }),
+        listRequests({ scope: 'mine' }),
+      ])
+      setManagerReqs(rMgr.data || [])
+      setMyReqs(rMine.data || [])
+      // Po cichym odświeżeniu zsynchronizuj otwarty wniosek (badge odmów/realizacji).
+      const all = [...(rMgr.data || []), ...(rMine.data || [])]
+      setOpenReq(prev => (prev ? (all.find(x => x.id === prev.id) || prev) : prev))
     } catch (ex) {
       setErr(ex.response?.data?.detail || 'Błąd ładowania')
     } finally {
@@ -63,16 +75,41 @@ export default function Manager() {
 
   useEffect(() => { load() }, [])
 
+  // Do obsługi: kroki, na których kierownik MUSI działać (wybór / akceptacja,
+  // w tym jako kierownik wyższego rzędu) — np. nowy pracownik do obsłużenia.
+  const toHandle = managerReqs.filter(
+    x => x.can_act && MANAGER_NODES.includes(x.current_node_type))
+
+  const TABS = [
+    ['handle', 'Wnioski do obsługi', toHandle.length],
+    ['mine',   'Moje wnioski',       myReqs.length],
+  ]
+  const SUB = {
+    handle: 'Do zrobienia: wybór uprawnień dla pracowników i akceptacje (w tym wyższego rzędu)',
+    mine:   'Wnioski, które złożyłeś(aś) — bieżący status i etap obiegu',
+  }
+
   return (
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Wnioski do obsługi</div>
-          <div className="page-header__sub">Wnioski Twoich komórek — wybór uprawnień i akceptacja</div>
+          <div className="page-header__title">Wnioski</div>
+          <div className="page-header__sub">{SUB[tab]}</div>
         </div>
-        <button className="btn btn--ghost btn--sm" onClick={load} disabled={loading}>
+        <button className="btn btn--ghost btn--sm" onClick={() => load()} disabled={loading}>
           <RefreshCw size={14} /> Odśwież
         </button>
+      </div>
+
+      <div className="tabs" style={{ marginTop: 0 }}>
+        {TABS.map(([v, label, count]) => (
+          <button key={v} className={`tab-btn${tab === v ? ' active' : ''}`} onClick={() => setTab(v)}>
+            {label}
+            {count > 0 && (
+              <span className="badge badge--neutral" style={{ fontSize: 10, marginLeft: 6 }}>{count}</span>
+            )}
+          </button>
+        ))}
       </div>
 
       {err && <div className="alert alert--error mb-4">{err}</div>}
@@ -80,48 +117,10 @@ export default function Manager() {
       <div className="card">
         {loading ? (
           <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
-        ) : requests.length === 0 ? (
-          <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>Brak wniosków do obsługi</div>
+        ) : tab === 'handle' ? (
+          <HandleTable rows={toHandle} onOpen={setOpenReq} />
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>#</th><th>Pracownik</th><th>Stanowisko</th><th>Uprawnień</th>
-                <th>Status</th><th>Data złożenia</th><th>Złożył(a)</th><th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {requests.map(r => (
-                <tr key={r.id}>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
-                  <td style={{ fontWeight: 600 }}>
-                    {r.worker_name}
-                    {r.kind === 'revoke' && (
-                      <span className="badge badge--warning" style={{ fontSize: 10, marginLeft: 8 }}>ustanie</span>
-                    )}
-                  </td>
-                  <td style={{ color: 'var(--color-text-muted)' }}>{r.worker_position || '—'}</td>
-                  <td>{r.items?.length || 0}</td>
-                  <td><span className={`badge ${STATUS_BADGE[r.status]||'badge--neutral'}`}>{STATUS_LABELS[r.status]||r.status}</span></td>
-                  <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{fmtDate(r.created_at)}</td>
-                  <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{r.requested_by_name || r.created_by_name}</td>
-                  <td>
-                    {r.status === 'pending_selection' ? (
-                      <button className="btn btn--action btn--sm" onClick={() => setOpenReq(r)}>
-                        <ListChecks size={13} /> {r.kind === 'revoke' ? 'Wybierz do odebrania' : 'Wybierz uprawnienia'}
-                      </button>
-                    ) : r.status === 'pending_manager' ? (
-                      <button className="btn btn--action btn--sm" onClick={() => setOpenReq(r)}>
-                        <Check size={13} /> Decyzja
-                      </button>
-                    ) : (
-                      <button className="btn btn--ghost btn--sm" onClick={() => setOpenReq(r)}>Podgląd</button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <MineTable rows={myReqs} onOpen={setOpenReq} />
         )}
       </div>
 
@@ -131,6 +130,122 @@ export default function Manager() {
                       onRefresh={() => load({ silent: true })} />
       )}
     </div>
+  )
+}
+
+// --- Zakładka „Wnioski do obsługi" -----------------------------------------
+function HandleTable({ rows, onOpen }) {
+  if (rows.length === 0) {
+    return <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>
+      Brak wniosków do obsługi — wszystko ogarnięte.
+    </div>
+  }
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th>#</th><th>Pracownik</th><th>Stanowisko</th><th>Uprawnień</th>
+          <th>Do zrobienia</th><th>Data złożenia</th><th>Złożył(a)</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(r => (
+          <tr key={r.id}>
+            <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
+            <td style={{ fontWeight: 600 }}>
+              {r.worker_name}
+              {r.kind === 'revoke' && (
+                <span className="badge badge--warning" style={{ fontSize: 10, marginLeft: 8 }}>ustanie</span>
+              )}
+            </td>
+            <td style={{ color: 'var(--color-text-muted)' }}>{r.worker_position || '—'}</td>
+            <td>{r.items?.length || 0}</td>
+            <td>
+              <span className="badge badge--warning" style={{ fontSize: 10 }}>
+                {NODE_LABELS[r.current_node_type] || STATUS_LABELS[r.status] || r.status}
+              </span>
+            </td>
+            <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{fmtDate(r.created_at)}</td>
+            <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{r.requested_by_name || r.created_by_name}</td>
+            <td>
+              {r.status === 'pending_selection' ? (
+                <button className="btn btn--action btn--sm" onClick={() => onOpen(r)}>
+                  <ListChecks size={13} /> {r.kind === 'revoke' ? 'Wybierz do odebrania' : 'Wybierz uprawnienia'}
+                </button>
+              ) : (
+                <button className="btn btn--action btn--sm" onClick={() => onOpen(r)}>
+                  <Check size={13} /> Decyzja
+                </button>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+// --- Zakładka „Moje wnioski" (złożone przeze mnie) -------------------------
+function MineTable({ rows, onOpen }) {
+  if (rows.length === 0) {
+    return <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>
+      Nie złożyłeś(aś) jeszcze żadnego wniosku. Wnioski dla pracowników składasz
+      w zakładce „Moi pracownicy".
+    </div>
+  }
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th>#</th><th>Pracownik</th><th>Status</th>
+          <th>Etap / postęp</th><th>Data złożenia</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(r => {
+          const p = grantProgressOf(r)
+          const inIt = r.status === 'pending_it' || r.current_node_type === 'it_execute'
+          return (
+            <tr key={r.id}>
+              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
+              <td style={{ fontWeight: 600 }}>
+                {r.worker_name}
+                {r.kind === 'revoke' && (
+                  <span className="badge badge--warning" style={{ fontSize: 10, marginLeft: 8 }}>ustanie</span>
+                )}
+                <div style={{ fontSize: 11, fontWeight: 400, color: 'var(--color-text-muted)' }}>
+                  {r.items?.length || 0} uprawnień
+                </div>
+              </td>
+              <td>
+                <span className={`badge ${STATUS_BADGE[r.status] || 'badge--neutral'}`}>
+                  {STATUS_LABELS[r.status] || r.status}
+                </span>
+              </td>
+              <td style={{ fontSize: 12 }}>
+                <span style={{ color: 'var(--color-text-muted)' }}>
+                  {NODE_LABELS[r.current_node_type]
+                    || (r.status === 'completed' ? 'Zakończony'
+                        : r.status === 'rejected' ? 'Odrzucony' : '—')}
+                </span>
+                {inIt && p.total > 0 && (
+                  <span style={{ marginLeft: 8, display: 'inline-flex', gap: 8 }}>
+                    <span style={{ color: 'var(--color-success)' }}>✓ {p.done}/{p.total}</span>
+                    {p.denied > 0 && (
+                      <span style={{ color: 'var(--color-error-text)' }}>odmowy: {p.denied}</span>
+                    )}
+                  </span>
+                )}
+              </td>
+              <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{fmtDate(r.created_at)}</td>
+              <td>
+                <button className="btn btn--ghost btn--sm" onClick={() => onOpen(r)}>Podgląd</button>
+              </td>
+            </tr>
+          )
+        })}
+      </tbody>
+    </table>
   )
 }
 
@@ -588,6 +703,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                             perm={admin} checked={picked.has(adminKey)} indent={0}
                             onToggle={() => togglePerm(s.id, admin.id)}
                             extra={<ChangeBadge st={permChangeState(adminKey, held, picked)} />}
+                            disabled={!picked.has(key) && !(adminKey && picked.has(adminKey))}
                           />
                         </SystemBlock>
                       )
@@ -650,10 +766,20 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                                       Brak pozycji pasujących do wyszukiwania.
                                     </div>
                                   )}
-                                  {visible.map(p => {
+                                  {subgroupPerms(visible).map(({ subgroup, items: subItems }) => (
+                                    <div key={subgroup || '_nosub'}>
+                                      {subgroup && (
+                                        <div style={{
+                                          fontSize: 12, fontStyle: 'italic', letterSpacing: '.02em',
+                                          color: 'var(--color-text-muted)', margin: '4px 0 2px 2px',
+                                        }}>
+                                          ↳ {subgroup}
+                                        </div>
+                                      )}
+                                      {subItems.map(p => {
                               const key = `${s.id}:${p.id}`
                               return (
-                                <div key={p.id}>
+                                <div key={p.id} style={subgroup ? { marginLeft: 14 } : undefined}>
                                 <label style={{
                                   display: 'flex', alignItems: 'center', gap: 8, fontSize: 14,
                                   cursor: 'pointer', ...changeStyle(permChangeState(key, held, picked)),
@@ -681,7 +807,9 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                                   />
                                 </div>
                               )
-                                  })}
+                                      })}
+                                    </div>
+                                  ))}
                                 </PermGroupSection>
                               )
                             })}
@@ -689,6 +817,8 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                               perm={admin} checked={picked.has(adminKey)} indent={0}
                               onToggle={() => togglePerm(s.id, admin.id)}
                               extra={<ChangeBadge st={permChangeState(adminKey, held, picked)} />}
+                              disabled={!(selHere > 0 || (gated && openSys.has(s.id)))
+                                        && !(adminKey && picked.has(adminKey))}
                             />
                           </div>
                         )}

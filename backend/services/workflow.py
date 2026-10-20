@@ -734,6 +734,24 @@ def _notify_request_completed(session: Session, request: AccessRequest,
         if not u or not u.email:
             return
         s_name, s_email = _actor_sender(actor_user)
+        # Lista pozycji ODMÓWIONYCH — wnioskodawca ma wiedzieć, czego NIE nadano
+        # i dlaczego. Zbieramy tylko pozycje nadania (odebrania nie dotyczą).
+        from models import PermissionSystem, SystemPermission
+        denied_lines: list[str] = []
+        for it in session.exec(
+            select(RequestItem).where(RequestItem.request_id == request.id)
+        ).all():
+            if not getattr(it, "denied", False):
+                continue
+            if (getattr(it, "kind", "grant") or "grant") == "revoke":
+                continue
+            perm = session.get(SystemPermission, it.permission_id)
+            sysrow = session.get(PermissionSystem, it.system_id)
+            label = (f"{sysrow.name if sysrow else it.system_id} — "
+                     f"{perm.permission_name if perm else it.permission_id}")
+            if getattr(it, "deny_comment", None):
+                label += f" (powód: {it.deny_comment})"
+            denied_lines.append(label)
         import threading
         from services.email_alerts import notify_request_completed
         threading.Thread(
@@ -742,6 +760,7 @@ def _notify_request_completed(session: Session, request: AccessRequest,
                 "request_id": request.id,
                 "worker_name": request.worker_name,
                 "from_name": s_name, "from_email": s_email,
+                "denied_lines": denied_lines,
             }).start()
     except Exception as exc:
         _log.warning("Powiadomienie o zakończeniu wniosku nie wysłane: %s", exc)

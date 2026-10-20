@@ -105,64 +105,45 @@ def _send(to_address: str, subject: str, body: str, *,
             raise
 
 
+def _send_event(event_key: str, to_address: str, ctx: dict, *,
+                from_name: str | None = None, from_email: str | None = None,
+                raise_errors: bool = False) -> None:
+    """Wyrenderuj szablon zdarzenia i wyślij. Gdy szablon wyłączony — nie wysyła."""
+    from services.notifications import render
+    subject, body, enabled = render(event_key, ctx)
+    if not enabled:
+        logger.info("Powiadomienie '%s' wyłączone w ustawieniach — pominięto.", event_key)
+        return
+    _send(to_address, subject, body,
+          from_name=from_name, from_email=from_email, raise_errors=raise_errors)
+
+
 def notify_manager_new_request(manager_email: str, request_id: int, worker_name: str,
                                 dept_name: str, created_by: str,
                                 from_name: str | None = None,
                                 from_email: str | None = None) -> None:
-    _send(
-        to_address=manager_email,
-        subject=f"[SZUP] Nowy wniosek #{request_id} do akceptacji",
-        body=(
-            f"Wpłynął nowy wniosek o nadanie uprawnień wymagający Twojej akceptacji.\n\n"
-            f"Nr wniosku:  #{request_id}\n"
-            f"Pracownik:   {worker_name}\n"
-            f"Wydział:     {dept_name}\n"
-            f"Złożył(a):   {created_by}\n\n"
-            f"Zaloguj się do systemu SZUP, aby zatwierdzić lub odrzucić wniosek.\n\n"
-            f"-- SZUP {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        ),
-        from_name=from_name, from_email=from_email,
-    )
+    _send_event("manager_new_request", manager_email, {
+        "request_id": request_id, "worker_name": worker_name,
+        "dept_name": dept_name, "created_by": created_by,
+    }, from_name=from_name, from_email=from_email)
 
 
 def notify_selector_new_request(manager_email: str, request_id: int, worker_name: str,
                                  dept_name: str, created_by: str,
                                  from_name: str | None = None,
                                  from_email: str | None = None) -> None:
-    _send(
-        to_address=manager_email,
-        subject=f"[SZUP] Nowy wniosek #{request_id} — wybór uprawnień",
-        body=(
-            f"Wpłynął nowy wniosek o nadanie uprawnień dla nowego pracownika w Twoim wydziale.\n"
-            f"Twoja rola: wskaż uprawnienia, które mają zostać nadane. Zatwierdzenia dokona\n"
-            f"kierownik wydziału nadrzędnego.\n\n"
-            f"Nr wniosku:  #{request_id}\n"
-            f"Pracownik:   {worker_name}\n"
-            f"Wydział:     {dept_name}\n"
-            f"Złożył(a):   {created_by}\n\n"
-            f"Zaloguj się do systemu SZUP, aby wybrać uprawnienia.\n\n"
-            f"-- SZUP {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        ),
-        from_name=from_name, from_email=from_email,
-    )
+    _send_event("selector_new_request", manager_email, {
+        "request_id": request_id, "worker_name": worker_name,
+        "dept_name": dept_name, "created_by": created_by,
+    }, from_name=from_name, from_email=from_email)
 
 
 def notify_higher_manager_request(manager_email: str, request_id: int, worker_name: str,
                                    dept_name: str, selector_name: str) -> None:
-    _send(
-        to_address=manager_email,
-        subject=f"[SZUP] Wniosek #{request_id} do akceptacji wyższego rzędu",
-        body=(
-            f"Kierownik podległego wydziału wybrał uprawnienia dla nowego pracownika i prosi\n"
-            f"o Twoją akceptację.\n\n"
-            f"Nr wniosku:  #{request_id}\n"
-            f"Pracownik:   {worker_name}\n"
-            f"Wydział:     {dept_name}\n"
-            f"Wybrał(a):   {selector_name}\n\n"
-            f"Zaloguj się do systemu SZUP, aby zatwierdzić lub odrzucić wniosek.\n\n"
-            f"-- SZUP {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        ),
-    )
+    _send_event("higher_manager_request", manager_email, {
+        "request_id": request_id, "worker_name": worker_name,
+        "dept_name": dept_name, "selector_name": selector_name,
+    })
 
 
 def notify_it_request_approved(it_emails: list[str], request_id: int, worker_name: str,
@@ -170,20 +151,10 @@ def notify_it_request_approved(it_emails: list[str], request_id: int, worker_nam
                                  from_name: str | None = None,
                                  from_email: str | None = None) -> None:
     for email in it_emails:
-        _send(
-            to_address=email,
-            subject=f"[SZUP] Wniosek #{request_id} zatwierdzony — do realizacji",
-            body=(
-                f"Wniosek o nadanie uprawnień został zatwierdzony przez kierownika.\n\n"
-                f"Nr wniosku:   #{request_id}\n"
-                f"Pracownik:    {worker_name}\n"
-                f"Wydział:      {dept_name}\n"
-                f"Zatwierdził:  {manager_name}\n\n"
-                f"Zaloguj się do systemu SZUP, aby zrealizować wniosek.\n\n"
-                f"-- SZUP {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-            ),
-            from_name=from_name, from_email=from_email,
-        )
+        _send_event("it_request_approved", email, {
+            "request_id": request_id, "worker_name": worker_name,
+            "dept_name": dept_name, "manager_name": manager_name,
+        }, from_name=from_name, from_email=from_email)
 
 
 def notify_helpdesk_new_request(request_id: int, worker_name: str,
@@ -193,68 +164,53 @@ def notify_helpdesk_new_request(request_id: int, worker_name: str,
                                 from_email: str | None = None) -> None:
     """Zgłoszenie na helpdesk IT — wniosek wszedł w krok realizacji.
 
-    Treść zgodna z ustaleniami: kto wystąpił, dla kogo i link do systemu.
-    Wariant tekstu zależy od rodzaju wniosku, żeby przy ustaniu stosunku pracy
-    nie wysyłać „wniosku o nadanie uprawnień".
+    Wariant tekstu zależy od rodzaju wniosku (`{what}`), żeby przy ustaniu
+    stosunku pracy nie wysyłać „wniosku o nadanie uprawnień". Adres wnioskodawcy
+    (`{applicant_line}`) trafia wprost w treść — widoczny na helpdesku nawet gdy
+    serwer SMTP przepisze nagłówek „Od".
     """
     what = {
         "revoke": "odebranie uprawnień",
         "change": "zmianę uprawnień",
     }.get(kind, "nadanie uprawnień")
-    subject = {
-        "revoke": "Nowy wniosek o odebranie uprawnień",
-        "change": "Nowy wniosek o zmianę uprawnień",
-    }.get(kind, "Nowy wniosek o nadanie uprawnień")
 
-    # Adres wnioskodawcy wpisany WPROST w treść — widoczny na helpdesku nawet
-    # jeśli serwer SMTP przepisze nagłówek „Od" na konto uwierzytelnione.
+    applicant = ""
     applicant_line = ""
     if from_email:
-        who = f"{from_name} <{from_email}>" if from_name else from_email
-        applicant_line = f"Wnioskodawca: {who}\n"
+        applicant = f"{from_name} <{from_email}>" if from_name else from_email
+        applicant_line = f"Wnioskodawca: {applicant}\n"
 
-    _send(
-        to_address=to_address or resolve_helpdesk_email(),
-        subject=subject,
-        body=(
-            f"{manager_name} wystąpił z wnioskiem o {what} "
-            f"dla {worker_name}\n\n"
-            f"{applicant_line}"
-            f"{APP_URL}\n"
-        ),
-        from_name=from_name, from_email=from_email,
-    )
+    _send_event("helpdesk_new_request", to_address or resolve_helpdesk_email(), {
+        "request_id": request_id, "worker_name": worker_name,
+        "manager_name": manager_name, "what": what,
+        "applicant": applicant, "applicant_line": applicant_line,
+    }, from_name=from_name, from_email=from_email)
 
 
 def notify_request_completed(requester_email: str, request_id: int, worker_name: str,
                              from_name: str | None = None,
-                             from_email: str | None = None) -> None:
-    _send(
-        to_address=requester_email,
-        subject=f"[SZUP] Wniosek #{request_id} zrealizowany",
-        body=(
-            f"Wniosek o nadanie uprawnień został zrealizowany przez dział IT.\n\n"
-            f"Nr wniosku:  #{request_id}\n"
-            f"Pracownik:   {worker_name}\n\n"
-            f"-- SZUP {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        ),
-        from_name=from_name, from_email=from_email,
-    )
+                             from_email: str | None = None,
+                             denied_lines: list[str] | None = None) -> None:
+    # Sekcja z pozycjami, których NIE nadano (odmowa IT / kierownika nadrzędnego).
+    denied_block = ""
+    denied_suffix = ""
+    if denied_lines:
+        bullet = "\n".join(f"  • {line}" for line in denied_lines)
+        denied_block = ("\nUWAGA — następujące pozycje NIE zostały nadane (odmowa):\n"
+                        f"{bullet}\n")
+        denied_suffix = " (część pozycji odmówiono)"
+    _send_event("request_completed", requester_email, {
+        "request_id": request_id, "worker_name": worker_name,
+        "denied_block": denied_block, "denied_suffix": denied_suffix,
+    }, from_name=from_name, from_email=from_email)
 
 
 def notify_request_rejected(requester_email: str, request_id: int,
                               worker_name: str, comment: str) -> None:
-    _send(
-        to_address=requester_email,
-        subject=f"[SZUP] Wniosek #{request_id} odrzucony",
-        body=(
-            f"Wniosek o nadanie uprawnień został odrzucony.\n\n"
-            f"Nr wniosku:  #{request_id}\n"
-            f"Pracownik:   {worker_name}\n"
-            f"Powód:       {comment or '(brak komentarza)'}\n\n"
-            f"-- SZUP {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        ),
-    )
+    _send_event("request_rejected", requester_email, {
+        "request_id": request_id, "worker_name": worker_name,
+        "comment": comment or "(brak komentarza)",
+    })
 
 
 def notify_workflow_stage(to_address: str, request_id: int, worker_name: str,
@@ -262,27 +218,11 @@ def notify_workflow_stage(to_address: str, request_id: int, worker_name: str,
                           from_name: str | None = None,
                           from_email: str | None = None) -> None:
     """Generyczne powiadomienie: wniosek wszedł w nowy etap obiegu i wymaga
-    działania adresata. Używane przez silnik workflow (advance).
-    """
-    action_hint = {
-        "select_permissions":     "Wybierz uprawnienia, pobierz PDF do podpisu i prześlij EZD FINN.",
-        "manager_approve":        "Zaakceptuj wniosek: pobierz PDF, podpisz, prześlij EZD FINN.",
-        "higher_manager_approve": "Zaakceptuj wniosek: pobierz PDF, podpisz, prześlij EZD FINN.",
-        "it_execute":             "Zrealizuj wniosek technicznie w Biurze Informatyki.",
-    }.get(node_type, "Wniosek wymaga Twojego działania.")
-    _send(
-        to_address=to_address,
-        subject=f"[SZUP] Wniosek #{request_id} czeka na Ciebie — {stage_label}",
-        body=(
-            f"Wniosek o uprawnienia wszedł w nowy etap obiegu i wymaga Twojego działania.\n\n"
-            f"Nr wniosku:    #{request_id}\n"
-            f"Pracownik:     {worker_name}\n"
-            f"Wydział:       {dept_name}\n"
-            f"Etap:          {stage_label}\n\n"
-            f"Co należy zrobić:\n"
-            f"  {action_hint}\n\n"
-            f"Zaloguj się do SZUP → Do akceptacji → otwórz wniosek #{request_id}.\n\n"
-            f"-- SZUP {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        ),
-        from_name=from_name, from_email=from_email,
-    )
+    działania adresata. Używane przez silnik workflow (advance)."""
+    from services.notifications import STAGE_ACTIONS
+    action_hint = STAGE_ACTIONS.get(node_type, "Wniosek wymaga Twojego działania.")
+    _send_event("workflow_stage", to_address, {
+        "request_id": request_id, "worker_name": worker_name,
+        "dept_name": dept_name, "stage_label": stage_label,
+        "action_hint": action_hint,
+    }, from_name=from_name, from_email=from_email)

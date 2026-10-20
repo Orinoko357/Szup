@@ -171,6 +171,7 @@ class DepartmentCreate(BaseModel):
     parent_dept_id: Optional[int] = None
     manager_user_id: Optional[int] = None
     requires_higher_approval: bool = False
+    is_hr: bool = False
 
 
 class DepartmentRead(BaseModel):
@@ -183,6 +184,7 @@ class DepartmentRead(BaseModel):
     manager_name: Optional[str] = None
     is_active: bool
     requires_higher_approval: bool = False
+    is_hr: bool = False
 
 
 class DepartmentUpdate(BaseModel):
@@ -192,6 +194,7 @@ class DepartmentUpdate(BaseModel):
     manager_user_id: Optional[int] = None
     is_active: Optional[bool] = None
     requires_higher_approval: Optional[bool] = None
+    is_hr: Optional[bool] = None
 
 
 def _validate_kind(kind: Optional[str]) -> None:
@@ -235,6 +238,7 @@ def _enrich_dept(dept: Department, session: Session) -> DepartmentRead:
         manager_user_id=dept.manager_user_id,
         manager_name=mgr_name, is_active=dept.is_active,
         requires_higher_approval=bool(dept.requires_higher_approval),
+        is_hr=bool(getattr(dept, "is_hr", False)),
     )
 
 
@@ -322,6 +326,7 @@ def create_department(
         parent_dept_id=data.parent_dept_id,
         manager_user_id=mgr,
         requires_higher_approval=data.requires_higher_approval,
+        is_hr=data.is_hr,
     )
     _validate_higher_approval(dept, session)
     session.add(dept); session.commit(); session.refresh(dept)

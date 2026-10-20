@@ -1,52 +1,75 @@
-import { useEffect, useState } from 'react'
-import { AlertTriangle } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { AlertTriangle, Eye, EyeOff } from 'lucide-react'
 import { loginLocal, loginLdap, loginTest } from '../api'
 import { syncServerTime } from '../serverTime'
 import WodsLogo from '../components/Layout/WodsLogo'
+import '../styles/login.css'
 
-// Komunikaty po nieudanym SSO (z ?sso=... w URL po powrocie z backendu).
+// Ekran logowania wzorem intranetu / wods-transfer / dbac:
+// [Windows] na górze (złoty CTA) → "— lub — logowanie klasyczne" (rozwijane)
+// → login / hasło / domena. Nota RODO w karcie.
+
 const SSO_MESSAGES = {
   off:      'Logowanie poświadczeniami Windows jest wyłączone.',
-  error:    'Nie udało się zalogować przez Windows. Spróbuj zwykłego logowania.',
-  notfound: 'Twojego konta domenowego nie znaleziono w katalogu AD.',
+  error:    'Logowanie poświadczeniami Windows nie powiodło się. Użyj loginu i hasła AD.',
+  notfound: 'Nie znaleziono Twojego konta w Active Directory.',
   disabled: 'Twoje konto domenowe jest wyłączone w AD.',
   inactive: 'Twoje konto w aplikacji jest nieaktywne — skontaktuj się z IT.',
-  expired:  'Sesja logowania Windows wygasła — spróbuj ponownie.',
+  expired:  'Logowanie trwało zbyt długo — spróbuj ponownie.',
 }
 
 export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLogin }) {
-  const startSso = () => { window.location.href = '/api/auth/sso-login' }
-  // Gdy domena jest skonfigurowana, logowanie AD jest ścieżką domyślną —
-  // większość pracowników używa konta domenowego, konta lokalne to wyjątek.
-  const [tab, setTab]   = useState(ldapEnabled ? 'ldap' : 'local')
+  const startSso = () => {
+    try { sessionStorage.setItem('szup_sso_tried', '1') } catch { /* ignore */ }
+    window.location.href = '/api/auth/sso-login'
+  }
+
+  // Komunikat o nieudanym SSO (z ?sso=... albo po powrocie bez przekierowania).
+  const [ssoInfo] = useState(() => {
+    const ssoErr = new URLSearchParams(window.location.search).get('sso')
+    if (ssoErr && ssoErr !== 'off') return SSO_MESSAGES[ssoErr] || SSO_MESSAGES.error
+    try {
+      if (ssoEnabled && sessionStorage.getItem('szup_sso_tried') === '1') {
+        return 'Ten komputer nie przekazał poświadczeń Windows — zaloguj się loginem i hasłem.'
+      }
+    } catch { /* ignore */ }
+    return null
+  })
+
+  const [mode, setMode] = useState(ldapEnabled ? 'ldap' : 'local')
   const [form, setForm] = useState({ username: '', password: '' })
+  const [showPw, setShowPw] = useState(false)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
   // Konta administracyjne (superadmin/admin) NIGDY nie logują się bez hasła —
-  // nawet w trybie testowym backend zwraca 403 „użyj hasła". Wtedy przełączamy
-  // formularz na logowanie hasłem (forcePassword), zamiast zostawić usera w kropce.
+  // w trybie testowym backend zwraca 403; wtedy przełączamy na logowanie hasłem.
   const [forcePassword, setForcePassword] = useState(false)
-
   const passwordless = testMode && !forcePassword
 
-  // Komunikat błędu SSO z URL + automatyczne SSO (gdy sso_auto). Flaga w
-  // sessionStorage chroni przed pętlą (spróbuj raz, potem pokaż formularz).
+  // Bez SSO formularz jest zawsze widoczny; z SSO — zwinięty, chyba że SSO zawiodło.
+  const collapsible = !!ssoEnabled
+  const [open, setOpen] = useState(!collapsible || !!ssoInfo)
+  const loginRef = useRef(null)
+
+  // Automatyczne SSO raz na sesję przeglądarki (nie po ręcznym wylogowaniu/błędzie).
   useEffect(() => {
     const ssoErr = new URLSearchParams(window.location.search).get('sso')
-    if (ssoErr && ssoErr !== 'off') {
-      setError(SSO_MESSAGES[ssoErr] || SSO_MESSAGES.error)
-      window.history.replaceState(null, '', '/login')
-      return
-    }
-    if (ssoAuto && ssoEnabled) {
+    if (ssoErr) { window.history.replaceState(null, '', '/login'); return }
+    if (ssoEnabled && ssoAuto) {
       let tried = false
       try { tried = sessionStorage.getItem('szup_sso_tried') === '1' } catch { /* ignore */ }
-      if (!tried) {
-        try { sessionStorage.setItem('szup_sso_tried', '1') } catch { /* ignore */ }
-        startSso()
-      }
+      if (!tried) startSso()
     }
-  }, [ssoAuto, ssoEnabled])
+  }, [ssoEnabled, ssoAuto])
+
+  useEffect(() => { setMode(ldapEnabled ? 'ldap' : 'local') }, [ldapEnabled])
+
+  function toggleClassic() {
+    setOpen(o => {
+      if (!o) setTimeout(() => loginRef.current?.focus(), 60)
+      return !o
+    })
+  }
 
   async function submit(e) {
     e.preventDefault()
@@ -57,7 +80,7 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
       if (passwordless) {
         res = await loginTest({ username: form.username })
       } else {
-        const fn = tab === 'ldap' ? loginLdap : loginLocal
+        const fn = mode === 'ldap' ? loginLdap : loginLocal
         res = await fn({ username: form.username, password: form.password })
       }
       localStorage.setItem('szup_token', res.data.access_token)
@@ -81,131 +104,126 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
       const st = err.response?.status
       const detail = err.response?.data?.detail || ''
       if (passwordless && st === 403 && /hasł/i.test(detail)) {
-        // Konto administracyjne w trybie testowym → pokaż pole hasła
         setForcePassword(true)
+        setOpen(true)
         setError('To konto wymaga logowania hasłem — wpisz hasło poniżej. '
-          + 'Jeśli to konto domenowe, wybierz zakładkę „LDAP / AD".')
+          + 'Jeśli to konto domenowe, wybierz „Active Directory".')
       } else if (st === 429) {
         setError('Zbyt wiele prób logowania — poczekaj chwilę i spróbuj ponownie.')
       } else if (st === 423) {
-        setError('Konto tymczasowo zablokowane z powodu wielokrotnych błędnych logowań. Spróbuj za 15 minut lub skontaktuj się z administratorem.')
+        setError('Konto tymczasowo zablokowane z powodu wielokrotnych błędnych logowań. '
+          + 'Spróbuj za 15 minut lub skontaktuj się z administratorem.')
       } else {
         setError(detail || 'Nieprawidłowy login lub hasło')
       }
+      setOpen(true)
     } finally {
       setLoading(false)
     }
   }
 
-  const localLabel = passwordless
+  const loginLabel = passwordless
     ? 'Login (tryb testowy)'
-    : (tab === 'ldap' ? 'Login AD (sAMAccountName)' : 'Login')
+    : (mode === 'ldap' ? 'Login AD (sAMAccountName)' : 'Login')
+  const tabIdx = collapsible && !open ? -1 : undefined
 
   return (
-    <div className="szup-login">
-      <main className="szup-login__card">
-        <div className="szup-login__header">
-          <img src="/img/herb-ciemny.png" alt="Herb Miasta Wodzisławia Śląskiego"
-               className="login-herb login-herb--light szup-login__herb" />
-          <img src="/img/herb-bialy.png" alt="" aria-hidden="true"
-               className="login-herb login-herb--dark szup-login__herb" />
+    <div className="wl-page">
+      <main className="wl-card">
+        <div className="wl-lockup">
+          <img className="wl-herb wl-herb--light" src="/img/herb-ciemny.png"
+               alt="Herb Miasta Wodzisławia Śląskiego" />
+          <img className="wl-herb wl-herb--dark" src="/img/herb-bialy.png" alt="" aria-hidden="true" />
           <WodsLogo size={44} />
-          <div>
-            <div className="szup-login__name">szup</div>
-            <div className="szup-login__sub">WODS · URZĄD MIASTA WODZISŁAWIA ŚLĄSKIEGO</div>
+          <span className="wl-name">szup</span>
+          <span className="wl-sub">WODS · URZĄD MIASTA WODZISŁAWIA ŚLĄSKIEGO</span>
+        </div>
+
+        <div className="wl-body">
+          {testMode && (
+            <div className="wl-testbanner">
+              <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+              <div>
+                <strong>TRYB TESTOWY</strong> — logowanie samym loginem, bez hasła.
+                {forcePassword && <> Konta administracyjne logują się normalnie — hasłem.</>}
+                {' '}Powinien być WYŁĄCZONY na produkcji.
+              </div>
+            </div>
+          )}
+
+          {ssoEnabled && (
+            <>
+              <button type="button" className="wl-sso" onClick={startSso}>
+                Zaloguj poświadczeniami Windows
+              </button>
+              {ssoInfo && <div className="wl-msg wl-msg--error" role="alert">{ssoInfo}</div>}
+              <button type="button" className={`wl-toggle${open ? ' is-open' : ''}`}
+                      aria-expanded={open} aria-controls="wl-classic" onClick={toggleClassic}>
+                <span className="wl-or">— lub —</span> logowanie klasyczne
+              </button>
+            </>
+          )}
+
+          <div id="wl-classic"
+               className={`wl-classic${collapsible ? (open ? ' is-open' : '') : ' wl-classic--static'}`}
+               aria-hidden={collapsible && !open}>
+            <form onSubmit={submit}>
+              <div className="wl-field">
+                <label htmlFor="login">{loginLabel}</label>
+                <input id="login" ref={loginRef} className="wl-input"
+                       value={form.username} required autoComplete="username"
+                       autoFocus={!collapsible} tabIndex={tabIdx}
+                       onChange={e => setForm(f => ({ ...f, username: e.target.value }))} />
+              </div>
+
+              {!passwordless && (
+                <div className="wl-field">
+                  <label htmlFor="password">Hasło</label>
+                  <div className="wl-pw">
+                    <input id="password" className="wl-input" type={showPw ? 'text' : 'password'}
+                           value={form.password} required autoComplete="current-password"
+                           autoFocus={forcePassword} tabIndex={tabIdx}
+                           onChange={e => setForm(f => ({ ...f, password: e.target.value }))} />
+                    <button type="button" className="wl-eye" onClick={() => setShowPw(v => !v)}
+                            tabIndex={tabIdx}
+                            aria-label={showPw ? 'Ukryj hasło' : 'Pokaż hasło'}
+                            title={showPw ? 'Ukryj hasło' : 'Pokaż hasło'}>
+                      {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {ldapEnabled && !passwordless && (
+                <div className="wl-field">
+                  <label htmlFor="domain">Domena</label>
+                  <select id="domain" className="wl-select" value={mode} tabIndex={tabIdx}
+                          onChange={e => { setMode(e.target.value); setError(null) }}>
+                    <option value="ldap">Active Directory</option>
+                    <option value="local">Konto lokalne (bez domeny)</option>
+                  </select>
+                </div>
+              )}
+
+              {error && <div className="wl-msg wl-msg--error" role="alert">{error}</div>}
+
+              <button type="submit" className={`wl-submit${ssoEnabled ? '' : ' wl-submit--primary'}`}
+                      disabled={loading} tabIndex={tabIdx}>
+                {loading ? 'Logowanie…' : (passwordless ? 'Zaloguj się (tryb testowy)' : 'Zaloguj się')}
+              </button>
+
+              {testMode && forcePassword && (
+                <button type="button" className="wl-link" tabIndex={tabIdx}
+                        onClick={() => { setForcePassword(false); setError(null); setForm(f => ({ ...f, password: '' })) }}>
+                  ← Wróć do logowania testowego (bez hasła)
+                </button>
+              )}
+            </form>
           </div>
         </div>
 
-        {testMode && (
-          <div className="szup-login__testbanner">
-            <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
-            <div>
-              <strong>TRYB TESTOWY</strong> — logowanie samym loginem, bez hasła.
-              {forcePassword && <> Konta administracyjne logują się normalnie — hasłem.</>}
-              {' '}Ten tryb powinien być WYŁĄCZONY w środowisku produkcyjnym.
-            </div>
-          </div>
-        )}
-
-        {/* Zakładki widoczne zawsze, gdy logujemy hasłem — także po wymuszeniu
-            hasła w trybie testowym (konto AD musi móc wybrać LDAP / AD). */}
-        {!passwordless && (
-          <div className="szup-login__tabs">
-            {/* Kolejność zależy od konfiguracji: gdy AD działa, jest pierwsze
-                (domyślna ścieżka), konto lokalne schodzi na prawo. */}
-            {(ldapEnabled
-              ? [['ldap', 'LDAP / AD'], ['local', 'Konto lokalne']]
-              : [['local', 'Konto lokalne'], ['ldap', 'LDAP / AD']]
-            ).map(([val, lbl]) => (
-              <button
-                key={val}
-                type="button"
-                className={`szup-login__tab${tab === val ? ' szup-login__tab--active' : ''}`}
-                onClick={() => { setTab(val); setError(null) }}
-              >
-                {lbl}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <form className="szup-login__form" onSubmit={submit}>
-          <div className="szup-login__fields">
-            <div className="szup-login__group">
-              <label htmlFor="login">{localLabel}</label>
-              <input
-                id="login"
-                value={form.username}
-                onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
-                required
-                autoFocus
-                autoComplete="username"
-              />
-            </div>
-            {!passwordless && (
-              <div className="szup-login__group">
-                <label htmlFor="password">Hasło</label>
-                <input
-                  id="password"
-                  type="password"
-                  value={form.password}
-                  onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-                  required
-                  autoFocus={forcePassword}
-                  autoComplete="current-password"
-                />
-              </div>
-            )}
-
-            {error && <div className="szup-login__error">{error}</div>}
-          </div>
-
-          <button className="szup-login__submit" type="submit" disabled={loading}>
-            {loading ? 'Logowanie…' : (passwordless ? 'Zaloguj się (tryb testowy)' : 'Zaloguj się')}
-          </button>
-
-          {ssoEnabled && (
-            <button type="button" className="szup-login__tab"
-                    style={{ marginTop: 8, width: '100%' }}
-                    onClick={startSso}>
-              Zaloguj poświadczeniami Windows
-            </button>
-          )}
-
-          {testMode && forcePassword && (
-            <button
-              type="button"
-              className="szup-login__tab"
-              style={{ marginTop: 8, width: '100%' }}
-              onClick={() => { setForcePassword(false); setError(null); setForm(f => ({ ...f, password: '' })) }}
-            >
-              ← Wróć do logowania testowego (bez hasła)
-            </button>
-          )}
-        </form>
-
-        <div className="szup-login__rodo">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <div className="wl-rodo">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <rect x="3" y="11" width="18" height="11" rx="2"></rect>
             <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
           </svg>

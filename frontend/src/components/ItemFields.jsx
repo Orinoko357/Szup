@@ -25,7 +25,13 @@ export default function PermInput({ input, name, show, values, onChange, compact
       padding: compact ? 6 : 8, borderLeft: '2px solid var(--color-gold)',
       background: 'var(--color-card)', borderRadius: 4,
     }}>
-      {input?.description && (
+      {/* Co wpisać/wybrać — najpierw podpowiedź (prompt), potem ewentualny opis. */}
+      {input?.prompt && (
+        <div style={{ fontSize: 12, color: 'var(--color-navy)', fontWeight: 600, marginBottom: 3 }}>
+          {input.prompt}
+        </div>
+      )}
+      {input?.description && input.description !== input.prompt && (
         <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginBottom: 3 }}>
           {input.description}
         </div>
@@ -52,9 +58,11 @@ export default function PermInput({ input, name, show, values, onChange, compact
         </select>
       ) : type === 'textarea' ? (
         <textarea className="form-control" style={{ fontSize: fs, minHeight: 60 }}
+                  placeholder={input?.prompt || ''}
                   value={val} onChange={e => set(e.target.value)} />
       ) : (
         <input className="form-control" style={{ fontSize: fs }}
+               placeholder={input?.prompt || ''}
                value={val} onChange={e => set(e.target.value)} />
       )}
     </div>
@@ -200,14 +208,19 @@ export function splitAdminPerm(perms) {
  * Checkbox „Uprawnienia administratora" — wspólny dla wszystkich ścieżek
  * wyboru zakresu, żeby wyglądał i zachowywał się wszędzie tak samo.
  */
-export function AdminPermRow({ perm, checked, onToggle, indent = 20, extra = null }) {
+export function AdminPermRow({ perm, checked, onToggle, indent = 20, extra = null,
+                               disabled = false }) {
   if (!perm) return null
   return (
     <label style={{
       display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
-      cursor: 'pointer', marginLeft: indent, marginTop: 3,
-    }} title="Pełne uprawnienia administracyjne — nadawaj tylko, gdy to konieczne">
-      <input type="checkbox" checked={checked} onChange={onToggle} />
+      cursor: disabled ? 'not-allowed' : 'pointer', marginLeft: indent, marginTop: 3,
+      opacity: disabled ? 0.45 : 1,
+    }} title={disabled
+      ? 'Najpierw zaznacz program, aby móc wybrać uprawnienia administratora'
+      : 'Pełne uprawnienia administracyjne — nadawaj tylko, gdy to konieczne'}>
+      <input type="checkbox" checked={checked} disabled={disabled}
+             onChange={disabled ? undefined : onToggle} />
       <span style={{ color: 'var(--color-error)', fontWeight: 600 }}>
         {perm.permission_name}
       </span>
@@ -246,6 +259,45 @@ export function groupPerms(perms) {
       return a.localeCompare(b, 'pl')
     })
     .map(([group, items]) => ({ group, items }))
+}
+
+/**
+ * Podział pozycji JEDNEJ grupy na podgrupy (drugi poziom sekcji).
+ * Pozycje bez podgrupy idą pierwsze, pod pustą nazwą; dalej podgrupy wg
+ * `subgroup_order`, a reszta alfabetycznie. Zwraca [{ subgroup, items }].
+ */
+export function subgroupPerms(perms) {
+  const map = new Map()
+  const orderOf = new Map()
+  for (const p of (perms || [])) {
+    const sg = p.subgroup_name || ''
+    if (!map.has(sg)) map.set(sg, [])
+    map.get(sg).push(p)
+    const so = p.subgroup_order
+    if (so != null && (!orderOf.has(sg) || so < orderOf.get(sg))) orderOf.set(sg, so)
+  }
+  return [...map.entries()]
+    .sort(([a], [b]) => {
+      if (a === '') return -1
+      if (b === '') return 1
+      const oa = orderOf.has(a) ? orderOf.get(a) : Infinity
+      const ob = orderOf.has(b) ? orderOf.get(b) : Infinity
+      if (oa !== ob) return oa - ob
+      return a.localeCompare(b, 'pl')
+    })
+    .map(([subgroup, items]) => ({ subgroup, items }))
+}
+
+/**
+ * Lista unikalnych nazw podgrup w zestawie pozycji (do podpowiedzi `datalist`).
+ */
+export function subgroupNames(perms) {
+  const set = new Set()
+  for (const p of (perms || [])) {
+    const sg = (p.subgroup_name || '').trim()
+    if (sg) set.add(sg)
+  }
+  return [...set].sort((a, b) => a.localeCompare(b, 'pl'))
 }
 
 /**
@@ -406,6 +458,8 @@ export function permInput(p) {
     options: p?.options || [],
     required: Boolean(p?.input_required),
     description: p?.description || null,
+    // Podpowiedź „co wpisać" przy polu (ustawiana per uprawnienie w rejestrze).
+    prompt: p?.input_prompt || null,
   }
 }
 

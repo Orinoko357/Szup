@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
-import { ChevronDown, ChevronRight, Mail, ShieldCheck, TestTube, AlertTriangle, FileText, Camera } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { ChevronDown, ChevronRight, Mail, ShieldCheck, TestTube, AlertTriangle, FileText, Camera, Bell } from 'lucide-react'
 import {
   getEmailSettings, updateEmailSettings, testEmail,
   getLdapSettings, updateLdapSettings, testLdap,
   getAppSettings, updateAppSettings, factoryReset,
+  listNotificationTemplates, saveNotificationTemplate,
+  resetNotificationTemplate, testNotificationTemplate,
 } from '../api'
 
 function Accordion({ icon: Icon, title, sub, badge, defaultOpen = false, children }) {
@@ -357,6 +359,11 @@ export default function Settings() {
         )}
       </Accordion>
 
+      <Accordion icon={Bell} title="Treść powiadomień (szablony)"
+                 sub="Edytuj temat i treść e-maili; użyj makr w nawiasach klamrowych">
+        <NotificationsSection />
+      </Accordion>
+
       <Accordion icon={FileText} title="Oświadczenie wnioskującego"
                  sub="Treść podpisywana przy kierowaniu wniosku do realizacji IT"
                  badge={declIsDefault ? 'domyślne' : 'własne'}>
@@ -707,5 +714,157 @@ function FactoryResetSection() {
         {busy ? 'Czyszczenie…' : 'Przywróć ustawienia fabryczne'}
       </button>
     </Accordion>
+  )
+}
+
+
+// ---------------------------------------------------------------------------
+// Szablony powiadomień — edycja tematu i treści z makrami.
+// ---------------------------------------------------------------------------
+function NotificationsSection() {
+  const [tpls, setTpls] = useState(null)
+  const [err, setErr]   = useState(null)
+
+  function load() {
+    listNotificationTemplates()
+      .then(r => setTpls(r.data))
+      .catch(ex => setErr(ex.response?.data?.detail || 'Nie udało się wczytać szablonów'))
+  }
+  useEffect(() => { load() }, [])
+
+  if (err) return <div className="alert alert--error">{err}</div>
+  if (!tpls) return <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 12 }}>
+        Edytuj temat i treść powiadomień. W treści wstawiaj <strong>makra</strong> w nawiasach
+        klamrowych (np. <code>{'{worker_name}'}</code>) — przy wysyłce zostaną podmienione na
+        dane wniosku. Puste pole = tekst domyślny. Wyłączenie szablonu wstrzymuje dany e-mail.
+      </div>
+      {tpls.map(t => <TplEditor key={t.event_key} tpl={t} onSaved={load} />)}
+    </div>
+  )
+}
+
+function TplEditor({ tpl, onSaved }) {
+  const [subject, setSubject] = useState(tpl.subject || '')
+  const [body, setBody]       = useState(tpl.body || '')
+  const [enabled, setEnabled] = useState(tpl.enabled !== false)
+  const [open, setOpen]       = useState(false)
+  const [busy, setBusy]       = useState(false)
+  const [msg, setMsg]         = useState(null)
+  const subjectRef = useRef(null)
+  const bodyRef    = useRef(null)
+  const activeRef  = useRef('body')
+
+  function insertMacro(m) {
+    const ref = activeRef.current === 'subject' ? subjectRef : bodyRef
+    const el = ref.current
+    const cur = activeRef.current === 'subject' ? subject : body
+    const set = activeRef.current === 'subject' ? setSubject : setBody
+    const pos = el && typeof el.selectionStart === 'number' ? el.selectionStart : cur.length
+    set(cur.slice(0, pos) + m + cur.slice(pos))
+    setTimeout(() => { if (el) { el.focus(); const p = pos + m.length; el.setSelectionRange(p, p) } }, 0)
+  }
+
+  async function save() {
+    setBusy(true); setMsg(null)
+    try {
+      const r = await saveNotificationTemplate(tpl.event_key, { subject, body, enabled })
+      setSubject(r.data.subject); setBody(r.data.body); setEnabled(r.data.enabled !== false)
+      setMsg({ ok: true, text: 'Zapisano.' }); onSaved?.()
+    } catch (ex) {
+      setMsg({ ok: false, text: ex.response?.data?.detail || 'Błąd zapisu' })
+    } finally { setBusy(false) }
+  }
+  async function reset() {
+    if (!confirm('Przywrócić domyślną treść tego powiadomienia?')) return
+    setBusy(true); setMsg(null)
+    try {
+      const r = await resetNotificationTemplate(tpl.event_key)
+      setSubject(r.data.subject); setBody(r.data.body); setEnabled(true)
+      setMsg({ ok: true, text: 'Przywrócono domyślny tekst.' }); onSaved?.()
+    } catch (ex) {
+      setMsg({ ok: false, text: ex.response?.data?.detail || 'Błąd' })
+    } finally { setBusy(false) }
+  }
+  async function test() {
+    setBusy(true); setMsg(null)
+    try {
+      const r = await testNotificationTemplate(tpl.event_key)
+      setMsg({ ok: true, text: `Test wysłany na ${r.data.sent_to}.` })
+    } catch (ex) {
+      setMsg({ ok: false, text: ex.response?.data?.detail || 'Nie udało się wysłać testu' })
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div style={{ border: '1px solid var(--color-border)', borderRadius: 8, marginBottom: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+                    cursor: 'pointer', flexWrap: 'wrap' }}
+           onClick={() => setOpen(v => !v)}>
+        {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+        <strong style={{ fontSize: 13, color: 'var(--color-navy)' }}>{tpl.label}</strong>
+        {!enabled && <span className="badge badge--warning" style={{ fontSize: 9 }}>wyłączone</span>}
+        {tpl.is_custom && <span className="badge badge--info" style={{ fontSize: 9 }}>zmienione</span>}
+      </div>
+      {open && (
+        <div style={{ padding: '0 12px 12px', borderTop: '1px solid var(--color-border)' }}>
+          <div style={{ fontSize: 11, color: 'var(--color-text-muted)', margin: '8px 0' }}>
+            {tpl.description}
+          </div>
+          <label className="form-check" style={{ marginBottom: 10 }}>
+            <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
+            Wysyłaj to powiadomienie
+          </label>
+          <div className="form-group">
+            <label className="form-label">Temat</label>
+            <input ref={subjectRef} className="form-control" value={subject}
+                   onFocus={() => { activeRef.current = 'subject' }}
+                   onChange={e => setSubject(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Treść</label>
+            <textarea ref={bodyRef} className="form-control" style={{ minHeight: 160, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                      value={body}
+                      onFocus={() => { activeRef.current = 'body' }}
+                      onChange={e => setBody(e.target.value)} />
+          </div>
+          {tpl.macros?.length > 0 && (
+            <div style={{ margin: '4px 0 10px' }}>
+              <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginBottom: 4 }}>
+                Dostępne makra (kliknij, aby wstawić):
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {tpl.macros.map(m => (
+                  <button key={m} type="button" className="btn btn--ghost btn--sm"
+                          style={{ fontSize: 11, fontFamily: 'var(--font-mono)' }}
+                          onClick={() => insertMacro(m)}>{m}</button>
+                ))}
+              </div>
+            </div>
+          )}
+          {msg && (
+            <div className="alert" style={{
+              background: msg.ok ? 'var(--color-success-bg)' : 'var(--color-error-bg)',
+              borderLeft: `4px solid ${msg.ok ? 'var(--color-success)' : 'var(--color-error)'}`,
+              color: msg.ok ? '#1a7a45' : 'var(--color-error-text)', marginBottom: 10, fontSize: 12,
+            }}>{msg.text}</div>
+          )}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn btn--primary btn--sm" onClick={save} disabled={busy}>
+              {busy ? 'Zapisywanie…' : 'Zapisz'}
+            </button>
+            <button className="btn btn--ghost btn--sm" onClick={test} disabled={busy}>
+              <TestTube size={12} /> Wyślij test
+            </button>
+            <button className="btn btn--ghost btn--sm" onClick={reset} disabled={busy}>
+              Przywróć domyślny
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }

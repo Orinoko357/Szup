@@ -10,7 +10,7 @@ import DeclarationModal from '../components/DeclarationModal'
 import PermInput, {
   permInput, missingRequiredFields, splitAdminPerm, AdminPermRow,
   adminGrantNames, confirmAdminRights, ADMIN_CONFIRM_ABORTED,
-  groupPerms, isPermVisible, PermGroupSection, SystemBlock,
+  groupPerms, subgroupPerms, isPermVisible, PermGroupSection, SystemBlock,
   isScopeGated, missingScopeSystems,
 } from '../components/ItemFields'
 
@@ -115,8 +115,16 @@ export default function MyTeam() {
                 const perms = w.permissions || []
                 const open  = expanded.has(w.id)
                 return [
-                  <tr key={w.id}>
-                    <td style={{ fontWeight: 600 }}>{w.full_name || '—'}</td>
+                  <tr key={w.id} style={w.is_self ? { background: 'var(--bg-secondary)' } : undefined}>
+                    <td style={{ fontWeight: 600 }}>
+                      {w.full_name || '—'}
+                      {w.is_self && (
+                        <span className="badge badge--info" style={{ fontSize: 10, marginLeft: 8 }}
+                              title="Możesz złożyć wniosek sam dla siebie">
+                          Ja
+                        </span>
+                      )}
+                    </td>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{w.username}</td>
                     <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{w.email || '—'}</td>
                     <td>{w.department_name || '—'}</td>
@@ -414,7 +422,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 720 }}>
+      <div className="modal" style={{ maxWidth: 'min(94vw, 900px)', width: '100%' }}>
         <div className="modal__header">
           <span className="modal__title">
             <ListChecks size={15} style={{ marginRight: 8, verticalAlign: 'middle' }} />
@@ -449,7 +457,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
               Brak zdefiniowanych systemów — poproś administratora o konfigurację.
             </div>
           ) : (
-            <div style={{ maxHeight: 300, overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 6, padding: 8, background: 'var(--bg-secondary)' }}>
+            <div style={{ maxHeight: 'min(62vh, 640px)', overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 6, padding: 8, background: 'var(--bg-secondary)' }}>
               {systems.map(s => {
                 const perms = permsBySys[s.id] || []
                 // „Tylko dostęp" = jedna pozycja na cały program.
@@ -485,6 +493,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
                         perm={admin} checked={picked.has(adminKey)} indent={0}
                         onToggle={() => togglePerm(s.id, admin.id)}
                         extra={<StateBadge st={permState(adminKey)} />}
+                        disabled={!picked.has(key) && !(adminKey && picked.has(adminKey))}
                       />
                     </SystemBlock>
                   )
@@ -546,10 +555,20 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
                                   Brak pozycji pasujących do wyszukiwania.
                                 </div>
                               )}
-                              {visible.map(p => {
+                              {subgroupPerms(visible).map(({ subgroup, items: subItems }) => (
+                                <div key={subgroup || '_nosub'}>
+                                  {subgroup && (
+                                    <div style={{
+                                      fontSize: 11, fontStyle: 'italic', letterSpacing: '.02em',
+                                      color: 'var(--color-text-muted)', margin: '4px 0 2px 2px',
+                                    }}>
+                                      ↳ {subgroup}
+                                    </div>
+                                  )}
+                                  {subItems.map(p => {
                           const key = `${s.id}:${p.id}`
                           return (
-                            <div key={p.id}>
+                            <div key={p.id} style={subgroup ? { marginLeft: 12 } : undefined}>
                             <label style={{
                               display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
                               cursor: 'pointer', ...stateStyle(permState(key)),
@@ -580,7 +599,9 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
                             />
                             </div>
                           )
-                              })}
+                                  })}
+                                </div>
+                              ))}
                             </PermGroupSection>
                           )
                         })}
@@ -588,6 +609,8 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
                           perm={admin} checked={picked.has(adminKey)} indent={0}
                           onToggle={() => togglePerm(s.id, admin.id)}
                           extra={<StateBadge st={permState(adminKey)} />}
+                          disabled={!(selHere > 0 || (gated && openSys.has(s.id)))
+                                    && !(adminKey && picked.has(adminKey))}
                         />
                       </div>
                     )}

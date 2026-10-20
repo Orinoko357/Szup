@@ -1,12 +1,13 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import {
   Plus, Trash2, KeyRound, Unlock, Ban, Building2, Check, X,
-  ChevronRight, ChevronDown, FolderTree,
+  ChevronRight, ChevronDown, FolderTree, Users as UsersIcon, UserCog,
 } from 'lucide-react'
 import {
   listUsers, createUser, updateUser, deleteUser, resetUserPassword, unlockUser,
-  listAllDepartments, listActiveUnits,
+  listAllDepartments, listActiveUnits, autoAssignManagers,
 } from '../api'
+import { LdapUsersImportModal } from './Units'
 import { serverTs, serverNow, fmtDate } from '../serverTime'
 
 // Etykieta komórki: „Nazwa · Jednostka" jeśli znamy jednostkę.
@@ -228,6 +229,31 @@ export default function Users() {
   const [showAdd, setShowAdd] = useState(false)
   const [filterUnit, setFilterUnit] = useState('')   // '' = wszystkie jednostki
   const [collapsed, setCollapsed] = useState(() => new Set())  // zwinięte sekcje
+  const [showLdapUsersImport, setShowLdapUsersImport] = useState(false)
+  const [autoBusy, setAutoBusy] = useState(false)
+
+  // Przypisanie kierowników komórek wg stanowiska z AD (kierownik/dyrektor/naczelnik).
+  // Stanowiska pobierają się przy imporcie użytkowników z AD.
+  async function runAutoManagers() {
+    if (!confirm('Przypisać kierowników komórek na podstawie stanowiska z AD '
+      + '(„kierownik", „dyrektor", „naczelnik")?\n\n'
+      + 'Uzupełnione zostaną tylko komórki BEZ kierownika; przy kilku kandydatach '
+      + 'komórka zostaje do ręcznej decyzji. Najpierw zaimportuj użytkowników z AD '
+      + '(stanowiska pobierają się przy imporcie).')) return
+    setAutoBusy(true)
+    try {
+      const r = await autoAssignManagers({})
+      const d = r.data
+      alert(`Przypisano: ${d.assigned}\n`
+        + `Pominięto (mają już kierownika): ${d.skipped_has_manager}\n`
+        + `Niejednoznaczne (kilku kandydatów): ${d.ambiguous}\n`
+        + `Bez kandydata: ${d.no_candidate}`
+        + (d.details.length ? `\n\n${d.details.join('\n')}` : ''))
+      load()
+    } catch (ex) {
+      alert(ex.response?.data?.detail || 'Nie udało się przypisać kierowników')
+    } finally { setAutoBusy(false) }
+  }
 
   function toggleCollapse(key) {
     setCollapsed(prev => {
@@ -333,11 +359,22 @@ export default function Users() {
                   title="Zwiń lub rozwiń wszystkie sekcje">
             <FolderTree size={14} /> {collapsed.size > 0 ? 'Rozwiń wszystko' : 'Zwiń wszystko'}
           </button>
+          <button className="btn btn--ghost btn--sm" onClick={runAutoManagers} disabled={autoBusy}
+                  title="Przypisz kierowników komórek wg stanowiska z AD (kierownik/dyrektor/naczelnik)">
+            <UserCog size={13} /> {autoBusy ? 'Przypisywanie…' : 'Kierownicy wg stanowiska'}
+          </button>
+          <button className="btn btn--action btn--sm" onClick={() => setShowLdapUsersImport(true)}>
+            <UsersIcon size={13} /> Importuj z AD
+          </button>
           <button className="btn btn--action btn--sm" onClick={() => setShowAdd(v => !v)}>
             <Plus size={13} /> Nowy użytkownik
           </button>
         </div>
       </div>
+
+      {showLdapUsersImport && (
+        <LdapUsersImportModal onClose={() => { setShowLdapUsersImport(false); load() }} />
+      )}
 
       {filterUnit && !loading && (
         <div style={{
@@ -358,102 +395,95 @@ export default function Users() {
                      onAdded={() => { setShowAdd(false); load() }} onCancel={() => setShowAdd(false)} />
       )}
 
-      <div className="card">
-        {loading ? (
-          <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
-        ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Login</th><th>Imię i nazwisko</th><th>E-mail</th><th>Rola</th><th>Komórka organizacyjna</th><th>Jednostki (kadry)</th><th>Typ</th><th>Status</th><th>Ostatnia zmiana hasła</th><th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleUsers.length === 0 ? (
-                <tr>
-                  <td colSpan={10} style={{ color: 'var(--color-text-muted)', padding: 16 }}>
-                    {users.length === 0
-                      ? 'Brak użytkowników'
-                      : 'Brak użytkowników przypisanych do tej jednostki.'}
-                  </td>
-                </tr>
-              ) : userGroups.map(g => {
-                const uKey = `u:${g.key}`
-                const unitOpen = !collapsed.has(uKey)
-                return (
-                  <Fragment key={`g-${g.key}`}>
-                    <tr>
-                      <td colSpan={10} onClick={() => toggleCollapse(uKey)}
-                          style={{
-                            background: 'var(--bg-secondary)',
-                            borderTop: '2px solid var(--color-border)',
-                            borderLeft: g.key === '_none'
-                              ? '4px solid var(--color-text-muted)'
-                              : '4px solid var(--color-navy)',
-                            padding: '11px 12px', cursor: 'pointer', userSelect: 'none',
-                          }}>
-                        <span style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 9,
-                          fontSize: 17, fontWeight: 800, letterSpacing: '.01em',
-                          color: g.key === '_none' ? 'var(--color-text-muted)' : 'var(--color-navy)',
-                        }}>
-                          {unitOpen ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                          <Building2 size={17} />
-                          {g.name}
-                          <span className="badge badge--info" style={{ fontSize: 11 }}>
-                            {g.count}
-                          </span>
-                        </span>
-                      </td>
-                    </tr>
+      {loading ? (
+        <div className="card"><div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div></div>
+      ) : visibleUsers.length === 0 ? (
+        <div className="card">
+          <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>
+            {users.length === 0 ? 'Brak użytkowników' : 'Brak użytkowników przypisanych do tej jednostki.'}
+          </div>
+        </div>
+      ) : (
+        // Akordeon per JEDNOSTKA — spójnie z zakładką „Jednostki".
+        <div>
+          {userGroups.map(g => {
+            const uKey = `u:${g.key}`
+            const unitOpen = !collapsed.has(uKey)
+            return (
+              <div className="accordion-item" key={`g-${g.key}`}>
+                <button type="button" className={`accordion-trigger${unitOpen ? ' open' : ''}`}
+                        onClick={() => toggleCollapse(uKey)}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <Building2 size={15} style={{
+                      color: g.key === '_none' ? 'var(--color-text-muted)' : 'var(--color-navy)', flexShrink: 0 }} />
+                    <span style={{ fontWeight: 700, fontSize: 14,
+                                   color: g.key === '_none' ? 'var(--color-text-muted)' : 'var(--color-navy)' }}>
+                      {g.name}
+                    </span>
+                    <span className="badge badge--neutral" style={{ fontSize: 10 }}>{g.count}</span>
+                  </div>
+                  {unitOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                </button>
 
-                    {unitOpen && g.depts.map(d => {
-                      // Sekcja bez działu (konta bez komórki) — bez nagłówka działu.
-                      if (!d.label) {
-                        return (
-                          <Fragment key={`d-${g.key}-nodept`}>
-                            {d.users.map(u => (
-                              <UserRow key={u.id} user={u} depts={depts} units={units} onChanged={load} />
-                            ))}
-                          </Fragment>
-                        )
-                      }
-                      const dKey = `d:${g.key}:${d.key}`
-                      const deptOpen = !collapsed.has(dKey)
-                      return (
-                        <Fragment key={`d-${g.key}-${d.key}`}>
-                          <tr>
-                            <td colSpan={10} onClick={() => toggleCollapse(dKey)}
-                                style={{
-                                  padding: '7px 12px 7px 34px', cursor: 'pointer', userSelect: 'none',
-                                  borderTop: '1px solid var(--color-border)',
-                                  background: 'var(--bg-secondary)',
-                                }}>
-                              <span style={{
-                                display: 'inline-flex', alignItems: 'center', gap: 7,
-                                fontSize: 14.5, fontWeight: 700, color: 'var(--color-text)',
-                              }}>
-                                {deptOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                                {d.label}
-                                <span className="badge badge--neutral" style={{ fontSize: 10 }}>
-                                  {d.users.length}
-                                </span>
-                              </span>
-                            </td>
-                          </tr>
-                          {deptOpen && d.users.map(u => (
-                            <UserRow key={u.id} user={u} depts={depts} units={units} onChanged={load} />
-                          ))}
-                        </Fragment>
-                      )
-                    })}
-                  </Fragment>
-                )
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
+                {unitOpen && (
+                  <div className="accordion-content" style={{ padding: 0 }}>
+                    <table className="data-table" style={{ margin: 0 }}>
+                      <thead>
+                        <tr>
+                          <th>Login</th><th>Imię i nazwisko</th><th>E-mail</th><th>Rola</th>
+                          <th>Komórka organizacyjna</th><th>Jednostki (kadry)</th><th>Typ</th>
+                          <th>Status</th><th>Ostatnia zmiana hasła</th><th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {g.depts.map(d => {
+                          // Sekcja bez działu (konta bez komórki) — bez nagłówka działu.
+                          if (!d.label) {
+                            return (
+                              <Fragment key={`d-${g.key}-nodept`}>
+                                {d.users.map(u => (
+                                  <UserRow key={u.id} user={u} depts={depts} units={units} onChanged={load} />
+                                ))}
+                              </Fragment>
+                            )
+                          }
+                          const dKey = `d:${g.key}:${d.key}`
+                          const deptOpen = !collapsed.has(dKey)
+                          return (
+                            <Fragment key={`d-${g.key}-${d.key}`}>
+                              <tr>
+                                <td colSpan={10} onClick={() => toggleCollapse(dKey)}
+                                    style={{
+                                      padding: '7px 12px 7px 24px', cursor: 'pointer', userSelect: 'none',
+                                      background: 'var(--bg-secondary)',
+                                    }}>
+                                  <span style={{
+                                    display: 'inline-flex', alignItems: 'center', gap: 7,
+                                    fontSize: 13, fontWeight: 700, color: 'var(--color-text)',
+                                  }}>
+                                    {deptOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                    {d.label}
+                                    <span className="badge badge--neutral" style={{ fontSize: 10 }}>
+                                      {d.users.length}
+                                    </span>
+                                  </span>
+                                </td>
+                              </tr>
+                              {deptOpen && d.users.map(u => (
+                                <UserRow key={u.id} user={u} depts={depts} units={units} onChanged={load} />
+                              ))}
+                            </Fragment>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

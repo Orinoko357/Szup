@@ -101,6 +101,22 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+def _effective_roles(session, user: User, user_roles: list[str]) -> list[str]:
+    """Role widoczne dla frontu. Pracownik komórki kadrowej (Department.is_hr)
+    dostaje efektywnie rolę 'hr' — żeby zobaczył Kartotekę i mógł zgłaszać
+    nowych pracowników/ustania. Token (JWT) i baza pozostają bez zmian;
+    autoryzację po stronie backendu i tak egzekwuje `user_is_hr`."""
+    try:
+        if "hr" not in user_roles and getattr(user, "department_id", None):
+            from models import Department
+            d = session.get(Department, user.department_id)
+            if d and getattr(d, "is_hr", False):
+                return [*user_roles, "hr"]
+    except Exception:
+        pass
+    return user_roles
+
+
 def _days_until_expiry(user: User) -> Optional[int]:
     from services.auth_service import password_max_age_days
     if user.auth_type != AuthType.local or not user.password_changed_at:
@@ -198,7 +214,7 @@ def setup(data: SetupRequest, request: Request, session: Session = Depends(get_s
     user_roles = parse_roles(user.roles)
     token = create_access_token(user.username, user_roles, user.id)
     return TokenResponse(access_token=token, username=user.username,
-                         roles=user_roles, role=primary_role(user),
+                         roles=_effective_roles(session, user, user_roles), role=primary_role(user),
                          full_name=user.full_name, must_change_password=False,
                          password_expires_in_days=_days_until_expiry(user))
 
@@ -236,7 +252,7 @@ def login(data: LoginRequest, request: Request, session: Session = Depends(get_s
     user_roles = parse_roles(user.roles)
     token = create_access_token(user.username, user_roles, user.id)
     return TokenResponse(access_token=token, username=user.username,
-                         roles=user_roles, role=primary_role(user),
+                         roles=_effective_roles(session, user, user_roles), role=primary_role(user),
                          full_name=user.full_name, must_change_password=must_change,
                          password_expires_in_days=_days_until_expiry(user))
 
@@ -301,7 +317,7 @@ def login_test(data: TestLoginRequest, request: Request, session: Session = Depe
     user_roles = parse_roles(user.roles)
     token = create_access_token(user.username, user_roles, user.id)
     return TokenResponse(access_token=token, username=user.username,
-                         roles=user_roles, role=primary_role(user),
+                         roles=_effective_roles(session, user, user_roles), role=primary_role(user),
                          full_name=user.full_name, must_change_password=False)
 
 
@@ -337,7 +353,7 @@ def login_ldap(data: LoginRequest, request: Request, session: Session = Depends(
     user_roles = parse_roles(user.roles)
     token = create_access_token(user.username, user_roles, user.id)
     return TokenResponse(access_token=token, username=user.username,
-                         roles=user_roles, role=primary_role(user),
+                         roles=_effective_roles(session, user, user_roles), role=primary_role(user),
                          full_name=user.full_name, must_change_password=False)
 
 
@@ -437,7 +453,7 @@ def sso_exchange(data: SsoExchange, session: Session = Depends(get_session)):
     user_roles = parse_roles(user.roles)
     token = create_access_token(user.username, user_roles, user.id)
     return TokenResponse(access_token=token, username=user.username,
-                         roles=user_roles, role=primary_role(user),
+                         roles=_effective_roles(session, user, user_roles), role=primary_role(user),
                          full_name=user.full_name, must_change_password=False)
 
 

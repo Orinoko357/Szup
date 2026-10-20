@@ -10,7 +10,10 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from database import get_session
-from models import AppSettings, EmailSettings, LdapSettings, SecuritySeverity, User
+from datetime import datetime
+
+from models import (AppSettings, EmailSettings, LdapSettings, NotificationTemplate,
+                    SecuritySeverity, User)
 from services.auth_service import get_current_user
 from services.permissions import require_admin, require_superadmin
 
@@ -206,6 +209,125 @@ def _ldap_read(cfg: LdapSettings) -> "LdapSettingsRead":
         sso_enabled=bool(getattr(cfg, "sso_enabled", False)),
         sso_auto=bool(getattr(cfg, "sso_auto", False)),
     )
+
+
+# ---------------------------------------------------------------------------
+# Szablony powiadomień e-mail (treść konfigurowalna z makrami)
+# ---------------------------------------------------------------------------
+
+class NotificationTemplateIn(BaseModel):
+    subject: str = ""
+    body: str = ""
+    enabled: bool = True
+
+
+class NotificationTemplateOut(BaseModel):
+    event_key: str
+    label: str
+    description: str
+    macros: list[str]
+    subject: str
+    body: str
+    enabled: bool
+    is_custom: bool          # czy nadpisany (różny od domyślnego)
+    default_subject: str
+    default_body: str
+
+
+def _tpl_out(key: str, d: dict, row: Optional[NotificationTemplate]) -> NotificationTemplateOut:
+    return NotificationTemplateOut(
+        event_key=key,
+        label=d.get("label", key),
+        description=d.get("description", ""),
+        macros=d.get("macros", []),
+        subject=(row.subject if (row and (row.subject or "").strip()) else d.get("subject", "")),
+        body=(row.body if (row and (row.body or "").strip()) else d.get("body", "")),
+        enabled=(bool(row.enabled) if row else True),
+        is_custom=bool(row),
+        default_subject=d.get("subject", ""),
+        default_body=d.get("body", ""),
+    )
+
+
+@router.get("/notifications", response_model=list[NotificationTemplateOut])
+def list_notification_templates(
+    _: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+):
+    from services.notifications import EVENTS
+    rows = {r.event_key: r for r in session.exec(select(NotificationTemplate)).all()}
+    return [_tpl_out(key, d, rows.get(key)) for key, d in EVENTS.items()]
+
+
+@router.put("/notifications/{event_key}", response_model=NotificationTemplateOut)
+def save_notification_template(
+    event_key: str,
+    data: NotificationTemplateIn,
+    current_user: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+):
+    from services.notifications import EVENTS
+    d = EVENTS.get(event_key)
+    if not d:
+        raise HTTPException(404, "Nieznane zdarzenie powiadomienia.")
+    row = session.get(NotificationTemplate, event_key) or NotificationTemplate(event_key=event_key)
+    row.subject = (data.subject or "").strip()
+    row.body = data.body or ""
+    row.enabled = bool(data.enabled)
+    row.updated_at = datetime.utcnow()
+    row.updated_by_user_id = current_user.id
+    session.add(row); session.commit(); session.refresh(row)
+    return _tpl_out(event_key, d, row)
+
+
+@router.delete("/notifications/{event_key}", response_model=NotificationTemplateOut)
+def reset_notification_template(
+    event_key: str,
+    _: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+):
+    """Przywróć domyślną treść (usuń nadpisanie)."""
+    from services.notifications import EVENTS
+    d = EVENTS.get(event_key)
+    if not d:
+        raise HTTPException(404, "Nieznane zdarzenie powiadomienia.")
+    row = session.get(NotificationTemplate, event_key)
+    if row:
+        session.delete(row); session.commit()
+    return _tpl_out(event_key, d, None)
+
+
+@router.post("/notifications/{event_key}/test")
+def test_notification_template(
+    event_key: str,
+    current_user: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+):
+    """Wyślij podgląd powiadomienia (na przykładowych danych) na adres
+    zalogowanego administratora, żeby ocenić wygląd treści."""
+    from services.notifications import EVENTS, render
+    if event_key not in EVENTS:
+        raise HTTPException(404, "Nieznane zdarzenie powiadomienia.")
+    to = (current_user.email or "").strip()
+    if not to:
+        raise HTTPException(400, "Twoje konto nie ma adresu e-mail — ustaw go, aby wysłać test.")
+    sample = {
+        "request_id": 123, "worker_name": "Jan Testowy",
+        "dept_name": "INF", "unit_name": "UM",
+        "created_by": "Kadry", "selector_name": "Kierownik INF",
+        "manager_name": "Naczelnik", "comment": "(przykładowy powód)",
+        "what": "nadanie uprawnień", "applicant": "kierownik@wods.pl",
+        "applicant_line": "Wnioskodawca: kierownik@wods.pl\n",
+        "stage_label": "Akceptacja kierownika", "action_hint": "Zatwierdź albo odrzuć wniosek.",
+        "denied_block": "", "denied_suffix": "",
+    }
+    subject, body, _enabled = render(event_key, sample)
+    from services.email_alerts import _send
+    try:
+        _send(to, f"[TEST] {subject}", body, raise_errors=True)
+    except Exception as exc:
+        raise HTTPException(400, f"Nie udało się wysłać testu: {exc}")
+    return {"ok": True, "sent_to": to}
 
 
 @router.get("/ldap", response_model=LdapSettingsRead)

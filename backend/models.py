@@ -155,6 +155,9 @@ class Department(SQLModel, table=True):
     # True → wnioski na ten wydział wymagają wyboru uprawnień przez kierownika
     # wydziału i osobnej akceptacji przez kierownika wydziału nadrzędnego (2-stopniowo).
     requires_higher_approval: bool = Field(default=False)
+    # True → komórka KADROWA. Jej pracownicy mogą zgłaszać nowych pracowników
+    # i ustania (rola HR z automatu, bez przydzielania roli per osoba).
+    is_hr: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     ldap_dn: Optional[str] = Field(default=None, index=True)   # znormalizowany DN z AD
 
@@ -275,6 +278,12 @@ class SystemPermission(SQLModel, table=True):
     # wartość). Puste = grupa bez ustawionej kolejności → ląduje alfabetycznie
     # za grupami uporządkowanymi. Ustawiane przyciskami ↑/↓ w rejestrze.
     group_order: Optional[int] = Field(default=None, index=True)
+    # Podgrupa WEWNĄTRZ grupy, np. grupa „Rejestry opłat" → podgrupa „Odpady".
+    # Puste = pozycja leży bezpośrednio w grupie (bez podgrupy). Hierarchia na
+    # wniosku i w rejestrze: Program → Grupa → Podgrupa → Uprawnienie.
+    subgroup_name: Optional[str] = Field(default=None, index=True)
+    # Kolejność PODGRUPY w obrębie grupy (analogicznie do group_order).
+    subgroup_order: Optional[int] = Field(default=None, index=True)
     # Symbol/kod z systemu źródłowego (np. „ADA") — klucz dopasowania przy
     # ponownym imporcie, gdy nazwa opisowa się zmieni.
     external_code: Optional[str] = None
@@ -292,6 +301,9 @@ class SystemPermission(SQLModel, table=True):
     input_type: str = Field(default="none")
     options: Optional[str] = None          # JSON: lista opcji dla radio/select/multiselect
     input_required: bool = Field(default=False)
+    # Podpowiedź przy polu — co dokładnie wnioskujący ma wpisać/wybrać. Pokazuje
+    # się po zaznaczeniu uprawnienia (np. „Podaj login AD, np. jan.kowalski").
+    input_prompt: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -401,6 +413,22 @@ class EmailSettings(SQLModel, table=True):
     # Prezentuj powiadomienie jako wysłane przez osobę, która wywołała zdarzenie
     # (nagłówek From = adres aktora). Koperta SMTP zostaje uwierzytelniona.
     sender_as_actor: bool = Field(default=True)
+
+
+# ---------------------------------------------------------------------------
+# Szablony powiadomień — edytowalna treść (temat + treść) z makrami.
+# Jeden rekord na typ zdarzenia (event_key). Brak rekordu = używany domyślny
+# szablon z kodu (services/notifications.py).
+# ---------------------------------------------------------------------------
+
+class NotificationTemplate(SQLModel, table=True):
+    # Klucz zdarzenia, np. "request_completed" — zgodny z rejestrem EVENTS.
+    event_key: str = Field(primary_key=True)
+    subject: str = Field(default="")
+    body: str = Field(default="")
+    enabled: bool = Field(default=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_by_user_id: Optional[int] = Field(default=None, foreign_key="user.id")
 
 
 # ---------------------------------------------------------------------------

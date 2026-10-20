@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { listSystems, listPermissions } from '../api'
 import PermInput, {
   permInput, splitAdminPerm, AdminPermRow,
-  groupPerms, isPermVisible, PermGroupSection, SystemBlock, isScopeGated,
+  groupPerms, subgroupPerms, isPermVisible, PermGroupSection, SystemBlock, isScopeGated,
 } from './ItemFields'
 
 /**
@@ -114,6 +114,7 @@ export default function AddPermissionsPicker({
               <AdminPermRow
                 perm={admin} checked={picked.has(adminKey)} indent={0}
                 onToggle={() => onTogglePerm(s.id, admin.id)}
+                disabled={!!key && !picked.has(key) && !(adminKey && picked.has(adminKey))}
               />
             </SystemBlock>
           )
@@ -168,36 +169,50 @@ export default function AddPermissionsPicker({
                     onQuery={v => setGroupQuery(x => ({ ...x, [gkey]: v }))}
                     onToggleAll={() => toggleGroup(visible.map(p => `${s.id}:${p.id}`))}
                   >
-                  {visible.map(p => {
-                const key = `${s.id}:${p.id}`
-                return (
-                  <div key={p.id}>
-                    <label style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      fontSize: 12, cursor: 'pointer',
-                    }}>
-                      <input type="checkbox" checked={picked.has(key)}
-                             onChange={() => onTogglePerm(s.id, p.id)} />
-                      <span>{p.permission_name}</span>
-                      {p.description && (
-                        <span style={{ color: 'var(--color-text-muted)' }}>— {p.description}</span>
+                  {subgroupPerms(visible).map(({ subgroup, items: subItems }) => (
+                    <div key={subgroup || '_nosub'}>
+                      {subgroup && (
+                        <div style={{
+                          fontSize: 11, fontStyle: 'italic', color: 'var(--color-text-muted)',
+                          margin: '4px 0 2px 2px', letterSpacing: '.02em',
+                        }}>
+                          ↳ {subgroup}
+                        </div>
                       )}
-                    </label>
-                    <PermInput
-                      input={permInput(p)} name={p.permission_name} compact
-                      show={picked.has(key)}
-                      values={fieldValues[key] || {}}
-                      onChange={(label, v) => onFieldChange(key, label, v)}
-                    />
-                  </div>
-                )
-                  })}
+                      {subItems.map(p => {
+                        const key = `${s.id}:${p.id}`
+                        return (
+                          <div key={p.id} style={subgroup ? { marginLeft: 12 } : undefined}>
+                            <label style={{
+                              display: 'flex', alignItems: 'center', gap: 8,
+                              fontSize: 12, cursor: 'pointer',
+                            }}>
+                              <input type="checkbox" checked={picked.has(key)}
+                                     onChange={() => onTogglePerm(s.id, p.id)} />
+                              <span>{p.permission_name}</span>
+                              {p.description && (
+                                <span style={{ color: 'var(--color-text-muted)' }}>— {p.description}</span>
+                              )}
+                            </label>
+                            <PermInput
+                              input={permInput(p)} name={p.permission_name} compact
+                              show={picked.has(key)}
+                              values={fieldValues[key] || {}}
+                              onChange={(label, v) => onFieldChange(key, label, v)}
+                            />
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ))}
                   </PermGroupSection>
                 )
               })}
               <AdminPermRow
                 perm={admin} checked={picked.has(adminKey)} indent={0}
                 onToggle={() => onTogglePerm(s.id, admin.id)}
+                disabled={!(selHere > 0 || (gated && openSys.has(s.id)))
+                          && !(adminKey && picked.has(adminKey))}
               />
             </div>
           </SystemBlock>

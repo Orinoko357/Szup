@@ -554,11 +554,14 @@ class PermCreate(BaseModel):
     # Grupa, do której trafia uprawnienie. Cała logika panelu opiera się o grupy,
     # więc pozycje dodaje się WEWNĄTRZ grupy. Puste = bez grupy (pozycja luźna).
     group_name: Optional[str] = None
+    # Podgrupa wewnątrz grupy (opcjonalnie). Puste = bezpośrednio w grupie.
+    subgroup_name: Optional[str] = None
     # Kontrolka doprecyzowująca uprawnienie (lista / pole). Domyślnie brak —
     # uprawnienie jest wtedy zwykłym checkboxem, jak pozycje z importu.
     input_type: str = "none"
     options: list[str] = []
     input_required: bool = False
+    input_prompt: Optional[str] = None
 
 
 class PermRead(BaseModel):
@@ -573,12 +576,16 @@ class PermRead(BaseModel):
     # Grupa uprawnień (np. „Rejestry opłat") — front renderuje sekcje.
     group_name: Optional[str] = None
     group_order: Optional[int] = None
+    # Podgrupa wewnątrz grupy — drugi poziom sekcji.
+    subgroup_name: Optional[str] = None
+    subgroup_order: Optional[int] = None
     external_code: Optional[str] = None
     # False = pozycja wycofana ze źródła; zostaje w ewidencji, znika z wyboru.
     is_active: bool = True
     input_type: str = "none"
     options: list[str] = []
     input_required: bool = False
+    input_prompt: Optional[str] = None
 
 
 def _perm_read(p: SystemPermission) -> "PermRead":
@@ -589,11 +596,14 @@ def _perm_read(p: SystemPermission) -> "PermRead":
         is_access_only=(p.permission_name == ACCESS_PERM_NAME),
         group_name=getattr(p, "group_name", None),
         group_order=getattr(p, "group_order", None),
+        subgroup_name=getattr(p, "subgroup_name", None),
+        subgroup_order=getattr(p, "subgroup_order", None),
         external_code=getattr(p, "external_code", None),
         is_active=bool(getattr(p, "is_active", True)),
         input_type=getattr(p, "input_type", None) or "none",
         options=_parse_options(getattr(p, "options", None)),
         input_required=bool(getattr(p, "input_required", False)),
+        input_prompt=getattr(p, "input_prompt", None),
     )
 
 
@@ -603,9 +613,12 @@ class PermUpdate(BaseModel):
     # Przeniesienie pozycji między grupami (albo wyjęcie z grupy). Pusty string
     # = bez grupy; None (pole pominięte) = grupa bez zmian.
     group_name: Optional[str] = None
+    # Przypisanie / zmiana podgrupy. Pusty string = bez podgrupy; None = bez zmian.
+    subgroup_name: Optional[str] = None
     input_type: Optional[str] = None
     options: Optional[list[str]] = None
     input_required: Optional[bool] = None
+    input_prompt: Optional[str] = None
 
 
 @router.get("/{system_id}/permissions", response_model=list[PermRead])
@@ -660,9 +673,11 @@ def create_permission(
         permission_name=data.permission_name,
         description=data.description,
         group_name=(data.group_name or "").strip() or None,
+        subgroup_name=(data.subgroup_name or "").strip() or None,
         input_type=itype,
         options=iopts,
         input_required=bool(data.input_required),
+        input_prompt=(data.input_prompt or "").strip() or None,
     )
     session.add(p); session.commit(); session.refresh(p)
     return _perm_read(p)
@@ -757,13 +772,15 @@ def copy_permissions(
             system_id=target.id,
             permission_name=p.permission_name,
             description=p.description,
-            # Kopia zachowuje podział na grupy i kontrolki — inaczej wzorzec
-            # rozsypałby się w płaską listę samych checkboxów.
+            # Kopia zachowuje podział na grupy, podgrupy i kontrolki — inaczej
+            # wzorzec rozsypałby się w płaską listę samych checkboxów.
             group_name=getattr(p, "group_name", None),
+            subgroup_name=getattr(p, "subgroup_name", None),
             external_code=getattr(p, "external_code", None),
             input_type=getattr(p, "input_type", None) or "none",
             options=getattr(p, "options", None),
             input_required=bool(getattr(p, "input_required", False)),
+            input_prompt=getattr(p, "input_prompt", None),
         ))
         copied += 1
         details.append(f'skopiowano uprawnienie „{p.permission_name}"')
@@ -846,10 +863,12 @@ def copy_permission_group(
             permission_name=p.permission_name,
             description=p.description,
             group_name=tgt_group,
+            subgroup_name=getattr(p, "subgroup_name", None),
             external_code=getattr(p, "external_code", None),
             input_type=getattr(p, "input_type", None) or "none",
             options=getattr(p, "options", None),
             input_required=bool(getattr(p, "input_required", False)),
+            input_prompt=getattr(p, "input_prompt", None),
         ))
         copied += 1
     session.commit()
@@ -886,6 +905,10 @@ def update_permission(
     # inaczej groupPerms i endpointy grupowe traktowałyby ją niespójnie).
     if "group_name" in payload:
         payload["group_name"] = (payload["group_name"] or "").strip() or None
+    if "subgroup_name" in payload:
+        payload["subgroup_name"] = (payload["subgroup_name"] or "").strip() or None
+    if "input_prompt" in payload:
+        payload["input_prompt"] = (payload["input_prompt"] or "").strip() or None
     for field, value in payload.items():
         setattr(p, field, value)
     session.add(p); session.commit(); session.refresh(p)
@@ -1277,6 +1300,45 @@ def set_group_state(
     return ImportCommitOut(
         added=0, reactivated=changed if data.is_active else 0, updated=0,
         deactivated=changed if not data.is_active else 0, skipped=0, details=[])
+
+
+class SubgroupAssignIn(BaseModel):
+    permission_ids: list[int]
+    # Pusty/None = wyjmij zaznaczone z podgrupy (zostają bezpośrednio w grupie).
+    subgroup_name: Optional[str] = None
+
+
+@router.post("/{system_id}/permissions/subgroup-assign", response_model=ImportCommitOut)
+def assign_subgroup(
+    system_id: int,
+    data: SubgroupAssignIn,
+    session: Session = Depends(get_session),
+    _: User = Depends(require_it_staff),
+):
+    """Masowo przypisz zaznaczone uprawnienia do podgrupy (albo wyjmij z niej).
+    Pozycja administratora jest pomijana — nie wchodzi do podgrup."""
+    sg = (data.subgroup_name or "").strip() or None
+    ids = [int(i) for i in (data.permission_ids or [])]
+    if not ids:
+        return ImportCommitOut(added=0, reactivated=0, updated=0,
+                               deactivated=0, skipped=0, details=[])
+    rows = session.exec(
+        select(SystemPermission)
+        .where(SystemPermission.system_id == system_id)
+        .where(SystemPermission.id.in_(ids))
+    ).all()
+    changed = 0
+    for p in rows:
+        if p.permission_name == ADMIN_PERM_NAME:
+            continue
+        if getattr(p, "subgroup_name", None) == sg:
+            continue
+        p.subgroup_name = sg
+        session.add(p)
+        changed += 1
+    session.commit()
+    return ImportCommitOut(added=0, reactivated=0, updated=changed,
+                           deactivated=0, skipped=0, details=[])
 
 
 class GroupOrderIn(BaseModel):

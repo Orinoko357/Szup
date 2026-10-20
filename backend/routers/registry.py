@@ -49,9 +49,12 @@ def _rows(session: Session, *, unit_id=None, system_id=None, q=None,
         select(RequestItem, AccessRequest)
         .join(AccessRequest, col(RequestItem.request_id) == col(AccessRequest.id))
         .where(RequestItem.kind == "grant")
-        # Pozycje odmówione (przez kierownika nadrzędnego / IT) nie zostały
-        # nadane — nie wchodzą do rejestru nadanych uprawnień.
-        .where(col(RequestItem.denied) == False)  # noqa: E712
+        # Do rejestru trafiają WYŁĄCZNIE pozycje faktycznie zrealizowane przez IT
+        # (odhaczone na etapie realizacji). Dzięki temu nie pokazujemy pozycji,
+        # które dopiero czekają na realizację ani odmówionych (odmowa czyści
+        # `fulfilled`). Finalne „Realizuj" odhacza wszystkie nieodmówione pozycje.
+        .where(col(RequestItem.fulfilled) == True)   # noqa: E712
+        .where(col(RequestItem.denied) == False)     # noqa: E712
         .where(col(AccessRequest.status).in_(_GRANTED_STATUSES))
     )
     if unit_id:
@@ -117,6 +120,7 @@ def _rows(session: Session, *, unit_id=None, system_id=None, q=None,
             "system_name": sysrow.name if sysrow else None,
             "permission_name": perm.permission_name if perm else None,
             "group_name": getattr(perm, "group_name", None) if perm else None,
+            "subgroup_name": getattr(perm, "subgroup_name", None) if perm else None,
             "custom_values": vals,
             "granted_at": (req.completed_at or req.approved_at or req.created_at),
             "request_status": req.status.value if hasattr(req.status, "value") else req.status,
@@ -173,7 +177,7 @@ def granted_registry_csv(
     buf.write("﻿")  # BOM — Excel poprawnie odczyta UTF-8
     w = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_MINIMAL)
     w.writerow(["Nr wniosku", "Pracownik", "Jednostka", "Wydział", "System",
-                "Uprawnienie", "Grupa", "Zakres", "Data nadania", "Status",
+                "Uprawnienie", "Grupa", "Podgrupa", "Zakres", "Data nadania", "Status",
                 "Oświadczenie — osoba", "Oświadczenie — data", "Kod"])
     for r in rows:
         zakres = "; ".join(f"{k}: {v}" for k, v in (r["custom_values"] or {}).items())
@@ -181,7 +185,8 @@ def granted_registry_csv(
         w.writerow([
             r["request_id"], r["worker_name"], r["unit_name"] or "",
             r["department_name"] or "", r["system_name"] or "",
-            r["permission_name"] or "", r["group_name"] or "", zakres,
+            r["permission_name"] or "", r["group_name"] or "",
+            r["subgroup_name"] or "", zakres,
             granted.isoformat() if hasattr(granted, "isoformat") else (granted or ""),
             r["request_status"] or "",
             r["declared_by_name"] or "", r["declared_date"] or "",

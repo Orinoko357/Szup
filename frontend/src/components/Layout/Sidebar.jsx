@@ -15,7 +15,7 @@ const navSections = [
       // przekierowania "/" robi App.jsx.
       { to: '/',         icon: LayoutDashboard, label: 'Pulpit',         roles: ['superadmin','admin','manager','it_staff'] },
       { to: '/hr',       icon: FolderOpen,      label: 'Kartoteka',      roles: ['hr'] },
-      { to: '/manager',  icon: CheckSquare,     label: 'Moje wnioski',   roles: ['manager'] },
+      { to: '/manager',  icon: CheckSquare,     label: 'Wnioski',        roles: ['manager'] },
       { to: '/my-team',  icon: UserCheck,       label: 'Moi pracownicy', roles: ['manager'] },
       { to: '/structure',icon: Network,         label: 'Moja struktura', roles: ['manager'] },
       { to: '/it',       icon: Wrench,          label: 'Do realizacji',  roles: ['it_staff'] },

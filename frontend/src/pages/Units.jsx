@@ -9,7 +9,7 @@ import {
   listUsers, ldapPreviewUnits, ldapImportUnits,
   ldapPreviewUsers, ldapImportUsers,
   listDeputies, addDeputy, updateDeputy, deleteDeputy,
-  autoAssignManagers, dedupeDepartments,
+  dedupeDepartments,
 } from '../api'
 
 // Typy węzłów struktury organizacyjnej (zsynchronizowane z backend: models.DEPARTMENT_KINDS)
@@ -41,7 +41,6 @@ export default function Units() {
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [showLdapImport, setShowLdapImport] = useState(false)
-  const [showLdapUsersImport, setShowLdapUsersImport] = useState(false)
 
   async function load() {
     setLoading(true)
@@ -54,28 +53,6 @@ export default function Units() {
   }
 
   useEffect(() => { load() }, [])
-
-  const [autoBusy, setAutoBusy] = useState(false)
-  async function runAutoManagers() {
-    if (!confirm('Przypisać kierowników komórek na podstawie stanowiska z AD '
-      + '(„kierownik", „dyrektor", „naczelnik")?\n\n'
-      + 'Uzupełnione zostaną tylko komórki BEZ kierownika; przy kilku kandydatach '
-      + 'komórka zostaje do ręcznej decyzji. Najpierw zaimportuj użytkowników z AD '
-      + '(stanowiska pobierają się przy imporcie).')) return
-    setAutoBusy(true)
-    try {
-      const r = await autoAssignManagers({})
-      const d = r.data
-      alert(`Przypisano: ${d.assigned}\n`
-        + `Pominięto (mają już kierownika): ${d.skipped_has_manager}\n`
-        + `Niejednoznaczne (kilku kandydatów): ${d.ambiguous}\n`
-        + `Bez kandydata: ${d.no_candidate}`
-        + (d.details.length ? `\n\n${d.details.join('\n')}` : ''))
-      load()
-    } catch (ex) {
-      alert(ex.response?.data?.detail || 'Nie udało się przypisać kierowników')
-    } finally { setAutoBusy(false) }
-  }
 
   const [dedupeBusy, setDedupeBusy] = useState(false)
   async function runDedupe() {
@@ -106,13 +83,6 @@ export default function Units() {
           <button className="btn btn--action btn--sm" onClick={() => setShowLdapImport(true)}>
             <Download size={13} /> Importuj strukturę z AD
           </button>
-          <button className="btn btn--action btn--sm" onClick={() => setShowLdapUsersImport(true)}>
-            <Users size={13} /> Importuj użytkowników z AD
-          </button>
-          <button className="btn btn--ghost btn--sm" onClick={runAutoManagers} disabled={autoBusy}
-                  title="Przypisz kierowników komórek wg stanowiska z AD (kierownik/dyrektor/naczelnik)">
-            <UserCog size={13} /> {autoBusy ? 'Przypisywanie…' : 'Kierownicy wg stanowiska'}
-          </button>
           <button className="btn btn--ghost btn--sm" onClick={runDedupe} disabled={dedupeBusy}
                   title="Usuń zduplikowane komórki powstałe przy ponownym imporcie struktury">
             <Trash2 size={13} /> {dedupeBusy ? 'Czyszczenie…' : 'Usuń duplikaty'}
@@ -122,9 +92,6 @@ export default function Units() {
 
       {showLdapImport && (
         <LdapImportModal onClose={() => { setShowLdapImport(false); load() }} />
-      )}
-      {showLdapUsersImport && (
-        <LdapUsersImportModal onClose={() => { setShowLdapUsersImport(false); load() }} />
       )}
       {loading && units.length === 0 ? (
         <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
@@ -231,14 +198,14 @@ function UnitAccordion({ unit: u, depts, users, onChanged }) {
           </div>
 
           <table className="data-table" style={{ marginBottom: 16 }}>
-            <thead><tr><th>Nazwa</th><th>Typ</th><th>Kierownik</th><th>Aktywny</th><th title="Wymaga zatwierdzenia kierownika wydziału nadrzędnego">Wyższa akcept.</th><th></th></tr></thead>
+            <thead><tr><th>Nazwa</th><th>Typ</th><th>Kierownik</th><th>Aktywny</th><th title="Wymaga zatwierdzenia kierownika wydziału nadrzędnego">Wyższa akcept.</th><th title="Komórka kadrowa — jej pracownicy mogą zgłaszać nowych pracowników i ustania">Kadry</th><th></th></tr></thead>
             <tbody>
               {flattenDeptTree(depts).map(({ dept: d, depth }) => (
                 <DeptRow key={d.id} dept={d} depth={depth} users={users}
                          unitId={u.id} unitDepts={depts} onChanged={onChanged} />
               ))}
               {depts.length === 0 && (
-                <tr><td colSpan={6} style={{ color: 'var(--color-text-muted)', padding: '10px 12px' }}>Brak wydziałów</td></tr>
+                <tr><td colSpan={7} style={{ color: 'var(--color-text-muted)', padding: '10px 12px' }}>Brak wydziałów</td></tr>
               )}
             </tbody>
           </table>
@@ -307,6 +274,7 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
   const [managerId, setManagerId] = useState(d.manager_user_id || '')
   const [isActive, setIsActive]   = useState(d.is_active)
   const [higher, setHigher]       = useState(!!d.requires_higher_approval)
+  const [isHr, setIsHr]           = useState(!!d.is_hr)
 
   async function save() {
     try {
@@ -317,6 +285,7 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
         manager_user_id: managerId ? Number(managerId) : null,
         is_active: isActive,
         requires_higher_approval: higher,
+        is_hr: isHr,
       })
       setEditing(false); onChanged()
     } catch (ex) { alert(ex.response?.data?.detail || 'Błąd zapisu') }
@@ -403,6 +372,10 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
           <input type="checkbox" checked={higher} onChange={e => setHigher(e.target.checked)}
                  title="Wnioski wymagają zatwierdzenia kierownika wydziału nadrzędnego (tryb 2-stopniowy)" />
         </td>
+        <td>
+          <input type="checkbox" checked={isHr} onChange={e => setIsHr(e.target.checked)}
+                 title="Komórka kadrowa — jej pracownicy mogą zgłaszać nowych pracowników i ustania bez przydzielania roli HR" />
+        </td>
         <td style={{ whiteSpace: 'nowrap' }}>
           <button className="btn btn--primary btn--sm" onClick={save}>Zapisz</button>
           <button className="btn btn--ghost btn--sm" style={{ marginLeft: 4 }}
@@ -410,6 +383,7 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
                     setEditing(false); setName(d.name); setKind(d.kind || 'department')
                     setParentId(d.parent_dept_id || ''); setManagerId(d.manager_user_id||'')
                     setIsActive(d.is_active); setHigher(!!d.requires_higher_approval)
+                    setIsHr(!!d.is_hr)
                   }}>Anuluj</button>
         </td>
       </tr>
@@ -437,6 +411,11 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
       <td>
         {d.requires_higher_approval
           ? <span className="badge badge--info" style={{ fontSize: 10 }} title="Wnioski wymagają akceptacji kierownika wydziału nadrzędnego">2-stopniowo</span>
+          : <span style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>—</span>}
+      </td>
+      <td>
+        {d.is_hr
+          ? <span className="badge badge--warning" style={{ fontSize: 10 }} title="Komórka kadrowa — jej pracownicy zgłaszają nowych pracowników i ustania">kadry</span>
           : <span style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>—</span>}
       </td>
       <td style={{ whiteSpace: 'nowrap' }}>
@@ -924,7 +903,7 @@ function LdapImportModal({ onClose }) {
 // Import użytkowników z Active Directory
 // ---------------------------------------------------------------------------
 
-function LdapUsersImportModal({ onClose }) {
+export function LdapUsersImportModal({ onClose }) {
   const [searchBase, setSearchBase] = useState('')
   const [step, setStep]             = useState('input')
   const [users, setUsers]           = useState([])
@@ -933,13 +912,17 @@ function LdapUsersImportModal({ onClose }) {
   const [err, setErr]               = useState(null)
   const [result, setResult]         = useState(null)
   const [query, setQuery]           = useState('')
+  // Wybór jednostek najwyższego rzędu do pobrania (null = wszystkie, ustawiane po podglądzie).
+  const [selectedUnits, setSelectedUnits] = useState(null)   // Set<number> | null (klucz: unit_id, 0 = bez jednostki)
+
+  function importable(u) {
+    // Importowalny = w powiązanej strukturze OU, nie w konflikcie, aktywny w AD, nie duplikat.
+    return u.in_structure && u.status !== 'conflict' && u.is_enabled_in_ad && !u.duplicate
+  }
 
   function initSelected(data) {
     const s = {}
-    for (const u of data) {
-      // domyślnie zaznacz tylko te, które mają zmapowany wydział i nie są w konflikcie
-      s[u.username] = u.status !== 'conflict' && !!u.department_id && u.is_enabled_in_ad && !u.duplicate
-    }
+    for (const u of data) s[u.username] = importable(u)
     return s
   }
 
@@ -950,6 +933,9 @@ function LdapUsersImportModal({ onClose }) {
       if (!r.data.length) { setErr('Nie znaleziono użytkowników pod podanym DN.'); setBusy(false); return }
       setUsers(r.data)
       setSelected(initSelected(r.data))
+      // Domyślnie zaznacz wszystkie jednostki najwyższego rzędu obecne w podglądzie.
+      setSelectedUnits(new Set(
+        r.data.filter(u => u.in_structure).map(u => u.unit_id ?? 0)))
       setStep('preview')
     } catch (ex) {
       setErr(ex.response?.data?.detail || 'Błąd połączenia z LDAP')
@@ -959,8 +945,7 @@ function LdapUsersImportModal({ onClose }) {
   async function doImport() {
     setBusy(true); setErr(null); setStep('importing')
     const usernames = users
-      .filter(u => selected[u.username] && u.status !== 'conflict'
-                   && u.is_enabled_in_ad && !u.duplicate)
+      .filter(u => selected[u.username] && importable(u) && inSelectedUnit(u))
       .map(u => u.username)
     try {
       const r = await ldapImportUsers(usernames, searchBase || null)
@@ -976,12 +961,18 @@ function LdapUsersImportModal({ onClose }) {
     setSelected(prev => ({ ...prev, [username]: !prev[username] }))
   }
 
+  function toggleUnit(key) {
+    setSelectedUnits(prev => {
+      const n = new Set(prev || [])
+      n.has(key) ? n.delete(key) : n.add(key)
+      return n
+    })
+  }
+
   function selectAllMapped() {
     setSelected(prev => {
       const s = { ...prev }
-      for (const u of visibleUsers) {
-        s[u.username] = u.status !== 'conflict' && !!u.department_id && u.is_enabled_in_ad && !u.duplicate
-      }
+      for (const u of visibleUsers) s[u.username] = importable(u)
       return s
     })
   }
@@ -998,8 +989,27 @@ function LdapUsersImportModal({ onClose }) {
   function ouKey(u) {
     return `${(u.unit_name || '\uffff').toLowerCase()}\u0001${(u.department_name || '\uffff').toLowerCase()}`
   }
+  // Czy użytkownik jest w zaznaczonej jednostce najwyższego rzędu.
+  const inSelectedUnit = u => !selectedUnits || selectedUnits.has(u.unit_id ?? 0)
+
+  // Jednostki najwyższego rzędu obecne w podglądzie — do checkboxów wyboru.
+  const unitChoices = (() => {
+    const m = new Map()
+    for (const u of users) {
+      if (!u.in_structure) continue
+      const k = u.unit_id ?? 0
+      if (!m.has(k)) m.set(k, { key: k, label: u.unit_name || '(bez jednostki nadrzędnej)', count: 0 })
+      m.get(k).count++
+    }
+    return [...m.values()].sort((a, b) => a.label.localeCompare(b.label, 'pl'))
+  })()
+
   const q = query.trim().toLowerCase()
   const visibleUsers = users
+    // Pokazujemy tylko osoby z powiązanych jednostek organizacyjnych —
+    // pozostałych nie da się zaimportować, więc nie zaśmiecamy nimi listy.
+    .filter(u => u.in_structure)
+    .filter(inSelectedUnit)
     .filter(u => {
       if (!q) return true
       return (
@@ -1019,11 +1029,15 @@ function LdapUsersImportModal({ onClose }) {
       return na < nb ? -1 : na > nb ? 1 : 0
     })
 
-  const selectedCount = Object.values(selected).filter(Boolean).length
-  const conflicts     = users.filter(u => u.status === 'conflict').length
-  const unmapped      = users.filter(u => !u.department_id && u.status !== 'conflict').length
-  const disabledCnt   = users.filter(u => !u.is_enabled_in_ad).length
-  const duplicateCnt  = users.filter(u => u.duplicate).length
+  // Liczba realnie importowalnych zaznaczonych (z uwzględnieniem wyboru jednostek).
+  const selectedCount = users.filter(
+    u => selected[u.username] && importable(u) && inSelectedUnit(u)).length
+  const inStructure   = users.filter(u => u.in_structure)
+  const outOfStruct   = users.length - inStructure.length
+  const conflicts     = inStructure.filter(u => u.status === 'conflict').length
+  const noDept        = inStructure.filter(u => !u.department_id && u.status !== 'conflict').length
+  const disabledCnt   = inStructure.filter(u => !u.is_enabled_in_ad).length
+  const duplicateCnt  = inStructure.filter(u => u.duplicate).length
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -1051,8 +1065,9 @@ function LdapUsersImportModal({ onClose }) {
                   onKeyDown={e => e.key === 'Enter' && !busy && fetchPreview()}
                 />
                 <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
-                  Użytkownicy są wiązani z wydziałem przez rodzicowski OU.
-                  Najpierw zaimportuj strukturę (inaczej wiązania nie będzie).
+                  <strong>Najpierw zaimportuj strukturę</strong> (jednostki organizacyjne) z AD.
+                  Importujemy wyłącznie osoby z powiązanych jednostek — reszta jest pomijana.
+                  Bez pobranej struktury import użytkowników jest zablokowany.
                 </div>
               </div>
               <button className="btn btn--primary btn--sm" onClick={fetchPreview} disabled={busy}>
@@ -1067,10 +1082,11 @@ function LdapUsersImportModal({ onClose }) {
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
                 <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
-                  Znaleziono {users.length} użytkowników
+                  W powiązanych jednostkach: {inStructure.length}
                   {query && <> · pokazano {visibleUsers.length}</>}
+                  {outOfStruct > 0 && <> · <strong>{outOfStruct}</strong> poza powiązaną strukturą (ukryte, nie do importu)</>}
                   {conflicts > 0 && <> · <span style={{ color: 'var(--color-danger)' }}>{conflicts} konflikt(ów) z kontami lokalnymi</span></>}
-                  {unmapped > 0  && <> · {unmapped} bez przypisanego wydziału</>}
+                  {noDept > 0  && <> · {noDept} bez konkretnego wydziału</>}
                   {disabledCnt > 0 && <> · {disabledCnt} wyłączonych w AD (pomijane)</>}
                   {duplicateCnt > 0 && <> · {duplicateCnt} duplikat(ów) loginu (pomijane)</>}
                 </span>
@@ -1079,6 +1095,35 @@ function LdapUsersImportModal({ onClose }) {
                   <button className="btn btn--ghost btn--sm" onClick={deselectAll}>Odznacz wszystkich</button>
                 </div>
               </div>
+
+              {unitChoices.length > 0 && (
+                <div style={{ border: '1px solid var(--border-color)', borderRadius: 6,
+                              padding: '8px 10px', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                    <strong style={{ fontSize: 12 }}>Jednostki najwyższego rzędu do pobrania:</strong>
+                    <button type="button" className="btn btn--ghost btn--sm" style={{ fontSize: 11 }}
+                            onClick={() => setSelectedUnits(new Set(unitChoices.map(c => c.key)))}>
+                      wszystkie
+                    </button>
+                    <button type="button" className="btn btn--ghost btn--sm" style={{ fontSize: 11 }}
+                            onClick={() => setSelectedUnits(new Set())}>
+                      żadne
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px' }}>
+                    {unitChoices.map(c => (
+                      <label key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 6,
+                                                   fontSize: 12, cursor: 'pointer' }}>
+                        <input type="checkbox"
+                               checked={!selectedUnits || selectedUnits.has(c.key)}
+                               onChange={() => toggleUnit(c.key)} />
+                        {c.label}
+                        <span className="badge badge--neutral" style={{ fontSize: 9 }}>{c.count}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div style={{ marginBottom: 8 }}>
                 <input

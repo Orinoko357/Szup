@@ -53,7 +53,20 @@ export default function PermissionChanges({ items = [], emptyText = 'Brak', deny
   )
 }
 
-// Pozycje → hierarchia Program → Grupa uprawnień → Uprawnienie.
+// Podział pozycji grupy na podgrupy (bez podgrupy = '' na początku).
+function splitSubgroups(items) {
+  const sm = new Map()
+  for (const it of items) {
+    const sg = it.subgroup_name || ''
+    if (!sm.has(sg)) sm.set(sg, [])
+    sm.get(sg).push(it)
+  }
+  return [...sm.entries()]
+    .sort(([a], [b]) => (a === '' ? -1 : b === '' ? 1 : a.localeCompare(b, 'pl')))
+    .map(([subgroup_name, sitems]) => ({ subgroup_name, items: sitems }))
+}
+
+// Pozycje → hierarchia Program → Grupa uprawnień → Podgrupa → Uprawnienie.
 function groupBySystemAndGroup(items) {
   const sysMap = new Map()   // system_name → Map(group_name → items[])
   for (const it of items) {
@@ -70,7 +83,7 @@ function groupBySystemAndGroup(items) {
       system_name,
       groups: [...gm.entries()]
         .sort(([a], [b]) => (a === '' ? -1 : b === '' ? 1 : a.localeCompare(b, 'pl')))
-        .map(([group_name, gitems]) => ({ group_name, items: gitems })),
+        .map(([group_name, gitems]) => ({ group_name, subgroups: splitSubgroups(gitems) })),
     }))
 }
 
@@ -232,9 +245,23 @@ function Group({ kind, items, deny, fulfill }) {
                   {g.group_name}
                 </div>
               )}
-              {g.items.map(it => (
-                <PermRow key={it.id ?? `${it.system_id}:${it.permission_id}`}
-                         it={it} isRevoke={isRevoke} deny={deny} fulfill={fulfill} />
+              {g.subgroups.map(sg => (
+                <div key={sg.subgroup_name || '_nosub'}>
+                  {sg.subgroup_name && (
+                    <div style={{
+                      padding: '3px 12px 3px 40px', fontSize: 10.5,
+                      letterSpacing: '.02em', fontStyle: 'italic',
+                      color: 'var(--color-text-muted)', background: 'var(--bg-primary)',
+                      borderTop: '0.5px solid var(--color-border)',
+                    }}>
+                      ↳ {sg.subgroup_name}
+                    </div>
+                  )}
+                  {sg.items.map(it => (
+                    <PermRow key={it.id ?? `${it.system_id}:${it.permission_id}`}
+                             it={it} isRevoke={isRevoke} deny={deny} fulfill={fulfill} />
+                  ))}
+                </div>
               ))}
             </div>
           ))}
