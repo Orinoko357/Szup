@@ -361,13 +361,43 @@ def users_by_department(
             raise HTTPException(status.HTTP_403_FORBIDDEN,
                 "Brak dostępu do pracowników tej komórki")
 
+    # Komórki nadrzędne często nie mają bezpośrednich pracowników — ludzie siedzą
+    # w podkomórkach. Dla wygody zbieramy pracowników wybranej komórki ORAZ
+    # wszystkich komórek pod nią (po `parent_dept_id`).
+    all_depts = session.exec(select(Department)).all()
+    children_of: dict[int, list[int]] = {}
+    for d in all_depts:
+        if d.parent_dept_id is not None:
+            children_of.setdefault(d.parent_dept_id, []).append(d.id)
+    subtree_ids: list[int] = []
+    stack = [department_id]
+    seen = set()
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        subtree_ids.append(cur)
+        stack.extend(children_of.get(cur, []))
+
+    # Zakres: dla kierownika ogranicz podkomórki do tych, którymi faktycznie
+    # zarządza (bezpieczeństwo); HR (zakres po jednostce) i superadmin — całe poddrzewo.
+    if not has_role(current_user, "superadmin") and has_role(current_user, "manager") \
+            and not hr_cap:
+        direct_ids, escalated_ids = managed_dept_ids(session, current_user)
+        managed = {*direct_ids, *escalated_ids}
+        subtree_ids = [d for d in subtree_ids if d in managed]
+
+    dept_by_id = {d.id: d for d in all_depts}
     users = session.exec(
-        select(User).where(User.department_id == department_id)
+        select(User).where(User.department_id.in_(subtree_ids))
         .where(User.is_active == True)  # noqa: E712
     ).all()
     users.sort(key=lambda x: (x.full_name or x.username or "").lower())
     return [
-        {"id": u.id, "full_name": u.full_name, "username": u.username, "email": u.email}
+        {"id": u.id, "full_name": u.full_name, "username": u.username, "email": u.email,
+         "department_id": u.department_id,
+         "department_name": dept_by_id.get(u.department_id).name if u.department_id in dept_by_id else None}
         for u in users
     ]
 

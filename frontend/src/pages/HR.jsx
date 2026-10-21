@@ -383,9 +383,15 @@ function TerminationFormView({ onCancel, onCreated }) {
         unit_id: picked.unit_id, department_id: picked.department_id,
         unit_name: picked.unit_name, department_name: picked.department_name }
     : (selectedWorker && selectedDept
-        ? { id: selectedWorker.id, name: selectedWorker.full_name || selectedWorker.username,
-            unit_id: selectedDept.unit_id, department_id: selectedDept.id,
-            unit_name: selectedUnit?.name, department_name: selectedDept.name }
+        ? (() => {
+            // Pracownik może siedzieć w podkomórce wybranego węzła — zapisz jego
+            // RZECZYWISTĄ komórkę, nie zaznaczony węzeł nadrzędny.
+            const realDept = depts.find(d => d.id === selectedWorker.department_id) || selectedDept
+            const realUnit = units.find(u => u.id === realDept.unit_id) || selectedUnit
+            return { id: selectedWorker.id, name: selectedWorker.full_name || selectedWorker.username,
+                     unit_id: realDept.unit_id, department_id: realDept.id,
+                     unit_name: realUnit?.name, department_name: realDept.name }
+          })()
         : null)
 
   async function submit(e) {
@@ -561,7 +567,10 @@ function TerminationFormView({ onCancel, onCreated }) {
                                 </span>
                                 <span style={{ display: 'block', fontSize: 11, color: 'var(--color-text-muted)',
                                                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                  {w.username || '—'}{w.email ? ` · ${w.email}` : ''}
+                                  {w.username || '—'}
+                                  {w.department_name && w.department_name !== selectedDept?.name
+                                    ? ` · ${w.department_name}` : ''}
+                                  {w.email ? ` · ${w.email}` : ''}
                                 </span>
                               </span>
                             </label>
