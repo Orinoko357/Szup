@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SZUP — System Zarządzania Uprawnieniami</title>
+    <script>
+      // prevent flash of wrong theme
+      ;(function(){
+        var t = localStorage.getItem('szup_theme')
+        if (!t) t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        document.documentElement.setAttribute('data-theme', t)
+      })()
+    </script>
+    <script type="module" crossorigin src="/assets/index-Cn6cm77k.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Bgc6nXee.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

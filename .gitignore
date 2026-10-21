@@ -41,8 +41,10 @@ npm-debug.log*
 yarn-error.log*
 .vite/
 
-# Build frontu (artefakt — budowany przed wdrożeniem: `npm run build`)
-frontend/dist/
+# Build frontu — WERSJONOWANY, żeby `git pull` na serwerze przynosił gotowy
+# interfejs (serwer nie buduje, deploy.sh tylko kopiuje dist do webroot).
+# Pamiętaj: po zmianach we froncie zbuduj `npm run build` i zacommituj dist.
+# frontend/dist/
 
 # === System / edytor ===
 .DS_Store
