@@ -215,8 +215,7 @@ function RequestFormModal({ onClose, onCreated }) {
           </span>
           <button className="modal__close" onClick={onClose}>×</button>
         </div>
-        <form onSubmit={submit} className="modal__body"
-              style={{ minHeight: 'min(72vh, 560px)' }}>
+        <form onSubmit={submit} className="modal__body">
           <p style={{ color: 'var(--color-text-muted)', fontSize: 13, marginBottom: 16 }}>
             Zgłoś nowego pracownika. Wniosek trafi do kierownika jego komórki, który wybierze
             uprawnienia, a następnie do IT.
@@ -562,16 +561,15 @@ function DeptSearchSelect({ units, depts, value, onChange }) {
   }
 
   return (
-    <div ref={wrapRef} style={{ position: 'relative' }}>
+    <div ref={wrapRef}>
       <input className="form-control" value={query}
              placeholder="Wpisz fragment nazwy komórki lub jednostki…"
              onFocus={() => setOpen(true)} onChange={e => { setQuery(e.target.value); setOpen(true) }} />
       {open && (
         <div style={{
-          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20, marginTop: 4,
+          marginTop: 6,
           border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-card)',
-          boxShadow: 'var(--shadow-modal, 0 8px 24px rgba(0,0,0,0.18))',
-          maxHeight: 'min(46vh, 360px)', overflowY: 'auto',
+          maxHeight: 280, overflowY: 'auto',
         }}>
           {matches.length === 0 ? (
             <div style={{ padding: 12, fontSize: 13, color: 'var(--color-text-muted)' }}>
