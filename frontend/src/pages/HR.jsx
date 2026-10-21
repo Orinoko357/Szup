@@ -1,10 +1,37 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { FilePlus, UserMinus, ChevronDown, ChevronRight, Building2, Check } from 'lucide-react'
 import { listRequests, createRequest, listActiveDepts, listActiveUnits, listRequestTypes, usersByDepartment, searchUsers } from '../api'
 import { fmtDate } from '../serverTime'
 
 const KIND_BADGE = { grant: 'badge--info', revoke: 'badge--warning' }
 const KIND_LABEL = { grant: 'Zatrudnienie', revoke: 'Ustanie stosunku pracy' }
+
+// Mały nagłówek sekcji w oknach kadrowych — spójny, czytelny podział.
+function SectionLabel({ children }) {
+  return (
+    <div style={{
+      fontSize: 11, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase',
+      color: 'var(--color-text-muted)', margin: '2px 0 8px',
+    }}>
+      {children}
+    </div>
+  )
+}
+
+// Zielony chip z wybraną komórką (jednostka › komórka).
+function SelectedPlace({ unit, dept }) {
+  return (
+    <div style={{
+      display: 'inline-flex', alignItems: 'center', gap: 8, marginBottom: 8,
+      padding: '6px 12px', borderRadius: 999,
+      background: 'var(--color-success-bg)', border: '1px solid var(--color-success)',
+      fontSize: 13,
+    }}>
+      <Check size={14} style={{ color: 'var(--color-success)' }} />
+      <span><strong style={{ color: 'var(--color-navy)' }}>{unit || '?'}</strong> › {dept}</span>
+    </div>
+  )
+}
 
 const STATUS_LABELS = {
   pending_selection: 'Wybór uprawnień',
@@ -180,7 +207,7 @@ function RequestFormModal({ onClose, onCreated }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 620 }}>
+      <div className="modal" style={{ maxWidth: 'min(94vw, 680px)', width: '100%' }}>
         <div className="modal__header">
           <span className="modal__title">
             <FilePlus size={15} style={{ marginRight: 8, verticalAlign: 'middle' }} />
@@ -189,6 +216,11 @@ function RequestFormModal({ onClose, onCreated }) {
           <button className="modal__close" onClick={onClose}>×</button>
         </div>
         <form onSubmit={submit} className="modal__body">
+          <p style={{ color: 'var(--color-text-muted)', fontSize: 13, marginBottom: 16 }}>
+            Zgłoś nowego pracownika. Wniosek trafi do kierownika jego komórki, który wybierze
+            uprawnienia, a następnie do IT.
+          </p>
+          <SectionLabel>Dane pracownika</SectionLabel>
           <div className="form-row">
             <div className="form-group">
               <label className="form-label">Imię *</label>
@@ -215,22 +247,9 @@ function RequestFormModal({ onClose, onCreated }) {
                      onChange={e => setStartDate(e.target.value)} />
             </div>
           </div>
-          <div className="form-group">
-            <label className="form-label">Miejsce pracy *</label>
-            {selectedDept && (
-              <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 6 }}>
-                Wybrany: <strong style={{ color: 'var(--color-navy)' }}>
-                  {selectedUnit?.name || '?'} › {selectedDept.name}
-                </strong>
-              </div>
-            )}
-            <DepartmentPicker
-              units={units}
-              depts={depts}
-              selectedId={deptId}
-              onSelect={setDeptId}
-            />
-          </div>
+          <div style={{ height: 6 }} />
+          <SectionLabel>Miejsce pracy *</SectionLabel>
+          <DeptSearchSelect units={units} depts={depts} value={deptId} onChange={setDeptId} />
 
           {err && <div className="alert alert--error mt-4">{err}</div>}
         </form>
@@ -371,9 +390,10 @@ function TerminationFormModal({ onClose, onCreated }) {
             który wybierze uprawnienia do odebrania, a następnie do IT.
           </p>
 
+          <SectionLabel>Pracownik</SectionLabel>
           {/* Wyszukiwanie po nazwisku — najszybsza droga. */}
           <div className="form-group">
-            <label className="form-label">Znajdź pracownika (po nazwisku lub loginie)</label>
+            <label className="form-label">Znajdź po nazwisku lub loginie</label>
             {picked ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
                             padding: '9px 12px', border: '1px solid var(--color-success)',
@@ -424,17 +444,17 @@ function TerminationFormModal({ onClose, onCreated }) {
           {/* Alternatywnie: wybór komórki → pracownik z listy. */}
           {!picked && (
             <>
-              <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--color-text-muted)', margin: '4px 0 10px' }}>
-                — albo wybierz z komórki —
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '6px 0 12px' }}>
+                <div style={{ flex: 1, height: 1, background: 'var(--color-border)' }} />
+                <span style={{ fontSize: 11, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '.04em' }}>
+                  albo wybierz z komórki
+                </span>
+                <div style={{ flex: 1, height: 1, background: 'var(--color-border)' }} />
               </div>
               <div className="form-group">
                 <label className="form-label">Komórka organizacyjna</label>
                 {selectedDept && (
-                  <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 6 }}>
-                    Wybrana: <strong style={{ color: 'var(--color-navy)' }}>
-                      {selectedUnit?.name || '?'} › {selectedDept.name}
-                    </strong>
-                  </div>
+                  <SelectedPlace unit={selectedUnit?.name} dept={selectedDept.name} />
                 )}
                 <DepartmentPicker units={units} depts={depts} selectedId={deptId} onSelect={setDeptId} />
               </div>
@@ -466,6 +486,8 @@ function TerminationFormModal({ onClose, onCreated }) {
             </>
           )}
 
+          <div style={{ height: 6 }} />
+          <SectionLabel>Termin</SectionLabel>
           <div className="form-group">
             <label className="form-label">Data do której pracuje (ostatni dzień pracy)</label>
             <input className="form-control" type="date" style={{ maxWidth: 220 }}
@@ -490,6 +512,93 @@ function TerminationFormModal({ onClose, onCreated }) {
 // ---------------------------------------------------------------------------
 // Picker: jednostka (akordeon) → wydziały w drzewie (akordeon per gałąź)
 // ---------------------------------------------------------------------------
+
+// Combobox z wyszukiwaniem komórki organizacyjnej: wpisz fragment → lista
+// pasujących komórek z pełną ścieżką „Jednostka › … › Komórka" → wybierz.
+function DeptSearchSelect({ units, depts, value, onChange }) {
+  const [open, setOpen]   = useState(false)
+  const [query, setQuery] = useState('')
+  const wrapRef = useRef(null)
+
+  const byId = useMemo(() => new Map(depts.map(d => [d.id, d])), [depts])
+  const unitById = useMemo(() => new Map(units.map(u => [u.id, u])), [units])
+  function pathStr(d) {
+    const names = []; const seen = new Set(); let cur = d
+    while (cur && !seen.has(cur.id)) { seen.add(cur.id); names.unshift(cur.name); cur = cur.parent_dept_id ? byId.get(cur.parent_dept_id) : null }
+    const un = unitById.get(d.unit_id)?.name
+    return (un ? un + ' › ' : '') + names.join(' › ')
+  }
+
+  const selected = depts.find(d => d.id === value) || null
+  const q = query.trim().toLowerCase()
+  const matches = useMemo(() => (
+    depts.map(d => ({ d, path: pathStr(d) }))
+      .filter(x => !q || x.path.toLowerCase().includes(q))
+      .sort((a, b) => a.path.localeCompare(b.path, 'pl'))
+      .slice(0, 60)
+  ), [depts, q, units])
+
+  useEffect(() => {
+    function onDoc(e) { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [])
+
+  // Wybrana komórka (i nie edytujemy) → zielony chip z „Zmień".
+  if (selected && !open) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+        padding: '8px 12px', borderRadius: 6,
+        background: 'var(--color-success-bg)', border: '1px solid var(--color-success)', fontSize: 13,
+      }}>
+        <Check size={14} style={{ color: 'var(--color-success)' }} />
+        <span>{pathStr(selected)}</span>
+        <button type="button" className="btn btn--ghost btn--sm" style={{ marginLeft: 'auto' }}
+                onClick={() => { setOpen(true); setQuery('') }}>Zmień</button>
+      </div>
+    )
+  }
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <input className="form-control" value={query}
+             placeholder="Wpisz fragment nazwy komórki lub jednostki…"
+             onFocus={() => setOpen(true)} onChange={e => { setQuery(e.target.value); setOpen(true) }} />
+      {open && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20, marginTop: 4,
+          border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-card)',
+          boxShadow: 'var(--shadow-modal, 0 8px 24px rgba(0,0,0,0.18))',
+          maxHeight: 'min(46vh, 360px)', overflowY: 'auto',
+        }}>
+          {matches.length === 0 ? (
+            <div style={{ padding: 12, fontSize: 13, color: 'var(--color-text-muted)' }}>
+              Brak komórek pasujących do „{query}".
+            </div>
+          ) : matches.map(({ d, path }) => {
+            const isSel = d.id === value
+            return (
+              <div key={d.id}
+                   onClick={() => { onChange(d.id); setOpen(false); setQuery('') }}
+                   style={{
+                     display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+                     padding: '8px 12px', fontSize: 13, borderBottom: '1px solid var(--color-border)',
+                     background: isSel ? 'var(--color-gold-soft, rgba(196,162,88,0.18))' : 'transparent',
+                   }}
+                   onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = 'var(--bg-hover, rgba(0,0,0,0.04))' }}
+                   onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = 'transparent' }}>
+                <Building2 size={14} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
+                <span style={{ flex: 1 }}>{path}</span>
+                {isSel && <Check size={14} style={{ color: 'var(--color-navy)' }} />}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function DepartmentPicker({ units, depts, selectedId, onSelect }) {
   // Grupowanie wydziałów po unit_id i parent_dept_id
