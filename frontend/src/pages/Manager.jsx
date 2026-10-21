@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { RefreshCw, Check, X, ListChecks } from 'lucide-react'
+import { RefreshCw, Check, X, ListChecks, Search } from 'lucide-react'
 import { listRequests, workflowAction, listSystems, listPermissions, userPermissions, denyRequestItem } from '../api'
 import { fmtDate } from '../serverTime'
 import WorkflowRibbon from '../components/WorkflowRibbon'
@@ -444,6 +444,9 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
 
   // Szukajka per grupa uprawnień: klucz „system_id|grupa" → fraza.
   const [groupQuery, setGroupQuery] = useState({})
+  // Filtr widoku uprawnień (jak w projekcie): wszystkie / posiadane / tylko zmiany.
+  const [permFilter, setPermFilter] = useState('all')   // 'all' | 'held' | 'changes'
+  const [sysQuery, setSysQuery] = useState('')
 
   /** Zaznacz/odznacz hurtem widoczne pozycje grupy (przy setkach uprawnień). */
   function toggleMany(keys) {
@@ -476,6 +479,25 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   // Dyf stanu docelowego (dla nadania/zmiany).
   const toGrant  = [...picked].filter(k => !held.has(k))
   const toRevoke = [...held].filter(k => !picked.has(k))
+  const changeCount = toGrant.length + toRevoke.length
+
+  // Predykat filtra widoku (zakładki: wszystkie / posiadane / tylko zmiany).
+  function passPermFilter(key) {
+    if (permFilter === 'held') return held.has(key)
+    if (permFilter === 'changes') {
+      const st = permChangeState(key, held, picked)
+      return st === 'grant' || st === 'revoke'
+    }
+    return true
+  }
+  const _sq = sysQuery.trim().toLowerCase()
+  // Czy system pasuje do globalnej szukajki (po nazwie albo nazwie uprawnienia).
+  function sysMatchesQuery(s) {
+    if (!_sq) return true
+    if ((s.name || '').toLowerCase().includes(_sq)) return true
+    return (permsBySys[s.id] || []).some(
+      p => (p.permission_name || '').toLowerCase().includes(_sq))
+  }
 
   // Uprawnienia POSIADANE, którym zmieniono wartość kontrolki (np. inny zakres
   // rejestrów). Traktujemy je jak ponowne nadanie z nową wartością — inaczej
@@ -587,8 +609,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       icon={ListChecks} kind={r.kind} kindLabel={isRevoke ? 'Odejście' : 'Zatrudnienie'}
       statusText={`Wniosek #${r.id}`} title={title} subtitle={_subtitle}
       backLabel="← Wróć do listy" onBack={onClose}
-      steps={_steps} summary={_summary}
-      history={[{ text: 'Wniosek w obiegu — pełny ślad w Audit log', muted: true }]}
+      steps={_steps} summary={_summary} historyRequestId={r.id}
       footerActions={<>
         <button className="btn btn--ghost" onClick={onClose} disabled={busy}>
           {(isSelect || isDecision) ? 'Anuluj' : 'Zamknij'}
@@ -664,6 +685,41 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                   : 'Ścieżka jednostopniowa: po zatwierdzeniu wniosek trafi bezpośrednio do realizacji przez IT (bez akceptacji wyższego rzędu).'}
               </div>
 
+              {/* Pasek filtrów + szukajka (jak w projekcie) — tylko ścieżka nadania. */}
+              {!loading && !isRevoke && systems.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10,
+                              flexWrap: 'wrap', marginBottom: 10 }}>
+                  <div style={{ display: 'inline-flex', border: '1px solid var(--color-border)',
+                                borderRadius: 8, overflow: 'hidden' }}>
+                    {[
+                      { id: 'all',     label: 'Wszystkie' },
+                      { id: 'held',    label: 'Posiadane' },
+                      { id: 'changes', label: `Tylko zmiany${changeCount ? ' · ' + changeCount : ''}` },
+                    ].map(t => (
+                      <button key={t.id} type="button"
+                              onClick={() => setPermFilter(t.id)}
+                              style={{
+                                border: 'none', cursor: 'pointer', fontSize: 12,
+                                padding: '6px 12px', fontWeight: 600,
+                                background: permFilter === t.id ? 'var(--color-navy)' : 'transparent',
+                                color: permFilter === t.id ? '#fff' : 'var(--color-text-muted)',
+                              }}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ position: 'relative', flex: '1 1 200px', minWidth: 160 }}>
+                    <Search size={14} style={{
+                      position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)',
+                      color: 'var(--color-text-muted)', pointerEvents: 'none' }} />
+                    <input className="form-control" value={sysQuery}
+                           style={{ paddingLeft: 30, fontSize: 13 }}
+                           placeholder="Szukaj systemu lub zakresu…"
+                           onChange={e => setSysQuery(e.target.value)} />
+                  </div>
+                </div>
+              )}
+
               {loading ? (
                 <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie uprawnień…</div>
               ) : isRevoke ? (
@@ -692,7 +748,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                 <div className="alert alert--warning">Brak zdefiniowanych systemów — poproś administratora o konfigurację.</div>
               ) : (
                 <div style={{ maxHeight: 'min(46vh, 420px)', overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 6, padding: 12, background: 'var(--bg-secondary)' }}>
-                  {systems.map(s => {
+                  {systems.filter(sysMatchesQuery).map(s => {
                     const perms = permsBySys[s.id] || []
                     // „Tylko dostęp" = jedna pozycja na cały program.
                     const { main, admin } = splitAdminPerm(perms)
@@ -701,15 +757,15 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                       const p = main[0]
                       if (!p) return null
                       const key = `${s.id}:${p.id}`
+                      // Filtr zakładek: ukryj system, gdy jego pozycja nie pasuje.
+                      if (!passPermFilter(key) && !(adminKey && passPermFilter(adminKey))) return null
                       return (
                         <SystemBlock
                           key={s.id} name={s.name} description={s.description}
                           checked={picked.has(key)}
                           onToggle={() => togglePerm(s.id, p.id)}
-                          headerStyle={{
-                            ...changeStyle(permChangeState(key, held, picked)),
-                            ...changeTextStyle(permChangeState(key, held, picked)),
-                          }}
+                          accent={permChangeState(key, held, picked)}
+                          headerStyle={changeTextStyle(permChangeState(key, held, picked))}
                           badges={<>
                             <span className="badge badge--info" style={{ fontSize: 10 }}>
                               dostęp
@@ -741,6 +797,12 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                     const gated = isScopeGated(s)
                     const anySel = selHere > 0 || (adminKey && picked.has(adminKey))
                     const active = !gated || openSys.has(s.id) || anySel
+                    // Pod filtrem „posiadane"/„tylko zmiany" ukryj system bez pasujących pozycji.
+                    if (permFilter !== 'all') {
+                      const anyMain = main.some(p => passPermFilter(`${s.id}:${p.id}`))
+                      const adminOk = adminKey && passPermFilter(adminKey)
+                      if (!anyMain && !adminOk) return null
+                    }
                     return (
                       <SystemBlock
                         key={s.id} name={s.name} description={s.description}
@@ -771,9 +833,13 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                             {groupPerms(main).map(({ group, items }) => {
                               const gkey = `${s.id}|${group}`
                               const q = (groupQuery[gkey] || '').toLowerCase()
+                              const sysHit = _sq && (s.name || '').toLowerCase().includes(_sq)
                               const visible = items
                                 .filter(p => isPermVisible(p, `${s.id}:${p.id}`, held, picked))
+                                .filter(p => passPermFilter(`${s.id}:${p.id}`))
                                 .filter(p => !q || p.permission_name.toLowerCase().includes(q))
+                                .filter(p => !_sq || sysHit
+                                             || p.permission_name.toLowerCase().includes(_sq))
                               const selCount = items.filter(
                                 p => picked.has(`${s.id}:${p.id}`)).length
                               return (

@@ -85,12 +85,20 @@ export default function PermInput({ input, name, show, values, onChange, compact
 export function SystemBlock({
   name, badges, description, checked, indeterminate = false, onToggle,
   headerStyle, compact = false, showCheckbox = true, children,
-  locked = false, lockedHint = null,
+  locked = false, lockedHint = null, accent = null,
 }) {
   const box = useRef(null)
   useEffect(() => {
     if (box.current) box.current.indeterminate = indeterminate && !checked
   }, [indeterminate, checked])
+
+  // Akcent = pełnowysokościowy, kolorowy lewy pasek całej karty (jak w projekcie):
+  // zielony dla nadania, czerwony dla odebrania. Dla pozycji mieszanych brak.
+  const accentStyle = accent === 'grant'
+    ? { borderLeft: '3px solid var(--color-success)' }
+    : accent === 'revoke'
+    ? { borderLeft: '3px solid var(--color-error)' }
+    : {}
 
   // Program z listą uprawnień NIE ma zbiorczego checkboxa — zaznaczanie jest
   // per grupa. Checkbox nagłówka zostaje tylko tam, gdzie sam program jest
@@ -99,7 +107,7 @@ export function SystemBlock({
   return (
     <div style={{
       border: '1px solid var(--color-border)', borderRadius: 8,
-      marginBottom: 10, background: 'var(--bg-primary)',
+      marginBottom: 10, background: 'var(--bg-primary)', ...accentStyle,
     }}>
       <Header style={{
         display: 'flex', alignItems: 'center', gap: 8,

@@ -9,7 +9,28 @@
  * Widoki przekazują własną treść jako children; resztę składa ten komponent,
  * żeby wszystkie wnioski wyglądały jednakowo.
  */
+import { useEffect, useState } from 'react'
 import { Check } from 'lucide-react'
+import { getRequestWorkflow } from '../api'
+
+// Etykiety akcji obiegu w historii.
+const ACTION_VERB = {
+  select:  'wybrał(a) uprawnienia',
+  approve: 'zatwierdził(a)',
+  execute: 'zrealizował(a)',
+  reject:  'odrzucił(a)',
+}
+const NODE_WHO = {
+  select_permissions: 'Kierownik', manager_approve: 'Kierownik',
+  higher_manager_approve: 'Kierownik nadrzędny', it_execute: 'IT',
+}
+
+function fmtDT(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return isNaN(d) ? '' : d.toLocaleString('pl-PL', {
+    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
 
 const KIND_TONE = {
   grant:  { bg: '#FEF3DC', fg: '#8A6D1B', bd: '#E6C34D' },   // zatrudnienie
@@ -152,22 +173,58 @@ function SummaryBox({ rows = [] }) {
   )
 }
 
-function HistoryBox({ items = [] }) {
+function HistoryBox({ items = [], requestId }) {
+  // Gdy podano requestId — pobierz realną oś czasu kroków obiegu.
+  const [steps, setSteps] = useState(null)
+  useEffect(() => {
+    if (!requestId) { setSteps(null); return }
+    let alive = true
+    getRequestWorkflow(requestId)
+      .then(r => { if (alive) setSteps(r.data?.steps || []) })
+      .catch(() => { if (alive) setSteps([]) })
+    return () => { alive = false }
+  }, [requestId])
+
+  // Buduj wpisy: z kroków obiegu (gdy są) albo z przekazanych items.
+  let rows = items
+  if (requestId && steps) {
+    rows = steps.map(s => {
+      const who = s.actor_name || NODE_WHO[s.node_type] || ''
+      const verb = ACTION_VERB[s.action] || s.action
+      return {
+        text: `${who ? who + ' ' : ''}${verb}`,
+        sub: fmtDT(s.created_at),
+        comment: s.comment || null,
+        muted: s.action === 'reject',
+      }
+    })
+  }
+
   return (
     <div style={{ border: '1px solid var(--color-border)', borderRadius: 8, padding: '10px 12px' }}>
       <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.06em',
                     color: 'var(--color-text-muted)', marginBottom: 8 }}>HISTORIA</div>
-      {items.length === 0 ? (
+      {requestId && steps === null ? (
+        <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>Ładowanie…</div>
+      ) : rows.length === 0 ? (
         <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
-          Wniosek nie został jeszcze wysłany.
+          {requestId ? 'Brak kroków w obiegu.' : 'Wniosek nie został jeszcze wysłany.'}
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {items.map((it, i) => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {rows.map((it, i) => (
             <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12 }}>
               <span style={{ flexShrink: 0, width: 8, height: 8, borderRadius: '50%', marginTop: 4,
-                             background: it.muted ? 'var(--color-border-strong, #ccc)' : 'var(--color-success)' }} />
-              <span style={{ color: it.muted ? 'var(--color-text-muted)' : 'inherit' }}>{it.text}</span>
+                             background: it.muted ? 'var(--color-error)' : 'var(--color-success)' }} />
+              <div>
+                <div style={{ color: it.muted ? 'var(--color-text-muted)' : 'inherit' }}>{it.text}</div>
+                {it.sub && <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>{it.sub}</div>}
+                {it.comment && (
+                  <div style={{ fontSize: 11, color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+                    „{it.comment}"
+                  </div>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -180,7 +237,7 @@ function HistoryBox({ items = [] }) {
 export default function RequestViewShell({
   icon: Icon, kind, kindLabel, statusText, title, subtitle,
   backLabel = '← Wróć', onBack, steps = [],
-  summary = [], history = [], footerLeft, footerActions, children,
+  summary = [], history = [], historyRequestId, footerLeft, footerActions, children,
 }) {
   return (
     <div>
@@ -225,7 +282,7 @@ export default function RequestViewShell({
           <aside style={{ flex: '0 0 300px', maxWidth: '100%', display: 'flex',
                           flexDirection: 'column', gap: 12 }}>
             <SummaryBox rows={summary} />
-            <HistoryBox items={history} />
+            <HistoryBox items={history} requestId={historyRequestId} />
           </aside>
         )}
       </div>

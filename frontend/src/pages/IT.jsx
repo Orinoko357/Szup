@@ -353,7 +353,6 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     { label: 'Stanowisko', value: r.worker_position || '—' },
     { label: 'Komórka', value: `${r.department_name || '—'} · ${r.unit_name || '—'}` },
   ]
-  const _history = [{ text: 'Wniosek w obiegu — pełny ślad w Audit log', muted: true }]
 
   return (
     <RequestViewShell
@@ -361,7 +360,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       statusText={`Wniosek #${r.id}`} title={title}
       subtitle="Wykonaj zmiany w systemach i oznacz każdą pozycję — decyzje zapisują się od razu."
       backLabel="← Wróć do listy" onBack={onClose}
-      steps={_steps} summary={_summary} history={_history}
+      steps={_steps} summary={_summary} historyRequestId={r.id}
       footerLeft={canRealize && grantProgress.total > 0
         ? `Zrealizowane ${grantProgress.done}/${grantProgress.total}${grantProgress.pending ? ` · ${grantProgress.pending} bez decyzji` : ''}`
         : null}

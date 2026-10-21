@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { FilePlus, UserMinus, ChevronDown, ChevronRight, Building2, Check } from 'lucide-react'
+import { FilePlus, UserMinus, ChevronDown, ChevronRight, Building2, Check, Search } from 'lucide-react'
 import { listRequests, createRequest, listActiveDepts, listActiveUnits, listRequestTypes, usersByDepartment, searchUsers } from '../api'
 import { fmtDate } from '../serverTime'
 import RequestViewShell, { Section, buildWorkflowSteps } from '../components/RequestView'
@@ -606,14 +606,20 @@ function DeptSearchSelect({ units, depts, value, onChange }) {
 
   return (
     <div ref={wrapRef}>
-      <input className="form-control" value={query}
-             placeholder="Wpisz fragment nazwy komórki lub jednostki…"
-             onFocus={() => setOpen(true)} onChange={e => { setQuery(e.target.value); setOpen(true) }} />
+      <div style={{ position: 'relative' }}>
+        <Search size={15} style={{
+          position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)',
+          color: 'var(--color-text-muted)', pointerEvents: 'none',
+        }} />
+        <input className="form-control" value={query} style={{ paddingLeft: 32 }}
+               placeholder="Wpisz fragment nazwy komórki lub jednostki…"
+               onFocus={() => setOpen(true)} onChange={e => { setQuery(e.target.value); setOpen(true) }} />
+      </div>
       {open && (
         <div style={{
           marginTop: 6,
           border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-card)',
-          maxHeight: 280, overflowY: 'auto',
+          maxHeight: 280, overflowY: 'auto', boxShadow: '0 6px 18px rgba(0,0,0,0.08)',
         }}>
           {matches.length === 0 ? (
             <div style={{ padding: 12, fontSize: 13, color: 'var(--color-text-muted)' }}>
@@ -621,26 +627,36 @@ function DeptSearchSelect({ units, depts, value, onChange }) {
             </div>
           ) : matches.map(({ d, path }) => {
             const isSel = d.id === value
+            // Ścieżka bez ostatniego segmentu (sama nazwa komórki jest po lewej).
+            const trail = path.replace(/\s›\s[^›]*$/, '')
             return (
               <div key={d.id}
                    onClick={() => { onChange(d.id); setOpen(false); setQuery('') }}
                    style={{
-                     display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
-                     padding: '8px 12px', fontSize: 13, borderBottom: '1px solid var(--color-border)',
+                     display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
+                     padding: '9px 12px', fontSize: 13, borderBottom: '1px solid var(--color-border)',
                      background: isSel ? 'var(--color-gold-soft, rgba(196,162,88,0.18))' : 'transparent',
                    }}
                    onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = 'var(--bg-hover, rgba(0,0,0,0.04))' }}
                    onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = 'transparent' }}>
-                <Building2 size={14} style={{ color: 'var(--color-text-muted)', flexShrink: 0, marginTop: 2 }} />
-                <span style={{ flex: 1 }}>
-                  {path}
+                <Building2 size={14} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ fontWeight: 600, color: 'var(--color-navy)' }}>{d.name}</span>
                   {d.description && (
                     <span style={{ display: 'block', fontSize: 11, color: 'var(--color-text-muted)' }}>
                       {d.description}
                     </span>
                   )}
                 </span>
-                {isSel && <Check size={14} style={{ color: 'var(--color-navy)' }} />}
+                {trail && (
+                  <span style={{
+                    flexShrink: 0, fontSize: 11, fontFamily: 'var(--font-mono, monospace)',
+                    color: 'var(--color-text-muted)', letterSpacing: '.02em',
+                  }}>
+                    {trail}
+                  </span>
+                )}
+                {isSel && <Check size={14} style={{ color: 'var(--color-navy)', flexShrink: 0 }} />}
               </div>
             )
           })}

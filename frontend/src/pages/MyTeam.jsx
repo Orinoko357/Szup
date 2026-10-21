@@ -479,8 +479,8 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
                       key={s.id} name={s.name} description={s.description} compact
                       checked={picked.has(key)}
                       onToggle={() => togglePerm(s.id, p.id)}
+                      accent={permState(key)}
                       headerStyle={{
-                        ...stateStyle(permState(key)),
                         textDecoration: permState(key) === 'revoke' ? 'line-through' : 'none',
                       }}
                       badges={<>

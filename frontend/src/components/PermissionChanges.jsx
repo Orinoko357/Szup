@@ -305,8 +305,8 @@ export function changeTextStyle(st) {
 }
 
 export function ChangeBadge({ st }) {
-  if (st === 'revoke') return <span className="badge badge--error"   style={{ fontSize: 9 }}>DO ODEBRANIA</span>
-  if (st === 'grant')  return <span className="badge badge--success" style={{ fontSize: 9 }}>DO NADANIA</span>
-  if (st === 'kept')   return <span className="badge badge--neutral" style={{ fontSize: 9 }}>posiada</span>
+  if (st === 'revoke') return <span className="badge badge--error"   style={{ fontSize: 10 }}>− odebranie</span>
+  if (st === 'grant')  return <span className="badge badge--success" style={{ fontSize: 10 }}>+ nadanie</span>
+  if (st === 'kept')   return <span className="badge badge--neutral" style={{ fontSize: 10 }}>posiada</span>
   return null
 }
