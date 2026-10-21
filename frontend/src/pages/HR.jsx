@@ -207,7 +207,7 @@ function RequestFormModal({ onClose, onCreated }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 'min(94vw, 680px)', width: '100%' }}>
+      <div className="modal" style={{ maxWidth: 'min(96vw, 760px)', width: '100%' }}>
         <div className="modal__header">
           <span className="modal__title">
             <FilePlus size={15} style={{ marginRight: 8, verticalAlign: 'middle' }} />
@@ -215,7 +215,8 @@ function RequestFormModal({ onClose, onCreated }) {
           </span>
           <button className="modal__close" onClick={onClose}>×</button>
         </div>
-        <form onSubmit={submit} className="modal__body">
+        <form onSubmit={submit} className="modal__body"
+              style={{ minHeight: 'min(72vh, 560px)' }}>
           <p style={{ color: 'var(--color-text-muted)', fontSize: 13, marginBottom: 16 }}>
             Zgłoś nowego pracownika. Wniosek trafi do kierownika jego komórki, który wybierze
             uprawnienia, a następnie do IT.
