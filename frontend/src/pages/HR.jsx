@@ -487,47 +487,90 @@ function TerminationFormView({ onCancel, onCreated }) {
             )}
           </div>
 
-          {/* Alternatywnie: wybór komórki → pracownik z listy. */}
+          {/* Alternatywnie: dwukolumnowy wybór ze struktury (jak w projekcie):
+              lewa kolumna — drzewo komórek, prawa — pracownicy jako karty. */}
           {!picked && (
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '6px 0 12px' }}>
                 <div style={{ flex: 1, height: 1, background: 'var(--color-border)' }} />
                 <span style={{ fontSize: 11, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '.04em' }}>
-                  albo wybierz z komórki
+                  albo wybierz ze struktury
                 </span>
                 <div style={{ flex: 1, height: 1, background: 'var(--color-border)' }} />
               </div>
-              <div className="form-group">
-                <label className="form-label">Komórka organizacyjna</label>
-                {selectedDept && (
-                  <SelectedPlace unit={selectedUnit?.name} dept={selectedDept.name} />
-                )}
-                <DepartmentPicker units={units} depts={depts} selectedId={deptId} onSelect={setDeptId} />
-              </div>
 
-              <div className="form-group">
-                <label className="form-label">Pracownik</label>
-                {!deptId ? (
-                  <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
-                    Najpierw wybierz komórkę powyżej (albo użyj wyszukiwarki).
+              <div style={{
+                display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                gap: 0, border: '1px solid var(--color-border)', borderRadius: 8, overflow: 'hidden',
+              }}>
+                {/* Lewa kolumna — drzewo komórek */}
+                <div style={{ borderRight: '1px solid var(--color-border)', minWidth: 0 }}>
+                  <div style={{
+                    fontSize: 11, fontWeight: 700, letterSpacing: '.06em', color: 'var(--color-text-muted)',
+                    padding: '8px 12px', borderBottom: '1px solid var(--color-border)',
+                    background: 'var(--bg-secondary)',
+                  }}>
+                    KOMÓRKA
                   </div>
-                ) : loadingWorkers ? (
-                  <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>Ładowanie pracowników…</div>
-                ) : workers.length === 0 ? (
-                  <div className="alert alert--warning" style={{ fontSize: 12 }}>
-                    Brak aktywnych pracowników przypisanych do tej komórki.
+                  <div style={{ maxHeight: 340, overflowY: 'auto' }}>
+                    <DepartmentPicker units={units} depts={depts} selectedId={deptId}
+                                      onSelect={setDeptId} flush />
                   </div>
-                ) : (
-                  <select className="form-control" value={workerId || ''}
-                          onChange={e => setWorkerId(Number(e.target.value) || null)}>
-                    <option value="">— wybierz pracownika —</option>
-                    {workers.map(w => (
-                      <option key={w.id} value={w.id}>
-                        {w.full_name || w.username}{w.username ? ` (${w.username})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                )}
+                </div>
+
+                {/* Prawa kolumna — pracownicy wybranej komórki */}
+                <div style={{ minWidth: 0 }}>
+                  <div style={{
+                    fontSize: 11, fontWeight: 700, letterSpacing: '.06em', color: 'var(--color-text-muted)',
+                    padding: '8px 12px', borderBottom: '1px solid var(--color-border)',
+                    background: 'var(--bg-secondary)',
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>
+                    PRACOWNICY{selectedDept
+                      ? ` · ${selectedUnit?.name ? selectedUnit.name + ' › ' : ''}${selectedDept.name}`
+                      : ''}
+                  </div>
+                  <div style={{ maxHeight: 340, overflowY: 'auto', padding: 8 }}>
+                    {!deptId ? (
+                      <div style={{ fontSize: 12, color: 'var(--color-text-muted)', padding: '8px 4px' }}>
+                        Wybierz komórkę po lewej, aby zobaczyć pracowników.
+                      </div>
+                    ) : loadingWorkers ? (
+                      <div style={{ fontSize: 12, color: 'var(--color-text-muted)', padding: '8px 4px' }}>Ładowanie pracowników…</div>
+                    ) : workers.length === 0 ? (
+                      <div className="alert alert--warning" style={{ fontSize: 12 }}>
+                        Brak aktywnych pracowników przypisanych do tej komórki.
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {workers.map(w => {
+                          const sel = workerId === w.id
+                          return (
+                            <label key={w.id} style={{
+                              display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
+                              padding: '8px 10px', borderRadius: 6, fontSize: 13,
+                              border: `1px solid ${sel ? 'var(--color-navy)' : 'var(--color-border)'}`,
+                              background: sel ? 'var(--color-navy-soft, rgba(27,42,74,0.07))' : 'var(--color-card)',
+                            }}>
+                              <input type="radio" name="term-worker" checked={sel}
+                                     style={{ flexShrink: 0 }}
+                                     onChange={() => setWorkerId(w.id)} />
+                              <span style={{ minWidth: 0 }}>
+                                <span style={{ fontWeight: 600, color: 'var(--color-navy)' }}>
+                                  {w.full_name || w.username}
+                                </span>
+                                <span style={{ display: 'block', fontSize: 11, color: 'var(--color-text-muted)',
+                                               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {w.username || '—'}{w.email ? ` · ${w.email}` : ''}
+                                </span>
+                              </span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </>
           )}
@@ -666,7 +709,7 @@ function DeptSearchSelect({ units, depts, value, onChange }) {
   )
 }
 
-function DepartmentPicker({ units, depts, selectedId, onSelect }) {
+function DepartmentPicker({ units, depts, selectedId, onSelect, flush = false }) {
   // Grupowanie wydziałów po unit_id i parent_dept_id
   const deptsByUnit = useMemo(() => {
     const m = new Map()
@@ -727,13 +770,14 @@ function DepartmentPicker({ units, depts, selectedId, onSelect }) {
     : null
 
   return (
-    <div style={{ border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--bg-secondary)', overflow: 'hidden' }}>
-      <div style={{ padding: 8, borderBottom: '1px solid var(--color-border)', background: 'var(--color-card)' }}>
+    <div style={flush ? {} : { border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--bg-secondary)', overflow: 'hidden' }}>
+      <div style={{ padding: 8, borderBottom: '1px solid var(--color-border)',
+                    background: flush ? 'var(--bg-secondary)' : 'var(--color-card)' }}>
         <input className="form-control" style={{ fontSize: 13 }}
-               placeholder="Szukaj komórki (nazwa, jednostka, ścieżka)…"
+               placeholder="Szukaj komórki…"
                value={query} onChange={e => setQuery(e.target.value)} />
       </div>
-      <div style={{ maxHeight: 'min(48vh, 420px)', overflowY: 'auto' }}>
+      <div style={flush ? {} : { maxHeight: 'min(48vh, 420px)', overflowY: 'auto' }}>
         {units.length === 0 && (
           <div style={{ padding: 12, fontSize: 12, color: 'var(--color-text-muted)' }}>
             Brak jednostek — poproś administratora o zaimportowanie struktury z AD.
