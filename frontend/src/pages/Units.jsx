@@ -718,8 +718,12 @@ function LdapImportModal({ onClose }) {
     for (const n of nodes) {
       const kids = collectDepts(n.children || [])
       const mapId = deptMap[n.dn] || null
-      if (selected[n.dn] || mapId || kids.length > 0) {
-        out.push({ name: n.name, dn: n.dn, map_to_dept_id: mapId, children: kids })
+      // Dołączamy, gdy: zaznaczone / zmapowane / ma zaznaczone dzieci, ALBO gdy
+      // istnieje i ma opis z AD (żeby synchronizacja dociagnela opis bez
+      // wymuszania recznego zaznaczania istniejacych komorek).
+      const syncDesc = n.status === 'exists' && !!n.description
+      if (selected[n.dn] || mapId || kids.length > 0 || syncDesc) {
+        out.push({ name: n.name, dn: n.dn, description: n.description ?? null, map_to_dept_id: mapId, children: kids })
       }
     }
     return out
@@ -748,8 +752,9 @@ function LdapImportModal({ onClose }) {
     for (const unit of preview) {
       const depts = collectDepts(unit.departments)
       const mapId = unitMap[unit.dn] || null
-      if (selected[unit.dn] || mapId || depts.length > 0) {
-        items.push({ unit_name: unit.name, unit_dn: unit.dn, map_to_unit_id: mapId, departments: depts })
+      const syncUnitDesc = unit.status === 'exists' && !!unit.description
+      if (selected[unit.dn] || mapId || depts.length > 0 || syncUnitDesc) {
+        items.push({ unit_name: unit.name, unit_dn: unit.dn, description: unit.description ?? null, map_to_unit_id: mapId, departments: depts })
       }
     }
     try {

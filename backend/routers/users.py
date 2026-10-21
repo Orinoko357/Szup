@@ -388,7 +388,15 @@ def users_search(
     if not (has_role(current_user, "superadmin", "manager") or hr_cap):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Brak uprawnień")
 
-    ql = (q or "").strip().lower()
+    # Dopasowanie NIEWRAŻLIWE na wielkość liter i polskie znaki (ogonki) —
+    # „sliwka" znajdzie „Śliwka", „zdzislaw" znajdzie „Zdzisław".
+    import unicodedata
+
+    def _fold(s: str) -> str:
+        s = (s or "").lower().replace("ł", "l")
+        return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+
+    ql = _fold((q or "").strip())
     if len(ql) < 2:
         return []
 
@@ -409,7 +417,7 @@ def users_search(
     out = []
     for u in rows:
         name = (u.full_name or u.username or "")
-        if ql not in name.lower() and ql not in (u.username or "").lower():
+        if ql not in _fold(name) and ql not in _fold(u.username or ""):
             continue
         d = dept_map.get(u.department_id)
         if allowed_dept_ids is not None and u.department_id not in allowed_dept_ids:

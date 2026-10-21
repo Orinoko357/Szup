@@ -503,6 +503,7 @@ class LdapPreviewRequest(BaseModel):
 class LdapPreviewDept(BaseModel):
     dn: str
     name: str
+    description: Optional[str] = None
     status: str        # "new" | "exists"
     existing_id: Optional[int] = None
     children: list["LdapPreviewDept"] = []
@@ -511,6 +512,7 @@ class LdapPreviewDept(BaseModel):
 class LdapPreviewUnit(BaseModel):
     dn: str
     name: str
+    description: Optional[str] = None
     status: str        # "new" | "exists"
     existing_id: Optional[int] = None
     departments: list[LdapPreviewDept]
@@ -519,6 +521,7 @@ class LdapPreviewUnit(BaseModel):
 class LdapImportDept(BaseModel):
     name: str
     dn: Optional[str] = None
+    description: Optional[str] = None
     # Mapowanie ręczne: gdy admin wskaże istniejący wydział, importujemy „w niego"
     # (backfill DN, dzieci pod nim), zamiast dopasowywać/tworzyć po nazwie.
     map_to_dept_id: Optional[int] = None
@@ -528,6 +531,7 @@ class LdapImportDept(BaseModel):
 class LdapImportItem(BaseModel):
     unit_name: str
     unit_dn: Optional[str] = None
+    description: Optional[str] = None
     # Mapowanie ręczne do istniejącej jednostki (zamiast dopasowania po nazwie).
     map_to_unit_id: Optional[int] = None
     departments: list[LdapImportDept]   # drzewo wydziałów
@@ -616,6 +620,7 @@ def ldap_preview(
             out.append(LdapPreviewDept(
                 dn=child["dn"],
                 name=child["name"],
+                description=child.get("description"),
                 status="exists" if db_dept else "new",
                 existing_id=db_dept.id if db_dept else None,
                 children=_walk(
@@ -633,6 +638,7 @@ def ldap_preview(
         result.append(LdapPreviewUnit(
             dn=item["dn"],
             name=item["name"],
+            description=item.get("description"),
             status="exists" if unit_db else "new",
             existing_id=unit_db.id if unit_db else None,
             departments=_walk(
@@ -745,7 +751,7 @@ def ldap_import(
                 if existing.name != child.name:
                     existing.name = child.name; changed.append("nazwa")
                 # Opis z AD — ustaw/odśwież (nie czyścimy, gdy w AD pusty).
-                adesc = desc_by_dn.get(ndn) if ndn else None
+                adesc = child.description or (desc_by_dn.get(ndn) if ndn else None)
                 if adesc and existing.description != adesc:
                     existing.description = adesc; changed.append("opis")
                 if changed:
@@ -763,7 +769,7 @@ def ldap_import(
             else:
                 dept = Department(unit_id=unit_id, parent_dept_id=parent_dept_id,
                                   name=child.name, ldap_dn=ndn,
-                                  description=(desc_by_dn.get(ndn) if ndn else None))
+                                  description=(child.description or (desc_by_dn.get(ndn) if ndn else None)))
                 session.add(dept); session.commit(); session.refresh(dept)
                 dept_id = dept.id
                 counters["depts_created"] += 1
@@ -790,7 +796,7 @@ def ldap_import(
 
         if not unit:
             unit = Unit(name=item.unit_name, ldap_dn=ndn,
-                        description=(desc_by_dn.get(ndn) if ndn else None))
+                        description=(item.description or (desc_by_dn.get(ndn) if ndn else None)))
             session.add(unit); session.commit(); session.refresh(unit)
             counters["units_created"] += 1
             details.append(f"Jednostka \"{item.unit_name}\" — utworzona")
@@ -798,7 +804,7 @@ def ldap_import(
             uchg = False
             if ndn and not unit.ldap_dn:
                 unit.ldap_dn = ndn; uchg = True
-            adesc = desc_by_dn.get(ndn) if ndn else None
+            adesc = item.description or (desc_by_dn.get(ndn) if ndn else None)
             if adesc and unit.description != adesc:
                 unit.description = adesc; uchg = True
             if uchg:
