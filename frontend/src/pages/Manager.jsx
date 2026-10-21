@@ -3,7 +3,7 @@ import { RefreshCw, Check, X, ListChecks, Search } from 'lucide-react'
 import { listRequests, workflowAction, listSystems, listPermissions, userPermissions, denyRequestItem } from '../api'
 import { fmtDate } from '../serverTime'
 import WorkflowRibbon from '../components/WorkflowRibbon'
-import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard } from '../components/RequestView'
+import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard, deptFull } from '../components/RequestView'
 import DeclarationModal from '../components/DeclarationModal'
 import PermissionChanges, {
   permChangeState, changeStyle, changeTextStyle, ChangeBadge,
@@ -647,7 +647,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
             <WorkerCard name={r.worker_name}
               sub={[r.worker_username, r.worker_email].filter(Boolean).join(' · ') || null}
               cols={[
-                { label: 'Wydział', value: r.department_name },
+                { label: 'Wydział', value: deptFull(r.department_name, r.department_description) },
                 { label: 'Jednostka', value: r.unit_name },
                 { label: r.employment_from ? 'Od dnia' : 'Stanowisko',
                   value: r.employment_from ? fmtDate(r.employment_from) : r.worker_position },

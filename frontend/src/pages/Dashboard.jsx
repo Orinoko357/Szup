@@ -4,6 +4,7 @@ import {
   RefreshCw, ListChecks, CheckSquare, Wrench, AlertTriangle, Truck, UserPen,
 } from 'lucide-react'
 import { workflowDashboard, vendorContractAlerts } from '../api'
+import { deptFull } from '../components/RequestView'
 
 /**
  * Pulpit obiegu wniosków — spersonalizowany widok kolejek zalogowanego
@@ -155,7 +156,7 @@ export default function Dashboard() {
                   <tr key={p.request_id}>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{p.request_id}</td>
                     <td style={{ fontWeight: 600 }}>{p.worker_name}</td>
-                    <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{p.dept_name || '—'}</td>
+                    <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{deptFull(p.dept_name, p.dept_description)}</td>
                     <td>
                       <span className="badge badge--warning" style={{ fontSize: 11 }}>
                         {p.node_label}

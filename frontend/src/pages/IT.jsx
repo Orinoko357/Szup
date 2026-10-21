@@ -16,7 +16,7 @@ function useIsItManager() {
 }
 import { fmtDate } from '../serverTime'
 import WorkflowRibbon from '../components/WorkflowRibbon'
-import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard } from '../components/RequestView'
+import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard, deptFull } from '../components/RequestView'
 import PermissionChanges from '../components/PermissionChanges'
 import AddPermissionsPicker from '../components/AddPermissionsPicker'
 import NameChangeQueue from '../components/NameChangeQueue'
@@ -114,7 +114,7 @@ function RequestsTab({ onViewChange }) {
                       <span className="badge badge--warning" style={{ fontSize: 10, marginLeft: 8 }}>ustanie</span>
                     )}
                   </td>
-                  <td>{r.department_name || '—'}</td>
+                  <td>{deptFull(r.department_name, r.department_description)}</td>
                   <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{r.unit_name || '—'}</td>
                   <td>{r.items?.length||0}</td>
                   <td><span className={`badge ${STATUS_BADGE[r.status]||'badge--neutral'}`}>{STATUS_LABELS[r.status]||r.status}</span></td>
@@ -401,7 +401,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
         <WorkerCard name={r.worker_name}
           sub={[r.worker_username, r.worker_email].filter(Boolean).join(' · ') || null}
           cols={[
-            { label: 'Wydział', value: r.department_name },
+            { label: 'Wydział', value: deptFull(r.department_name, r.department_description) },
             { label: 'Jednostka', value: r.unit_name },
             { label: 'Stanowisko', value: r.worker_position },
           ]} />

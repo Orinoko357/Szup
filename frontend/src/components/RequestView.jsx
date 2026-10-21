@@ -49,6 +49,14 @@ export function KindBadge({ kind = 'grant', label }) {
   )
 }
 
+/** Pełna nazwa komórki: „KOD · opis z AD” (np. „INF · Biuro Informatyki”);
+ *  bez opisu (albo gdy opis = kod) — sam kod. */
+export function deptFull(code, desc) {
+  const c = (code || '').trim(), d = (desc || '').trim()
+  if (!c) return d || '—'
+  return d && d.toLowerCase() !== c.toLowerCase() ? `${c} · ${d}` : c
+}
+
 /** Karta „Pracownik” (wg makiety): inicjały + imię i nazwisko + podtytuł,
  *  po prawej kolumny typu WYDZIAŁ / JEDNOSTKA / STANOWISKO. */
 export function WorkerCard({ name, sub, cols = [] }) {

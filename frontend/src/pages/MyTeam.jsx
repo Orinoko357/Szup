@@ -7,7 +7,7 @@ import {
   permChangeState, changeStyle, ChangeBadge,
 } from '../components/PermissionChanges'
 import DeclarationModal from '../components/DeclarationModal'
-import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard } from '../components/RequestView'
+import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard, deptFull } from '../components/RequestView'
 import PermInput, {
   permInput, missingRequiredFields, splitAdminPerm, AdminPermRow,
   adminGrantNames, confirmAdminRights, ADMIN_CONFIRM_ABORTED,
@@ -48,7 +48,7 @@ export default function MyTeam() {
     const q = search.trim().toLowerCase()
     if (!q) return workers
     return workers.filter(w =>
-      [w.full_name, w.username, w.email, w.department_name, w.unit_name]
+      [w.full_name, w.username, w.email, w.department_name, w.department_description, w.unit_name]
         .some(v => (v || '').toLowerCase().includes(q))
     )
   }, [workers, search])
@@ -135,7 +135,7 @@ export default function MyTeam() {
                     </td>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{w.username}</td>
                     <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{w.email || '—'}</td>
-                    <td>{w.department_name || '—'}</td>
+                    <td>{deptFull(w.department_name, w.department_description)}</td>
                     <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{w.unit_name || '—'}</td>
                     <td>
                       {perms.length === 0 ? (
@@ -453,7 +453,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
             <WorkerCard name={w.full_name || w.username}
               sub={[w.username, w.email].filter(Boolean).join(' · ') || null}
               cols={[
-                { label: 'Wydział', value: w.department_name },
+                { label: 'Wydział', value: deptFull(w.department_name, w.department_description) },
                 { label: 'Jednostka', value: w.unit_name },
                 { label: 'Stanowisko', value: w.title },
               ]} />

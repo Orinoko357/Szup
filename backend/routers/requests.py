@@ -231,6 +231,7 @@ class LinkWorker(BaseModel):
 
 def _serialize_request(r: AccessRequest, items: list, session: Session | None = None) -> dict:
     dept_name = None
+    dept_desc = None    # pełna nazwa komórki (opis OU z AD), np. „Biuro Informatyki”
     unit_name = None
     # Flaga komórki: czy wniosek wymaga akceptacji kierownika wyższego rzędu.
     # Front rozdziela na jej podstawie dwie ścieżki (1-stopniowa: kierownik →
@@ -255,6 +256,7 @@ def _serialize_request(r: AccessRequest, items: list, session: Session | None = 
             d = session.get(Department, r.department_id)
             if d:
                 dept_name = d.name
+                dept_desc = d.description
                 requires_higher = bool(d.requires_higher_approval)
         if r.unit_id:
             u = session.get(Unit, r.unit_id)
@@ -300,6 +302,7 @@ def _serialize_request(r: AccessRequest, items: list, session: Session | None = 
         "unit_name": unit_name,
         "department_id": r.department_id,
         "department_name": dept_name,
+        "department_description": dept_desc,
         "requires_higher_approval": requires_higher,
         "kind": getattr(r, "kind", "grant") or "grant",
         "status": r.status,
@@ -630,6 +633,7 @@ def workflow_dashboard(
             "worker_name": r.worker_name,
             "dept_id": r.department_id,
             "dept_name": dept.name if dept else None,
+            "dept_description": dept.description if dept else None,
             "node_label": node.get("label") or node.get("type"),
             "node_type": node.get("type"),
             "created_at": r.created_at,
