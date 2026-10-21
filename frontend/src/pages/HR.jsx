@@ -160,7 +160,7 @@ function HRFormPage({ icon: Icon, title, subtitle, onCancel, onSubmit,
         </div>
         <button type="button" className="btn btn--ghost" onClick={onCancel}>← Wróć do kartoteki</button>
       </div>
-      <form onSubmit={onSubmit} className="card" style={{ maxWidth: 920 }}>
+      <form onSubmit={onSubmit} className="card" style={{ maxWidth: 860, margin: '0 auto', width: '100%' }}>
         {children}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20,
                       borderTop: '1px solid var(--color-border)', paddingTop: 16 }}>

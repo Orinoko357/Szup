@@ -567,7 +567,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 680 }}>
+      <div className="modal" style={{ maxWidth: 'min(94vw, 900px)', width: '100%' }}>
         <div className="modal__header">
           <span className="modal__title">
             <ListChecks size={15} style={{ marginRight: 8, verticalAlign: 'middle' }} />
