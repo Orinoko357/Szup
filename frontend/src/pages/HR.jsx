@@ -67,6 +67,16 @@ export default function HR() {
 
   useEffect(() => { load() }, [])
 
+  // Formularze jako PEŁNOEKRANOWE widoki (nie małe modale) — spójny układ.
+  if (showForm) {
+    return <RequestFormView onCancel={() => setShowForm(false)}
+                            onCreated={() => { setShowForm(false); load() }} />
+  }
+  if (showTermination) {
+    return <TerminationFormView onCancel={() => setShowTermination(false)}
+                                onCreated={() => { setShowTermination(false); load() }} />
+  }
+
   return (
     <div>
       <div className="page-header">
@@ -128,12 +138,38 @@ export default function HR() {
         )}
       </div>
 
-      {showForm && (
-        <RequestFormModal onClose={() => setShowForm(false)} onCreated={() => { setShowForm(false); load() }} />
-      )}
-      {showTermination && (
-        <TerminationFormModal onClose={() => setShowTermination(false)} onCreated={() => { setShowTermination(false); load() }} />
-      )}
+    </div>
+  )
+}
+
+
+// ---------------------------------------------------------------------------
+// Wspólny layout pełnoekranowego formularza kadrowego (spójny dla obu).
+// ---------------------------------------------------------------------------
+function HRFormPage({ icon: Icon, title, subtitle, onCancel, onSubmit,
+                     submitLabel, busy, canSubmit = true, children }) {
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-header__title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {Icon && <Icon size={18} style={{ color: 'var(--color-navy)' }} />}
+            {title}
+          </div>
+          {subtitle && <div className="page-header__sub">{subtitle}</div>}
+        </div>
+        <button type="button" className="btn btn--ghost" onClick={onCancel}>← Wróć do kartoteki</button>
+      </div>
+      <form onSubmit={onSubmit} className="card" style={{ maxWidth: 920 }}>
+        {children}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20,
+                      borderTop: '1px solid var(--color-border)', paddingTop: 16 }}>
+          <button type="button" className="btn btn--ghost" onClick={onCancel}>Anuluj</button>
+          <button type="submit" className="btn btn--action" disabled={busy || !canSubmit}>
+            {busy ? 'Zapisywanie…' : submitLabel}
+          </button>
+        </div>
+      </form>
     </div>
   )
 }
@@ -143,7 +179,7 @@ export default function HR() {
 // Formularz: imię, nazwisko, stanowisko, wydział (picker harmonijkowy)
 // ---------------------------------------------------------------------------
 
-function RequestFormModal({ onClose, onCreated }) {
+function RequestFormView({ onCancel, onCreated }) {
   const [units, setUnits] = useState([])
   const [depts, setDepts] = useState([])
 
@@ -206,62 +242,43 @@ function RequestFormModal({ onClose, onCreated }) {
   }
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 'min(96vw, 760px)', width: '100%' }}>
-        <div className="modal__header">
-          <span className="modal__title">
-            <FilePlus size={15} style={{ marginRight: 8, verticalAlign: 'middle' }} />
-            Nowy pracownik
-          </span>
-          <button className="modal__close" onClick={onClose}>×</button>
+    <HRFormPage icon={FilePlus} title="Nowy pracownik"
+                subtitle="Zgłoszenie zatrudnienia — trafi do kierownika komórki, potem do IT"
+                onCancel={onCancel} onSubmit={submit} submitLabel="Zapisz pracownika" busy={busy}>
+      <SectionLabel>Dane pracownika</SectionLabel>
+      <div className="form-row">
+        <div className="form-group">
+          <label className="form-label">Imię *</label>
+          <input className="form-control" required autoFocus
+                 value={firstName} onChange={e => setFirstName(e.target.value)} />
         </div>
-        <form onSubmit={submit} className="modal__body">
-          <p style={{ color: 'var(--color-text-muted)', fontSize: 13, marginBottom: 16 }}>
-            Zgłoś nowego pracownika. Wniosek trafi do kierownika jego komórki, który wybierze
-            uprawnienia, a następnie do IT.
-          </p>
-          <SectionLabel>Dane pracownika</SectionLabel>
-          <div className="form-row">
-            <div className="form-group">
-              <label className="form-label">Imię *</label>
-              <input className="form-control" required autoFocus
-                     value={firstName} onChange={e => setFirstName(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Nazwisko *</label>
-              <input className="form-control" required
-                     value={lastName} onChange={e => setLastName(e.target.value)} />
-            </div>
-          </div>
-
-          <div className="form-row">
-            <div className="form-group">
-              <label className="form-label">Stanowisko *</label>
-              <input className="form-control" required value={position}
-                     onChange={e => setPosition(e.target.value)}
-                     placeholder="np. Podinspektor" />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Data zatrudnienia od</label>
-              <input className="form-control" type="date" value={startDate}
-                     onChange={e => setStartDate(e.target.value)} />
-            </div>
-          </div>
-          <div style={{ height: 6 }} />
-          <SectionLabel>Miejsce pracy *</SectionLabel>
-          <DeptSearchSelect units={units} depts={depts} value={deptId} onChange={setDeptId} />
-
-          {err && <div className="alert alert--error mt-4">{err}</div>}
-        </form>
-        <div className="modal__footer">
-          <button type="button" className="btn btn--ghost" onClick={onClose}>Anuluj</button>
-          <button className="btn btn--action" disabled={busy}
-                  onClick={() => document.querySelector('.modal form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))}>
-            {busy ? 'Zapisywanie…' : 'Zapisz pracownika'}
-          </button>
+        <div className="form-group">
+          <label className="form-label">Nazwisko *</label>
+          <input className="form-control" required
+                 value={lastName} onChange={e => setLastName(e.target.value)} />
         </div>
       </div>
-    </div>
+
+      <div className="form-row">
+        <div className="form-group">
+          <label className="form-label">Stanowisko *</label>
+          <input className="form-control" required value={position}
+                 onChange={e => setPosition(e.target.value)}
+                 placeholder="np. Podinspektor" />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Data zatrudnienia od</label>
+          <input className="form-control" type="date" value={startDate}
+                 onChange={e => setStartDate(e.target.value)} />
+        </div>
+      </div>
+
+      <div style={{ height: 10 }} />
+      <SectionLabel>Miejsce pracy *</SectionLabel>
+      <DeptSearchSelect units={units} depts={depts} value={deptId} onChange={setDeptId} />
+
+      {err && <div className="alert alert--error mt-4">{err}</div>}
+    </HRFormPage>
   )
 }
 
@@ -270,7 +287,7 @@ function RequestFormModal({ onClose, onCreated }) {
 // Formularz: ustanie stosunku pracy — wybór komórki → pracownik z listy
 // ---------------------------------------------------------------------------
 
-function TerminationFormModal({ onClose, onCreated }) {
+function TerminationFormView({ onCancel, onCreated }) {
   const [units, setUnits] = useState([])
   const [depts, setDepts] = useState([])
   const [requestTypeId, setRequestTypeId] = useState(null)
@@ -375,21 +392,10 @@ function TerminationFormModal({ onClose, onCreated }) {
   }
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 'min(94vw, 680px)', width: '100%' }}>
-        <div className="modal__header">
-          <span className="modal__title">
-            <UserMinus size={15} style={{ marginRight: 8, verticalAlign: 'middle' }} />
-            Ustanie stosunku pracy
-          </span>
-          <button className="modal__close" onClick={onClose}>×</button>
-        </div>
-        <form onSubmit={submit} className="modal__body">
-          <p style={{ color: 'var(--color-text-muted)', fontSize: 13, marginBottom: 16 }}>
-            Wskaż pracownika, którego stosunek pracy ustaje. Wniosek trafi do kierownika,
-            który wybierze uprawnienia do odebrania, a następnie do IT.
-          </p>
-
+    <HRFormPage icon={UserMinus} title="Ustanie stosunku pracy"
+                subtitle="Wskaż pracownika — wniosek trafi do kierownika (wybór uprawnień do odebrania), potem do IT"
+                onCancel={onCancel} onSubmit={submit} submitLabel="Zgłoś ustanie"
+                busy={busy} canSubmit={!!effWorker}>
           <SectionLabel>Pracownik</SectionLabel>
           {/* Wyszukiwanie po nazwisku — najszybsza droga. */}
           <div className="form-group">
@@ -486,7 +492,7 @@ function TerminationFormModal({ onClose, onCreated }) {
             </>
           )}
 
-          <div style={{ height: 6 }} />
+          <div style={{ height: 10 }} />
           <SectionLabel>Termin</SectionLabel>
           <div className="form-group">
             <label className="form-label">Data do której pracuje (ostatni dzień pracy)</label>
@@ -495,16 +501,7 @@ function TerminationFormModal({ onClose, onCreated }) {
           </div>
 
           {err && <div className="alert alert--error mt-4">{err}</div>}
-        </form>
-        <div className="modal__footer">
-          <button type="button" className="btn btn--ghost" onClick={onClose}>Anuluj</button>
-          <button className="btn btn--action" disabled={busy || !effWorker}
-                  onClick={() => document.querySelector('.modal form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))}>
-            {busy ? 'Zapisywanie…' : 'Zgłoś ustanie'}
-          </button>
-        </div>
-      </div>
-    </div>
+    </HRFormPage>
   )
 }
 
