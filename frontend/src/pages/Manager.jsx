@@ -3,6 +3,7 @@ import { RefreshCw, Check, X, ListChecks } from 'lucide-react'
 import { listRequests, workflowAction, listSystems, listPermissions, userPermissions, denyRequestItem } from '../api'
 import { fmtDate } from '../serverTime'
 import WorkflowRibbon from '../components/WorkflowRibbon'
+import RequestViewShell, { buildWorkflowSteps } from '../components/RequestView'
 import DeclarationModal from '../components/DeclarationModal'
 import PermissionChanges, {
   permChangeState, changeStyle, changeTextStyle, ChangeBadge,
@@ -566,28 +567,55 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       ? `Decyzja — wniosek #${r.id}`
       : `Wniosek #${r.id}`
 
+  const _subtitle = isSelect
+    ? 'Zaznacz stan docelowy uprawnień — po wysłaniu wniosek trafi do IT.'
+    : isDecision ? 'Zatwierdź albo odrzuć wniosek.' : 'Podgląd wniosku i jego obiegu.'
+  const _steps = buildWorkflowSteps({
+    sent: true, nodeType: r.current_node_type, status: r.status,
+    requiresHigher: r.requires_higher_approval, kind: r.kind,
+  })
+  const _summary = [
+    { label: 'Pracownik', value: r.worker_name },
+    { label: 'Stanowisko', value: r.worker_position || '—' },
+    { label: 'Komórka', value: `${r.department_name || '—'} · ${r.unit_name || '—'}` },
+    { label: 'Złożył(a)', value: r.requested_by_name || r.created_by_name || '—' },
+  ]
+
   return (
-    <div>
-      <div className="page-header">
-        <div>
-          <div className="page-header__title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <ListChecks size={18} style={{ color: 'var(--color-navy)' }} />
-            {title}
-            {isRevoke && <span className="badge badge--warning" style={{ fontSize: 10 }}>ustanie</span>}
-          </div>
-        </div>
-        <button type="button" className="btn btn--ghost" onClick={onClose}>← Wróć do listy</button>
-      </div>
-      <div className="card" style={{ maxWidth: 1000, margin: '0 auto', width: '100%' }}>
-          {/* --- Dane wniosku --- */}
-          <div className="form-row mb-4">
-            <div><div className="form-label">Pracownik</div><div style={{ fontWeight: 600 }}>{r.worker_name}</div></div>
-            <div><div className="form-label">Stanowisko</div><div>{r.worker_position || '—'}</div></div>
-          </div>
-          <div className="form-row mb-4">
-            <div><div className="form-label">Komórka</div><div>{r.department_name || '—'}</div></div>
-            <div><div className="form-label">Złożył(a)</div><div>{r.requested_by_name || r.created_by_name || '—'}</div></div>
-          </div>
+    <>
+    <RequestViewShell
+      icon={ListChecks} kind={r.kind} kindLabel={isRevoke ? 'Odejście' : 'Zatrudnienie'}
+      statusText={`Wniosek #${r.id}`} title={title} subtitle={_subtitle}
+      backLabel="← Wróć do listy" onBack={onClose}
+      steps={_steps} summary={_summary}
+      history={[{ text: 'Wniosek w obiegu — pełny ślad w Audit log', muted: true }]}
+      footerActions={<>
+        <button className="btn btn--ghost" onClick={onClose} disabled={busy}>
+          {(isSelect || isDecision) ? 'Anuluj' : 'Zamknij'}
+        </button>
+        {(isSelect || isDecision) && (
+          <button className="btn btn--danger" onClick={() => submit('reject')} disabled={busy}>
+            <X size={14} /> Odrzuć
+          </button>
+        )}
+        {isSelect && (
+          <button className="btn btn--success" onClick={() => submit('approve')}
+                  disabled={busy || (isRevoke
+                    ? picked.size === 0
+                    : (toGrant.length === 0 && toRevoke.length === 0))}>
+            <Check size={14} />
+            {(() => {
+              const cnt = isRevoke ? `${picked.size}` : `+${toGrant.length} / −${toRevoke.length}`
+              return twoStage ? ` Wyślij do akceptacji (${cnt})` : ` Zatwierdź i przekaż do realizacji (${cnt})`
+            })()}
+          </button>
+        )}
+        {isDecision && (
+          <button className="btn btn--success" onClick={() => submit('approve')} disabled={busy}>
+            <Check size={14} /> Zatwierdź
+          </button>
+        )}
+      </>}>
 
           {/* Zmiany uprawnień — poza krokiem wyboru (tam jest picker).
               Kierownik nadrzędny widzi tu jasno, co jest NADAWANE, a co ODBIERANE. */}
@@ -616,11 +644,6 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
             </div>
           )}
 
-          <div className="mb-4">
-            <div className="form-label">Obieg wniosku</div>
-            {/* Akcję obsługuje ten modal — ribbon pokazuje sam postęp i historię. */}
-            <WorkflowRibbon requestId={r.id} unitId={r.unit_id} showActions={false} />
-          </div>
 
           {/* --- Akcja: wybór uprawnień --- */}
           {isSelect && (
@@ -841,40 +864,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           )}
 
           {err && <div className="alert alert--error">{err}</div>}
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20,
-                      borderTop: '1px solid var(--color-border)', paddingTop: 16 }}>
-          <button className="btn btn--ghost" onClick={onClose} disabled={busy}>
-            {(isSelect || isDecision) ? 'Anuluj' : 'Zamknij'}
-          </button>
-          {(isSelect || isDecision) && (
-            <button className="btn btn--danger" onClick={() => submit('reject')} disabled={busy}>
-              <X size={14} /> Odrzuć
-            </button>
-          )}
-          {isSelect && (
-            <button className="btn btn--success" onClick={() => submit('approve')}
-                    disabled={busy || (isRevoke
-                      ? picked.size === 0
-                      : (toGrant.length === 0 && toRevoke.length === 0))}>
-              <Check size={14} />
-              {(() => {
-                const cnt = isRevoke
-                  ? `${picked.size}`
-                  : `+${toGrant.length} / −${toRevoke.length}`
-                return twoStage
-                  ? ` Wyślij do akceptacji (${cnt})`
-                  : ` Zatwierdź i przekaż do realizacji (${cnt})`
-              })()}
-            </button>
-          )}
-          {isDecision && (
-            <button className="btn btn--success" onClick={() => submit('approve')} disabled={busy}>
-              <Check size={14} /> Zatwierdź
-            </button>
-          )}
-        </div>
-      </div>
+    </RequestViewShell>
 
       {declPending && (
         <DeclarationModal
@@ -889,6 +879,6 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           }}
         />
       )}
-    </div>
+    </>
   )
 }

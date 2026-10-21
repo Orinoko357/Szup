@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { FilePlus, UserMinus, ChevronDown, ChevronRight, Building2, Check } from 'lucide-react'
 import { listRequests, createRequest, listActiveDepts, listActiveUnits, listRequestTypes, usersByDepartment, searchUsers } from '../api'
 import { fmtDate } from '../serverTime'
+import RequestViewShell, { Section, buildWorkflowSteps } from '../components/RequestView'
 
 const KIND_BADGE = { grant: 'badge--info', revoke: 'badge--warning' }
 const KIND_LABEL = { grant: 'Zatrudnienie', revoke: 'Ustanie stosunku pracy' }
@@ -241,44 +242,65 @@ function RequestFormView({ onCancel, onCreated }) {
     }
   }
 
+  const workerName = `${firstName.trim()} ${lastName.trim()}`.trim()
+  const steps = buildWorkflowSteps({
+    sent: false, kind: 'grant',
+    requiresHigher: !!selectedDept?.requires_higher_approval,
+  })
+  const summary = [
+    { label: 'Pracownik', value: workerName || '—' },
+    { label: 'Stanowisko', value: position.trim() || '—' },
+    { label: 'Komórka', value: selectedDept ? `${selectedUnit?.name || '?'} · ${selectedDept.name}` : '—' },
+    { label: 'Od dnia', value: startDate || '—' },
+  ]
+
   return (
-    <HRFormPage icon={FilePlus} title="Nowy pracownik"
-                subtitle="Zgłoszenie zatrudnienia — trafi do kierownika komórki, potem do IT"
-                onCancel={onCancel} onSubmit={submit} submitLabel="Zapisz pracownika" busy={busy}>
-      <SectionLabel>Dane pracownika</SectionLabel>
-      <div className="form-row">
-        <div className="form-group">
-          <label className="form-label">Imię *</label>
-          <input className="form-control" required autoFocus
-                 value={firstName} onChange={e => setFirstName(e.target.value)} />
+    <RequestViewShell icon={FilePlus} kind="grant" kindLabel="Zatrudnienie"
+                      statusText="Nowy wniosek · nie wysłany" title="Nowy pracownik"
+                      subtitle="Zgłoszenie zatrudnienia — po wysłaniu trafi do kierownika komórki, a potem do IT."
+                      backLabel="← Wróć do kartoteki" onBack={onCancel}
+                      steps={steps} summary={summary} history={[]}
+                      footerLeft="* pola wymagane"
+                      footerActions={<>
+                        <button type="button" className="btn btn--ghost" onClick={onCancel}>Anuluj</button>
+                        <button type="button" className="btn btn--action" onClick={submit} disabled={busy}>
+                          {busy ? 'Zapisywanie…' : 'Wyślij do kierownika →'}
+                        </button>
+                      </>}>
+      <Section n={1} title="Dane pracownika">
+        <div className="form-row">
+          <div className="form-group">
+            <label className="form-label">Imię *</label>
+            <input className="form-control" required autoFocus
+                   value={firstName} onChange={e => setFirstName(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Nazwisko *</label>
+            <input className="form-control" required
+                   value={lastName} onChange={e => setLastName(e.target.value)} />
+          </div>
         </div>
-        <div className="form-group">
-          <label className="form-label">Nazwisko *</label>
-          <input className="form-control" required
-                 value={lastName} onChange={e => setLastName(e.target.value)} />
+        <div className="form-row">
+          <div className="form-group">
+            <label className="form-label">Stanowisko *</label>
+            <input className="form-control" required value={position}
+                   onChange={e => setPosition(e.target.value)}
+                   placeholder="np. Podinspektor" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Data zatrudnienia od</label>
+            <input className="form-control" type="date" value={startDate}
+                   onChange={e => setStartDate(e.target.value)} />
+          </div>
         </div>
-      </div>
+      </Section>
 
-      <div className="form-row">
-        <div className="form-group">
-          <label className="form-label">Stanowisko *</label>
-          <input className="form-control" required value={position}
-                 onChange={e => setPosition(e.target.value)}
-                 placeholder="np. Podinspektor" />
-        </div>
-        <div className="form-group">
-          <label className="form-label">Data zatrudnienia od</label>
-          <input className="form-control" type="date" value={startDate}
-                 onChange={e => setStartDate(e.target.value)} />
-        </div>
-      </div>
-
-      <div style={{ height: 10 }} />
-      <SectionLabel>Miejsce pracy *</SectionLabel>
-      <DeptSearchSelect units={units} depts={depts} value={deptId} onChange={setDeptId} />
+      <Section n={2} title="Miejsce pracy *">
+        <DeptSearchSelect units={units} depts={depts} value={deptId} onChange={setDeptId} />
+      </Section>
 
       {err && <div className="alert alert--error mt-4">{err}</div>}
-    </HRFormPage>
+    </RequestViewShell>
   )
 }
 
@@ -391,12 +413,30 @@ function TerminationFormView({ onCancel, onCreated }) {
     }
   }
 
+  const summary = [
+    { label: 'Pracownik', value: effWorker?.name || '—' },
+    { label: 'Komórka', value: effWorker ? `${effWorker.unit_name || '?'} · ${effWorker.department_name || '—'}` : '—' },
+    { label: 'Ostatni dzień', value: workUntil || '—' },
+  ]
+  const steps = buildWorkflowSteps({
+    sent: false, kind: 'revoke',
+    requiresHigher: !!selectedDept?.requires_higher_approval,
+  })
+
   return (
-    <HRFormPage icon={UserMinus} title="Ustanie stosunku pracy"
-                subtitle="Wskaż pracownika — wniosek trafi do kierownika (wybór uprawnień do odebrania), potem do IT"
-                onCancel={onCancel} onSubmit={submit} submitLabel="Zgłoś ustanie"
-                busy={busy} canSubmit={!!effWorker}>
-          <SectionLabel>Pracownik</SectionLabel>
+    <RequestViewShell icon={UserMinus} kind="revoke" kindLabel="Odejście"
+                      statusText="Nowy wniosek · nie wysłany" title="Ustanie stosunku pracy"
+                      subtitle="Zgłoszenie odejścia — trafi do kierownika komórki, potem do IT."
+                      backLabel="← Wróć do kartoteki" onBack={onCancel}
+                      steps={steps} summary={summary} history={[]}
+                      footerLeft="* pola wymagane"
+                      footerActions={<>
+                        <button type="button" className="btn btn--ghost" onClick={onCancel}>Anuluj</button>
+                        <button type="button" className="btn btn--action" onClick={submit} disabled={busy || !effWorker}>
+                          {busy ? 'Zapisywanie…' : 'Wyślij do kierownika →'}
+                        </button>
+                      </>}>
+      <Section n={1} title="Pracownik">
           {/* Wyszukiwanie po nazwisku — najszybsza droga. */}
           <div className="form-group">
             <label className="form-label">Znajdź po nazwisku lub loginie</label>
@@ -492,16 +532,21 @@ function TerminationFormView({ onCancel, onCreated }) {
             </>
           )}
 
-          <div style={{ height: 10 }} />
-          <SectionLabel>Termin</SectionLabel>
+      </Section>
+
+      <Section n={2} title="Termin">
           <div className="form-group">
-            <label className="form-label">Data do której pracuje (ostatni dzień pracy)</label>
+            <label className="form-label">Ostatni dzień pracy *</label>
             <input className="form-control" type="date" style={{ maxWidth: 220 }}
                    value={workUntil} onChange={e => setWorkUntil(e.target.value)} />
+            <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
+              Blokada dostępów od następnego dnia.
+            </div>
           </div>
 
           {err && <div className="alert alert--error mt-4">{err}</div>}
-    </HRFormPage>
+      </Section>
+    </RequestViewShell>
   )
 }
 

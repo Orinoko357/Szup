@@ -7,6 +7,7 @@ import {
   permChangeState, changeStyle, ChangeBadge,
 } from '../components/PermissionChanges'
 import DeclarationModal from '../components/DeclarationModal'
+import RequestViewShell, { buildWorkflowSteps } from '../components/RequestView'
 import PermInput, {
   permInput, missingRequiredFields, splitAdminPerm, AdminPermRow,
   adminGrantNames, confirmAdminRights, ADMIN_CONFIRM_ABORTED,
@@ -421,30 +422,34 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
     }
   }
 
+  const _steps = buildWorkflowSteps({
+    sent: true, nodeType: 'select_permissions',
+    requiresHigher: !!w.requires_higher_approval, kind: 'grant',
+  })
+  const _summary = [
+    { label: 'Pracownik', value: w.full_name || w.username },
+    { label: 'Komórka', value: `${w.department_name || '—'} · ${w.unit_name || '—'}` },
+    { label: 'Zmiany', value: `+${toGrant.length} / −${toRevoke.length}` },
+    { label: 'Akceptacja', value: w.requires_higher_approval ? 'wymagana' : 'nie wymagana' },
+  ]
+
   return (
-    <div>
-      <div className="page-header">
-        <div>
-          <div className="page-header__title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <ListChecks size={18} style={{ color: 'var(--color-navy)' }} />
-            Wniosek o uprawnienia — {w.full_name || w.username}
-          </div>
-        </div>
-        <button type="button" className="btn btn--ghost" onClick={onClose}>← Wróć do listy</button>
-      </div>
-      <div className="card" style={{ maxWidth: 1000, margin: '0 auto', width: '100%' }}>
-          <div className="form-row mb-4">
-            <div>
-              <div className="form-label">Pracownik</div>
-              <div style={{ fontWeight: 600 }}>{w.full_name || w.username}</div>
-              <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{w.email || '—'}</div>
-            </div>
-            <div>
-              <div className="form-label">Wydział</div>
-              <div>{w.department_name || '—'}</div>
-              <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{w.unit_name || '—'}</div>
-            </div>
-          </div>
+    <>
+    <RequestViewShell
+      icon={ListChecks} kind="grant" kindLabel="Zatrudnienie"
+      statusText="Nowy wniosek · nie wysłany"
+      title={`Wniosek o uprawnienia — ${w.full_name || w.username}`}
+      subtitle="Zaznacz stan docelowy uprawnień — po wysłaniu wniosek trafi do kierownika nadrzędnego lub do IT."
+      backLabel="← Wróć do moich pracowników" onBack={onClose}
+      steps={_steps} summary={_summary} history={[]}
+      footerLeft={<>+{toGrant.length} nadania · −{toRevoke.length} odebrania</>}
+      footerActions={<>
+        <button className="btn btn--ghost" onClick={onClose} disabled={busy}>Anuluj</button>
+        <button className="btn btn--success" onClick={submit} disabled={busy || loading || noChange}>
+          <Send size={13} /> Wyślij wniosek (+{toGrant.length} / −{toRevoke.length})
+        </button>
+      </>}>
+          <div className="form-row mb-4" style={{ display: 'none' }} />
 
           <div className="form-label" style={{ marginBottom: 4 }}>Uprawnienia do nadania / zmiany</div>
           <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 8 }}>
@@ -647,15 +652,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
           </div>
 
           {err && <div className="alert alert--error">{err}</div>}
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20,
-                      borderTop: '1px solid var(--color-border)', paddingTop: 16 }}>
-          <button className="btn btn--ghost" onClick={onClose} disabled={busy}>Anuluj</button>
-          <button className="btn btn--success" onClick={submit} disabled={busy || loading || noChange}>
-            <Send size={13} /> Wyślij wniosek (+{toGrant.length} / −{toRevoke.length})
-          </button>
-        </div>
-      </div>
+    </RequestViewShell>
 
       {declItems && (
         <DeclarationModal
@@ -670,6 +667,6 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
           }}
         />
       )}
-    </div>
+    </>
   )
 }

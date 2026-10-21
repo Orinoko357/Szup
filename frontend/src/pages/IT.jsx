@@ -16,6 +16,7 @@ function useIsItManager() {
 }
 import { fmtDate } from '../serverTime'
 import WorkflowRibbon from '../components/WorkflowRibbon'
+import RequestViewShell, { buildWorkflowSteps } from '../components/RequestView'
 import PermissionChanges from '../components/PermissionChanges'
 import AddPermissionsPicker from '../components/AddPermissionsPicker'
 import NameChangeQueue from '../components/NameChangeQueue'
@@ -343,28 +344,43 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     ? `${isRevoke ? 'Odebranie uprawnień' : 'Realizacja'} — wniosek #${r.id}`
     : `Wniosek #${r.id}`
 
-  return (
-    <div>
-      <div className="page-header">
-        <div>
-          <div className="page-header__title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {title}
-            {isRevoke && <span className="badge badge--warning" style={{ fontSize: 10 }}>ustanie</span>}
-          </div>
-        </div>
-        <button type="button" className="btn btn--ghost" onClick={onClose}>← Wróć do listy</button>
-      </div>
-      <div className="card" style={{ maxWidth: 1000, margin: '0 auto', width: '100%' }}>
-          {/* --- Dane wniosku --- */}
-          <div className="form-row mb-4">
-            <div><div className="form-label">Pracownik</div><strong>{r.worker_name}</strong></div>
-            <div><div className="form-label">Stanowisko</div>{r.worker_position || '—'}</div>
-          </div>
-          <div className="form-row mb-4">
-            <div><div className="form-label">Wydział</div>{r.department_name || '—'}</div>
-            <div><div className="form-label">Jednostka</div>{r.unit_name || '—'}</div>
-          </div>
+  const _steps = buildWorkflowSteps({
+    sent: true, nodeType: r.current_node_type, status: r.status,
+    requiresHigher: r.requires_higher_approval, kind: r.kind,
+  })
+  const _summary = [
+    { label: 'Pracownik', value: r.worker_name },
+    { label: 'Stanowisko', value: r.worker_position || '—' },
+    { label: 'Komórka', value: `${r.department_name || '—'} · ${r.unit_name || '—'}` },
+  ]
+  const _history = [{ text: 'Wniosek w obiegu — pełny ślad w Audit log', muted: true }]
 
+  return (
+    <RequestViewShell
+      icon={Wrench} kind={r.kind} kindLabel={isRevoke ? 'Odejście' : 'Zatrudnienie'}
+      statusText={`Wniosek #${r.id}`} title={title}
+      subtitle="Wykonaj zmiany w systemach i oznacz każdą pozycję — decyzje zapisują się od razu."
+      backLabel="← Wróć do listy" onBack={onClose}
+      steps={_steps} summary={_summary} history={_history}
+      footerLeft={canRealize && grantProgress.total > 0
+        ? `Zrealizowane ${grantProgress.done}/${grantProgress.total}${grantProgress.pending ? ` · ${grantProgress.pending} bez decyzji` : ''}`
+        : null}
+      footerActions={<>
+        <button className="btn btn--ghost" onClick={onClose} disabled={busy}>
+          {canRealize || canLink ? 'Anuluj' : 'Zamknij'}
+        </button>
+        {canRealize && (
+          <button className="btn btn--success" onClick={realize}
+                  disabled={busy || (needsAd && !adUsername.trim())}>
+            <CheckCircle size={14} /> {busy ? 'Zapisywanie…' : (isRevoke ? 'Potwierdź odebranie' : 'Potwierdź realizację')}
+          </button>
+        )}
+        {canLink && (
+          <button className="btn btn--action" onClick={link} disabled={busy || !adUsername.trim()}>
+            <Link2 size={14} /> {busy ? 'Zapisywanie…' : 'Dowiąż'}
+          </button>
+        )}
+      </>}>
           <div className="mb-4">
             <div className="form-label">Zmiany uprawnień do wykonania</div>
             <p style={{ color: 'var(--color-text-muted)', fontSize: 12, margin: '4px 0 0' }}>
@@ -405,11 +421,6 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
             </div>
           )}
 
-          <div className="mb-4">
-            <div className="form-label">Obieg wniosku</div>
-            {/* Akcję obsługuje ten modal — ribbon pokazuje sam postęp i historię. */}
-            <WorkflowRibbon requestId={r.id} unitId={r.unit_id} showActions={false} />
-          </div>
 
           {/* --- Akcja: realizacja / odebranie --- */}
           {canRealize && (
@@ -541,26 +552,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           )}
 
           {err && <div className="alert alert--error">{err}</div>}
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20,
-                      borderTop: '1px solid var(--color-border)', paddingTop: 16 }}>
-          <button className="btn btn--ghost" onClick={onClose} disabled={busy}>
-            {canRealize || canLink ? 'Anuluj' : 'Zamknij'}
-          </button>
-          {canRealize && (
-            <button className="btn btn--success" onClick={realize}
-                    disabled={busy || (needsAd && !adUsername.trim())}>
-              <CheckCircle size={14} /> {busy ? 'Zapisywanie…' : (isRevoke ? 'Potwierdź odebranie' : 'Potwierdź realizację')}
-            </button>
-          )}
-          {canLink && (
-            <button className="btn btn--action" onClick={link} disabled={busy || !adUsername.trim()}>
-              <Link2 size={14} /> {busy ? 'Zapisywanie…' : 'Dowiąż'}
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
+    </RequestViewShell>
   )
 }
 
