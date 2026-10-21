@@ -533,7 +533,9 @@ function DeptSearchSelect({ units, depts, value, onChange }) {
   const q = query.trim().toLowerCase()
   const matches = useMemo(() => (
     depts.map(d => ({ d, path: pathStr(d) }))
-      .filter(x => !q || x.path.toLowerCase().includes(q))
+      // Dopasowanie po ŚCIEŻCE (nazwa + jednostka) ORAZ po OPISIE z AD.
+      .filter(x => !q || x.path.toLowerCase().includes(q)
+                   || (x.d.description || '').toLowerCase().includes(q))
       .sort((a, b) => a.path.localeCompare(b.path, 'pl'))
       .slice(0, 60)
   ), [depts, q, units])
@@ -587,8 +589,15 @@ function DeptSearchSelect({ units, depts, value, onChange }) {
                    }}
                    onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = 'var(--bg-hover, rgba(0,0,0,0.04))' }}
                    onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = 'transparent' }}>
-                <Building2 size={14} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
-                <span style={{ flex: 1 }}>{path}</span>
+                <Building2 size={14} style={{ color: 'var(--color-text-muted)', flexShrink: 0, marginTop: 2 }} />
+                <span style={{ flex: 1 }}>
+                  {path}
+                  {d.description && (
+                    <span style={{ display: 'block', fontSize: 11, color: 'var(--color-text-muted)' }}>
+                      {d.description}
+                    </span>
+                  )}
+                </span>
                 {isSel && <Check size={14} style={{ color: 'var(--color-navy)' }} />}
               </div>
             )
@@ -653,7 +662,8 @@ function DepartmentPicker({ units, depts, selectedId, onSelect }) {
   const matches = q
     ? depts
         .map(d => ({ d, path: pathStr(d) }))
-        .filter(x => x.path.toLowerCase().includes(q))
+        .filter(x => x.path.toLowerCase().includes(q)
+                     || (x.d.description || '').toLowerCase().includes(q))
         .sort((a, b) => a.path.localeCompare(b.path, 'pl'))
         .slice(0, 100)
     : null

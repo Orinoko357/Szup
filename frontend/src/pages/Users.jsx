@@ -72,7 +72,9 @@ function DeptCombo({ depts = [], units = [], value, onChange, className = 'form-
 
   const norm = s => (s || '').toString().toLowerCase()
   const query = q.trim().toLowerCase()
-  const filtered = depts.filter(d => !query || norm(fullStr(d)).includes(query))
+  // Dopasowanie po pełnej ścieżce (nazwa + jednostka) ORAZ po opisie z AD.
+  const filtered = depts.filter(d => !query
+    || norm(fullStr(d)).includes(query) || norm(d.description).includes(query))
 
   // Grupowanie po jednostce; jednostki i komórki alfabetycznie po ścieżce.
   const gMap = new Map()

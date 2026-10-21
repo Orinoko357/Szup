@@ -120,6 +120,8 @@ class Unit(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     code: Optional[str] = None
+    # Opis z AD (atrybut `description` OU) — importowany przy synchronizacji.
+    description: Optional[str] = None
     is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     ldap_dn: Optional[str] = Field(default=None, index=True)   # znormalizowany DN z AD
@@ -144,6 +146,8 @@ class Department(SQLModel, table=True):
     unit_id: int = Field(foreign_key="unit.id")
     parent_dept_id: Optional[int] = Field(default=None, foreign_key="department.id", index=True)
     name: str = Field(index=True)
+    # Opis z AD (atrybut `description` OU) — importowany przy synchronizacji.
+    description: Optional[str] = None
     # Typ węzła struktury organizacyjnej:
     #   "department" — Wydział / Dział (domyślny, zgodny z istniejącymi danymi)
     #   "section"    — Referat (pod wydziałem)

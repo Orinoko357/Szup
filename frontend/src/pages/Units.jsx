@@ -150,6 +150,11 @@ function UnitAccordion({ unit: u, depts, users, onChanged }) {
           <Building2 size={15} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
           <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--color-navy)' }}>{u.name}</span>
           <span className="badge badge--neutral" style={{ fontSize: 10 }}>{depts.length} wydziałów</span>
+          {u.description && (
+            <span style={{ fontSize: 12, color: 'var(--color-text-muted)', fontWeight: 400 }}>
+              — {u.description}
+            </span>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <button type="button" className="btn btn--ghost btn--sm" onClick={e => { e.stopPropagation(); setEditing(v => !v); setOpen(true) }}>
@@ -396,6 +401,11 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
       <td style={{ fontWeight: 600, paddingLeft: `calc(10px + ${indentPx}px)` }}>
         {depth > 0 && <span style={{ color: 'var(--color-text-muted)', marginRight: 6 }}>↳</span>}
         {d.name}
+        {d.description && (
+          <span style={{ display: 'block', fontSize: 11, color: 'var(--color-text-muted)', fontWeight: 400 }}>
+            {d.description}
+          </span>
+        )}
       </td>
       <td><KindBadge kind={d.kind || 'department'} /></td>
       <td style={{ color: 'var(--color-text-muted)' }}>

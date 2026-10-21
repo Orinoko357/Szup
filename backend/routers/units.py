@@ -48,6 +48,7 @@ class UnitRead(BaseModel):
     id: int
     name: str
     code: Optional[str]
+    description: Optional[str] = None
     is_active: bool
     # Kierownik CAŁEJ jednostki (podgląd uprawnień + wnioskowanie za pracowników).
     manager_user_id: Optional[int] = None
@@ -57,6 +58,7 @@ class UnitRead(BaseModel):
 class UnitUpdate(BaseModel):
     name: Optional[str] = None
     code: Optional[str] = None
+    description: Optional[str] = None
     is_active: Optional[bool] = None
     manager_user_id: Optional[int] = None    # None w patchu = zdejmij kierownika
 
@@ -67,7 +69,8 @@ def _unit_read(session: Session, unit: Unit) -> "UnitRead":
         mgr = session.get(User, unit.manager_user_id)
         mgr_name = (mgr.full_name or mgr.username) if mgr else None
     return UnitRead(
-        id=unit.id, name=unit.name, code=unit.code, is_active=unit.is_active,
+        id=unit.id, name=unit.name, code=unit.code,
+        description=getattr(unit, "description", None), is_active=unit.is_active,
         manager_user_id=unit.manager_user_id, manager_name=mgr_name,
     )
 
@@ -167,6 +170,7 @@ def delete_unit(
 class DepartmentCreate(BaseModel):
     unit_id: int
     name: str
+    description: Optional[str] = None
     kind: str = "department"                    # department / section / standalone
     parent_dept_id: Optional[int] = None
     manager_user_id: Optional[int] = None
@@ -179,6 +183,7 @@ class DepartmentRead(BaseModel):
     unit_id: int
     parent_dept_id: Optional[int] = None
     name: str
+    description: Optional[str] = None
     kind: str = "department"
     manager_user_id: Optional[int]
     manager_name: Optional[str] = None
@@ -189,6 +194,7 @@ class DepartmentRead(BaseModel):
 
 class DepartmentUpdate(BaseModel):
     name: Optional[str] = None
+    description: Optional[str] = None
     kind: Optional[str] = None
     parent_dept_id: Optional[int] = None        # None = brak zmiany (użyj SENTINEL niżej)
     manager_user_id: Optional[int] = None
@@ -234,7 +240,8 @@ def _enrich_dept(dept: Department, session: Session) -> DepartmentRead:
         mgr_name = (mgr.full_name or mgr.username) if mgr else None
     return DepartmentRead(
         id=dept.id, unit_id=dept.unit_id, parent_dept_id=dept.parent_dept_id,
-        name=dept.name, kind=dept.kind or "department",
+        name=dept.name, description=getattr(dept, "description", None),
+        kind=dept.kind or "department",
         manager_user_id=dept.manager_user_id,
         manager_name=mgr_name, is_active=dept.is_active,
         requires_higher_approval=bool(dept.requires_higher_approval),
@@ -322,6 +329,7 @@ def create_department(
     mgr = None if (data.kind == "standalone") else data.manager_user_id
     dept = Department(
         unit_id=data.unit_id, name=data.name,
+        description=(data.description or None),
         kind=data.kind or "department",
         parent_dept_id=data.parent_dept_id,
         manager_user_id=mgr,
@@ -654,6 +662,35 @@ def ldap_import(
 
     from services.ldap_service import normalize_dn
 
+    # Mapa znormalizowany DN → opis (atrybut `description` OU). Pobieramy raz
+    # pełną strukturę z AD, żeby przy imporcie/synchronizacji ustawić opisy
+    # jednostek i komórek bez przekazywania ich z frontu.
+    def _build_desc_map() -> dict:
+        try:
+            from models import LdapSettings
+            from services.ldap_service import fetch_ou_structure
+            cfg = session.exec(select(LdapSettings)).first()
+            if not cfg or not cfg.base_dn:
+                return {}
+            raw = fetch_ou_structure(cfg, cfg.base_dn)
+        except Exception:
+            return {}
+        m: dict[str, Optional[str]] = {}
+
+        def _walk(node):
+            if node.get("dn"):
+                m[normalize_dn(node["dn"])] = node.get("description")
+            for c in node.get("children", []):
+                _walk(c)
+        for u in raw:
+            if u.get("dn"):
+                m[normalize_dn(u["dn"])] = u.get("description")
+            for d in u.get("departments", []):
+                _walk(d)
+        return m
+
+    desc_by_dn = _build_desc_map()
+
     def _import_children(unit_id: int, parent_dept_id: Optional[int],
                          children: list[LdapImportDept], depth: int) -> None:
         for child in children:
@@ -707,6 +744,10 @@ def ldap_import(
                     existing.parent_dept_id = parent_dept_id; changed.append("podległość")
                 if existing.name != child.name:
                     existing.name = child.name; changed.append("nazwa")
+                # Opis z AD — ustaw/odśwież (nie czyścimy, gdy w AD pusty).
+                adesc = desc_by_dn.get(ndn) if ndn else None
+                if adesc and existing.description != adesc:
+                    existing.description = adesc; changed.append("opis")
                 if changed:
                     session.add(existing); session.commit()
                 dept_id = existing.id
@@ -721,7 +762,8 @@ def ldap_import(
                     details.append(f"{indent}~ Wydział „{child.name}” — już istnieje, bez zmian")
             else:
                 dept = Department(unit_id=unit_id, parent_dept_id=parent_dept_id,
-                                  name=child.name, ldap_dn=ndn)
+                                  name=child.name, ldap_dn=ndn,
+                                  description=(desc_by_dn.get(ndn) if ndn else None))
                 session.add(dept); session.commit(); session.refresh(dept)
                 dept_id = dept.id
                 counters["depts_created"] += 1
@@ -747,13 +789,19 @@ def ldap_import(
         ).first()
 
         if not unit:
-            unit = Unit(name=item.unit_name, ldap_dn=ndn)
+            unit = Unit(name=item.unit_name, ldap_dn=ndn,
+                        description=(desc_by_dn.get(ndn) if ndn else None))
             session.add(unit); session.commit(); session.refresh(unit)
             counters["units_created"] += 1
             details.append(f"Jednostka \"{item.unit_name}\" — utworzona")
         else:
+            uchg = False
             if ndn and not unit.ldap_dn:
-                unit.ldap_dn = ndn
+                unit.ldap_dn = ndn; uchg = True
+            adesc = desc_by_dn.get(ndn) if ndn else None
+            if adesc and unit.description != adesc:
+                unit.description = adesc; uchg = True
+            if uchg:
                 session.add(unit); session.commit()
             counters["units_skipped"] += 1
             if item.map_to_unit_id is not None:

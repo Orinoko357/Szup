@@ -98,23 +98,34 @@ def fetch_ou_structure(settings, search_base: str) -> list[dict]:
         except Exception:
             return entry.entry_dn.split(",")[0].split("=")[-1]
 
+    def _ou_desc(entry) -> str | None:
+        try:
+            v = getattr(entry, "description", None)
+            v = v.value if v is not None else None
+            if isinstance(v, (list, tuple)):
+                v = v[0] if v else None
+            v = (str(v).strip() if v is not None else "")
+            return v or None
+        except Exception:
+            return None
+
     base_norm = normalize_dn(search_base)
 
     with Connection(server, user=settings.bind_dn, password=bind_password, auto_bind=True) as conn:
         conn.search(search_base, "(objectClass=organizationalUnit)",
-                    search_scope=SUBTREE, attributes=["ou"])
-        entries = [(e.entry_dn, _ou_name(e)) for e in conn.entries]
+                    search_scope=SUBTREE, attributes=["ou", "description"])
+        entries = [(e.entry_dn, _ou_name(e), _ou_desc(e)) for e in conn.entries]
 
     # Index wszystkich OU wg znormalizowanego DN
     by_dn: dict[str, dict] = {}
-    for dn, name in entries:
+    for dn, name, desc in entries:
         if normalize_dn(dn) == base_norm:
             continue  # sam search_base — nie włączamy go
-        by_dn[normalize_dn(dn)] = {"dn": dn, "name": name, "children": []}
+        by_dn[normalize_dn(dn)] = {"dn": dn, "name": name, "description": desc, "children": []}
 
     # Zbuduj drzewo po parent-DN
     roots: list[dict] = []
-    for dn, _name in entries:
+    for dn, _name, _desc in entries:
         norm_dn = normalize_dn(dn)
         if norm_dn == base_norm or norm_dn not in by_dn:
             continue
@@ -136,7 +147,8 @@ def fetch_ou_structure(settings, search_base: str) -> list[dict]:
 
     # Poziom 1 = jednostki; ich children = wydziały (drzewo)
     return [
-        {"dn": r["dn"], "name": r["name"], "departments": r["children"]}
+        {"dn": r["dn"], "name": r["name"], "description": r.get("description"),
+         "departments": r["children"]}
         for r in roots
     ]
 

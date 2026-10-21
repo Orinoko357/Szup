@@ -275,6 +275,8 @@ def _run_migrations():
         ("department",    "is_hr",          "BOOLEAN DEFAULT 0"),
         ("accessrequest", "employment_from", "DATE"),
         ("accessrequest", "work_until",      "DATE"),
+        ("unit",          "description",     "VARCHAR"),
+        ("department",    "description",     "VARCHAR"),
         ("user",          "department_id",  "INTEGER"),
         ("user",          "ldap_dn",        "VARCHAR"),
         ("department",    "requires_higher_approval", "BOOLEAN DEFAULT 0"),
