@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -178,6 +178,9 @@ class RequestCreate(BaseModel):
     worker_email: Optional[str] = None
     worker_phone: Optional[str] = None
     worker_position: Optional[str] = None
+    # Data zatrudnienia od (nowy pracownik) / ostatni dzień pracy (ustanie).
+    employment_from: Optional[date] = None
+    work_until: Optional[date] = None
     worker_user_id: Optional[int] = None
     unit_id: int
     department_id: int
@@ -278,6 +281,8 @@ def _serialize_request(r: AccessRequest, items: list, session: Session | None = 
         "worker_email": r.worker_email,
         "worker_phone": r.worker_phone,
         "worker_position": r.worker_position,
+        "employment_from": r.employment_from.isoformat() if getattr(r, "employment_from", None) else None,
+        "work_until": r.work_until.isoformat() if getattr(r, "work_until", None) else None,
         "worker_user_id": r.worker_user_id,
         "unit_id": r.unit_id,
         "unit_name": unit_name,
@@ -767,6 +772,8 @@ def create_request(
             worker_email=data.worker_email,
             worker_phone=data.worker_phone,
             worker_position=data.worker_position,
+            employment_from=data.employment_from,
+            work_until=data.work_until,
             worker_user_id=worker_user_id,
             unit_id=data.unit_id,
             department_id=data.department_id,
@@ -918,6 +925,8 @@ def create_request(
         worker_email=data.worker_email,
         worker_phone=data.worker_phone,
         worker_position=data.worker_position,
+        employment_from=data.employment_from,
+        work_until=data.work_until,
         worker_user_id=worker_user_id,
         unit_id=data.unit_id,
         department_id=data.department_id,

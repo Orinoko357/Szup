@@ -336,6 +336,17 @@ export default function Users() {
 
   useEffect(() => { load() }, [])
 
+  // Domyślnie WSZYSTKIE jednostki zwinięte (jak w zakładce Jednostki) — ustawiane
+  // raz, po pierwszym załadowaniu danych. Późniejsze odświeżenia nie resetują
+  // tego, co użytkownik sam rozwinął.
+  const didInitCollapse = useRef(false)
+  useEffect(() => {
+    if (!loading && !didInitCollapse.current && userGroups.length) {
+      didInitCollapse.current = true
+      setCollapsed(new Set(userGroups.map(g => `u:${g.key}`)))
+    }
+  }, [loading, userGroups])
+
   return (
     <div>
       <div className="page-header">
@@ -495,7 +506,9 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
   const [deptId, setDeptId] = useState(u.department_id || '')
   const [editUnits, setEditUnits] = useState(false)
 
-  const isHr = (u.roles || [u.role]).includes('hr')
+  const hasHrRole = (u.roles || [u.role]).includes('hr')
+  // Zdolność HR z KOMÓRKI kadrowej (Department.is_hr) — bez roli per osoba.
+  const deptHr = !!depts.find(d => d.id === u.department_id)?.is_hr
   const isLocked = u.locked_until && serverTs(u.locked_until) > serverNow()
 
   async function saveDept() {
@@ -580,6 +593,14 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
                 <span key={rv} className={`badge ${m.badge}`} style={{ fontSize: 10 }}>{m.label}</span>
               ) : null
             })}
+            {/* Zdolność HR z komórki kadrowej — bez roli przypisanej per osoba. */}
+            {deptHr && !hasHrRole && (
+              <span className={`badge ${ROLE_META.hr?.badge || 'badge--info'}`}
+                    style={{ fontSize: 10, opacity: 0.85 }}
+                    title="Zdolność HR wynika z przynależności do komórki kadrowej (bez roli przypisanej per osoba)">
+                HR (kadry)
+              </span>
+            )}
           </div>
         )}
       </td>
@@ -603,9 +624,15 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
         )}
       </td>
 
-      {/* Jednostki obsługiwane przez kadry — tylko dla roli HR */}
+      {/* Jednostki obsługiwane — przypisanie dotyczy ROLI HR. Komórka kadrowa
+          (is_hr) daje dostęp do CAŁEJ struktury, więc tam nie przypisujemy. */}
       <td>
-        {!isHr ? (
+        {deptHr && !hasHrRole ? (
+          <span style={{ color: 'var(--color-text-muted)', fontSize: 12, fontStyle: 'italic' }}
+                title="Komórka kadrowa — dostęp do wszystkich jednostek">
+            cała struktura (kadry)
+          </span>
+        ) : !hasHrRole ? (
           <span style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>—</span>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>

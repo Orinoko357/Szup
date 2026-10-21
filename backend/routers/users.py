@@ -372,6 +372,61 @@ def users_by_department(
     ]
 
 
+@router.get("/search")
+def users_search(
+    q: str = "",
+    limit: int = 30,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Wyszukiwanie aktywnych pracowników po nazwisku/loginie — dla formularza
+    HR (ustanie): znajdź osobę bez przeklikiwania drzewa komórek. Zakres jak w
+    innych operacjach HR/kierownika; zwraca też komórkę i jednostkę, żeby front
+    mógł od razu ustawić miejsce pracy."""
+    from services.permissions import user_is_hr
+    hr_cap = user_is_hr(session, current_user)
+    if not (has_role(current_user, "superadmin", "manager") or hr_cap):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Brak uprawnień")
+
+    ql = (q or "").strip().lower()
+    if len(ql) < 2:
+        return []
+
+    rows = session.exec(select(User).where(User.is_active == True)).all()  # noqa: E712
+
+    allowed_dept_ids = None     # None = bez ograniczenia
+    allowed_unit_ids = None
+    if not has_role(current_user, "superadmin"):
+        if has_role(current_user, "manager") and not hr_cap:
+            direct_ids, escalated_ids = managed_dept_ids(session, current_user)
+            allowed_dept_ids = {*direct_ids, *escalated_ids}
+        else:
+            allowed_unit_ids = hr_scoped_unit_ids(session, current_user)  # None = wszystkie
+
+    dept_map = {d.id: d for d in session.exec(select(Department)).all()}
+    unit_map = {u.id: u.name for u in session.exec(select(Unit)).all()}
+
+    out = []
+    for u in rows:
+        name = (u.full_name or u.username or "")
+        if ql not in name.lower() and ql not in (u.username or "").lower():
+            continue
+        d = dept_map.get(u.department_id)
+        if allowed_dept_ids is not None and u.department_id not in allowed_dept_ids:
+            continue
+        if allowed_unit_ids is not None and (not d or d.unit_id not in allowed_unit_ids):
+            continue
+        out.append({
+            "id": u.id, "full_name": u.full_name, "username": u.username, "email": u.email,
+            "department_id": u.department_id,
+            "department_name": d.name if d else None,
+            "unit_id": d.unit_id if d else None,
+            "unit_name": unit_map.get(d.unit_id) if d else None,
+        })
+    out.sort(key=lambda x: (x["full_name"] or x["username"] or "").lower())
+    return out[:max(1, min(limit, 100))]
+
+
 @router.get("/my-workers")
 def my_workers(
     current_user: User = Depends(require_manager),

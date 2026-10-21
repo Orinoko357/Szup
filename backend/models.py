@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import enum
 import json
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional, TYPE_CHECKING
 
 from sqlalchemy import UniqueConstraint
@@ -318,6 +318,9 @@ class AccessRequest(SQLModel, table=True):
     worker_email: Optional[str] = None
     worker_phone: Optional[str] = None
     worker_position: Optional[str] = None
+    # Data zatrudnienia od (nowy pracownik) / data ostatniego dnia pracy (ustanie).
+    employment_from: Optional[date] = None
+    work_until: Optional[date] = None
     # Dowiązanie do konta pracownika (opcjonalne — zachowujemy kompatybilność
     # z istniejącymi rekordami HR, gdzie pracownik jest tylko wpisem tekstowym).
     # Używane do agregacji uprawnień w widoku „Moja struktura".
