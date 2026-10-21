@@ -49,6 +49,37 @@ export function KindBadge({ kind = 'grant', label }) {
   )
 }
 
+/** Karta „Pracownik” (wg makiety): inicjały + imię i nazwisko + podtytuł,
+ *  po prawej kolumny typu WYDZIAŁ / JEDNOSTKA / STANOWISKO. */
+export function WorkerCard({ name, sub, cols = [] }) {
+  const initials = (name || '?').split(/\s+/).filter(Boolean).slice(0, 2)
+    .map(w => w[0].toUpperCase()).join('')
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
+                  padding: '12px 16px', borderRadius: 8, border: '1px solid var(--color-border)',
+                  background: 'var(--bg-secondary)' }}>
+      <span style={{ flexShrink: 0, width: 38, height: 38, borderRadius: '50%',
+                     display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700,
+                     background: 'var(--color-card)', color: 'var(--color-navy)',
+                     border: '1px solid var(--color-border)' }}>{initials}</span>
+      <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--color-navy)' }}>{name || '—'}</div>
+        {sub && (
+          <div style={{ fontSize: 12, color: 'var(--color-text-muted)',
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</div>
+        )}
+      </div>
+      {cols.map((c, i) => (
+        <div key={i} style={{ minWidth: 70 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.06em',
+                        color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>{c.label}</div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{c.value || '—'}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /** Numerowany nagłówek sekcji: „01 Tytuł”. */
 export function Section({ n, title, note, children }) {
   return (
@@ -173,7 +204,7 @@ function SummaryBox({ rows = [] }) {
   )
 }
 
-function HistoryBox({ items = [], requestId }) {
+function HistoryBox({ items = [], requestId, createdBy }) {
   // Gdy podano requestId — pobierz realną oś czasu kroków obiegu.
   const [steps, setSteps] = useState(null)
   useEffect(() => {
@@ -189,11 +220,25 @@ function HistoryBox({ items = [], requestId }) {
   let rows = items
   if (requestId && steps) {
     rows = steps.map(s => {
+      const sub = fmtDT(s.created_at)
+      // Kroki systemowe silnika obiegu — opisane po ludzku, bez surowych nazw akcji.
+      if (s.action === 'auto_advance' && s.node_type === 'start') {
+        return { text: `${createdBy || 'Kadry / HR'} złożył(a) wniosek`, sub }
+      }
+      if (s.action === 'auto_advance' && s.node_type === 'end') {
+        return { text: 'Obieg zakończony', sub }
+      }
+      if (s.action === 'auto_skip') {
+        const text = s.node_type === 'higher_manager_approve'
+          ? 'Akceptacja wyższa pominięta — nie wymaga jej szablon obiegu'
+          : `${NODE_WHO[s.node_type] ? NODE_WHO[s.node_type] + ' — krok' : 'Krok'} pominięty (warunek obiegu)`
+        return { text, sub, skipped: true }
+      }
       const who = s.actor_name || NODE_WHO[s.node_type] || ''
       const verb = ACTION_VERB[s.action] || s.action
       return {
         text: `${who ? who + ' ' : ''}${verb}`,
-        sub: fmtDT(s.created_at),
+        sub,
         comment: s.comment || null,
         muted: s.action === 'reject',
       }
@@ -215,9 +260,12 @@ function HistoryBox({ items = [], requestId }) {
           {rows.map((it, i) => (
             <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12 }}>
               <span style={{ flexShrink: 0, width: 8, height: 8, borderRadius: '50%', marginTop: 4,
-                             background: it.muted ? 'var(--color-error)' : 'var(--color-success)' }} />
+                             boxSizing: 'border-box',
+                             border: it.skipped ? '1.5px dashed var(--color-text-muted)' : 'none',
+                             background: it.skipped ? 'transparent'
+                               : it.muted ? 'var(--color-error)' : 'var(--color-success)' }} />
               <div>
-                <div style={{ color: it.muted ? 'var(--color-text-muted)' : 'inherit' }}>{it.text}</div>
+                <div style={{ color: (it.muted || it.skipped) ? 'var(--color-text-muted)' : 'inherit' }}>{it.text}</div>
                 {it.sub && <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>{it.sub}</div>}
                 {it.comment && (
                   <div style={{ fontSize: 11, color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
@@ -237,7 +285,7 @@ function HistoryBox({ items = [], requestId }) {
 export default function RequestViewShell({
   icon: Icon, kind, kindLabel, statusText, title, subtitle,
   backLabel = '← Wróć', onBack, steps = [],
-  summary = [], history = [], historyRequestId, footerLeft, footerActions, children,
+  summary = [], history = [], historyRequestId, historyCreatedBy, footerLeft, footerActions, children,
 }) {
   return (
     <div>
@@ -282,7 +330,7 @@ export default function RequestViewShell({
           <aside style={{ flex: '0 0 300px', maxWidth: '100%', display: 'flex',
                           flexDirection: 'column', gap: 12 }}>
             <SummaryBox rows={summary} />
-            <HistoryBox items={history} requestId={historyRequestId} />
+            <HistoryBox items={history} requestId={historyRequestId} createdBy={historyCreatedBy} />
           </aside>
         )}
       </div>

@@ -7,7 +7,7 @@ import {
   permChangeState, changeStyle, ChangeBadge,
 } from '../components/PermissionChanges'
 import DeclarationModal from '../components/DeclarationModal'
-import RequestViewShell, { buildWorkflowSteps } from '../components/RequestView'
+import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard } from '../components/RequestView'
 import PermInput, {
   permInput, missingRequiredFields, splitAdminPerm, AdminPermRow,
   adminGrantNames, confirmAdminRights, ADMIN_CONFIRM_ABORTED,
@@ -449,9 +449,17 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
           <Send size={13} /> Wyślij wniosek (+{toGrant.length} / −{toRevoke.length})
         </button>
       </>}>
-          <div className="form-row mb-4" style={{ display: 'none' }} />
+          <Section n={1} title="Pracownik">
+            <WorkerCard name={w.full_name || w.username}
+              sub={[w.username, w.email].filter(Boolean).join(' · ') || null}
+              cols={[
+                { label: 'Wydział', value: w.department_name },
+                { label: 'Jednostka', value: w.unit_name },
+                { label: 'Stanowisko', value: w.title },
+              ]} />
+          </Section>
 
-          <div className="form-label" style={{ marginBottom: 4 }}>Uprawnienia do nadania / zmiany</div>
+          <Section n={2} title="Uprawnienia — stan docelowy">
           <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 8 }}>
             Zaznaczone i oznaczone <span className="badge badge--success" style={{ fontSize: 9 }}>posiada</span>{' '}
             to uprawnienia, które pracownik ma obecnie. To <strong>stan docelowy</strong>:
@@ -644,12 +652,16 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
             </div>
           )}
 
-          <div className="form-group" style={{ marginTop: 12 }}>
-            <label className="form-label">Komentarz (opcjonalny)</label>
-            <textarea className="form-control" style={{ minHeight: 60 }}
-                      value={comment} onChange={e => setComment(e.target.value)}
-                      placeholder="Uzasadnienie / kontekst wniosku" />
-          </div>
+          </Section>
+
+          <Section n={3} title="Uwagi" note="opcjonalne">
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">Komentarz · uzasadnienie wniosku</label>
+              <textarea className="form-control" style={{ minHeight: 70 }}
+                        value={comment} onChange={e => setComment(e.target.value)}
+                        placeholder="Uzasadnienie / kontekst wniosku" />
+            </div>
+          </Section>
 
           {err && <div className="alert alert--error">{err}</div>}
     </RequestViewShell>

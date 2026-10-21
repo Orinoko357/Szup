@@ -239,7 +239,18 @@ def _serialize_request(r: AccessRequest, items: list, session: Session | None = 
     assigned_to_name = None
     requested_by_name = None
     current_node_id = None
+    # Dane z konta pracownika (gdy wniosek jest dowiązany) — do karty „Pracownik”:
+    # login oraz stanowisko z AD jako fallback, gdy wniosek nie ma własnego.
+    worker_username = None
+    worker_title = ""
+    worker_acc_email = None
     if session is not None:
+        if r.worker_user_id:
+            wu = session.get(User, r.worker_user_id)
+            if wu:
+                worker_username = wu.username
+                worker_title = wu.title or ""
+                worker_acc_email = wu.email
         if r.department_id:
             d = session.get(Department, r.department_id)
             if d:
@@ -278,9 +289,10 @@ def _serialize_request(r: AccessRequest, items: list, session: Session | None = 
     return {
         "id": r.id,
         "worker_name": r.worker_name,
-        "worker_email": r.worker_email,
+        "worker_email": r.worker_email or worker_acc_email,
         "worker_phone": r.worker_phone,
-        "worker_position": r.worker_position,
+        "worker_position": r.worker_position or worker_title,
+        "worker_username": worker_username,
         "employment_from": r.employment_from.isoformat() if getattr(r, "employment_from", None) else None,
         "work_until": r.work_until.isoformat() if getattr(r, "work_until", None) else None,
         "worker_user_id": r.worker_user_id,

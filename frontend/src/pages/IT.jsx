@@ -16,7 +16,7 @@ function useIsItManager() {
 }
 import { fmtDate } from '../serverTime'
 import WorkflowRibbon from '../components/WorkflowRibbon'
-import RequestViewShell, { buildWorkflowSteps } from '../components/RequestView'
+import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard } from '../components/RequestView'
 import PermissionChanges from '../components/PermissionChanges'
 import AddPermissionsPicker from '../components/AddPermissionsPicker'
 import NameChangeQueue from '../components/NameChangeQueue'
@@ -29,26 +29,36 @@ export default function IT() {
   const initialTab = new URLSearchParams(window.location.search).get('tab') === 'names'
     ? 'names' : 'requests'
   const [tab, setTab] = useState(initialTab)
+  // Otwarty wniosek = pełnoekranowy widok (jak Kartoteka / Moi pracownicy) —
+  // bez nagłówka „Panel IT” i zakładek nad nim.
+  const [fullView, setFullView] = useState(false)
+  // Nagłówek i zakładki ukrywane warunkowo (nie wczesnym return), żeby
+  // RequestsTab nie był przemontowywany i nie gubił otwartego wniosku.
+  const hideChrome = tab === 'requests' && fullView
   return (
     <div>
-      <div className="page-header">
-        <div>
-          <div className="page-header__title">Panel IT</div>
-          <div className="page-header__sub">Realizacja wniosków o uprawnienia i zmian nazwiska</div>
+      {!hideChrome && (
+        <div className="page-header">
+          <div>
+            <div className="page-header__title">Panel IT</div>
+            <div className="page-header__sub">Realizacja wniosków o uprawnienia i zmian nazwiska</div>
+          </div>
         </div>
-      </div>
-      <div className="tabs" style={{ marginTop: 0 }}>
-        <button className={`tab-btn${tab === 'requests' ? ' active' : ''}`}
-                onClick={() => setTab('requests')}>Wnioski o uprawnienia</button>
-        <button className={`tab-btn${tab === 'names' ? ' active' : ''}`}
-                onClick={() => setTab('names')}>Zmiany nazwiska</button>
-      </div>
-      {tab === 'requests' ? <RequestsTab /> : <NameChangeQueue />}
+      )}
+      {!hideChrome && (
+        <div className="tabs" style={{ marginTop: 0 }}>
+          <button className={`tab-btn${tab === 'requests' ? ' active' : ''}`}
+                  onClick={() => setTab('requests')}>Wnioski o uprawnienia</button>
+          <button className={`tab-btn${tab === 'names' ? ' active' : ''}`}
+                  onClick={() => setTab('names')}>Zmiany nazwiska</button>
+        </div>
+      )}
+      {tab === 'requests' ? <RequestsTab onViewChange={setFullView} /> : <NameChangeQueue />}
     </div>
   )
 }
 
-function RequestsTab() {
+function RequestsTab({ onViewChange }) {
   const [requests, setRequests] = useState([])
   const [loading, setLoading]   = useState(true)
   const [filter, setFilter]     = useState('pending_it')
@@ -69,6 +79,7 @@ function RequestsTab() {
   }
 
   useEffect(() => { load() }, [filter])
+  useEffect(() => { onViewChange?.(!!openReq) }, [openReq])
 
   const STATUS_BADGE = { pending_selection: 'badge--warning', pending_it: 'badge--info', completed: 'badge--success', pending_manager: 'badge--warning', rejected: 'badge--error' }
   const STATUS_LABELS = { pending_selection: 'Wybór uprawnień', pending_it: 'Do realizacji', completed: 'Zrealizowany', pending_manager: 'Oczekuje kierownika', rejected: 'Odrzucony' }
@@ -341,8 +352,11 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   }
 
   const title = canRealize
-    ? `${isRevoke ? 'Odebranie uprawnień' : 'Realizacja'} — wniosek #${r.id}`
+    ? (isRevoke ? 'Odebranie uprawnień' : 'Realizacja wniosku')
     : `Wniosek #${r.id}`
+  // Numeracja sekcji 01, 02, … — liczone tylko sekcje faktycznie widoczne.
+  let _sec = 0
+  const sec = () => ++_sec
 
   const _steps = buildWorkflowSteps({
     sent: true, nodeType: r.current_node_type, status: r.status,
@@ -357,12 +371,15 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   return (
     <RequestViewShell
       icon={Wrench} kind={r.kind} kindLabel={isRevoke ? 'Odejście' : 'Zatrudnienie'}
-      statusText={`Wniosek #${r.id}`} title={title}
+      statusText={`Wniosek #${r.id}${r.created_at ? ` · złożony ${fmtDate(r.created_at)}` : ''}`} title={title}
       subtitle="Wykonaj zmiany w systemach i oznacz każdą pozycję — decyzje zapisują się od razu."
       backLabel="← Wróć do listy" onBack={onClose}
       steps={_steps} summary={_summary} historyRequestId={r.id}
+      historyCreatedBy={r.created_by_name}
       footerLeft={canRealize && grantProgress.total > 0
-        ? `Zrealizowane ${grantProgress.done}/${grantProgress.total}${grantProgress.pending ? ` · ${grantProgress.pending} bez decyzji` : ''}`
+        ? (grantProgress.pending > 0
+            ? <>Zostało <strong>{grantProgress.pending}</strong> bez decyzji</>
+            : 'Wszystkie pozycje mają decyzję')
         : null}
       footerActions={<>
         <button className="btn btn--ghost" onClick={onClose} disabled={busy}>
@@ -380,175 +397,176 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           </button>
         )}
       </>}>
-          <div className="mb-4">
-            <div className="form-label">Zmiany uprawnień do wykonania</div>
-            <p style={{ color: 'var(--color-text-muted)', fontSize: 12, margin: '4px 0 0' }}>
-              Możesz realizować wniosek etapami: odhacz zrobione pozycje („Zrobione")
-              albo odmów (z komentarzem) — każda decyzja zapisuje się od razu.
-            </p>
-            {canRealize && grantProgress.total > 0 && (
-              <div style={{ fontSize: 12, marginTop: 6, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                <span style={{ color: 'var(--color-success)' }}>
-                  ✓ zrealizowane: <strong>{grantProgress.done}/{grantProgress.total}</strong>
+      <Section n={sec()} title="Pracownik">
+        <WorkerCard name={r.worker_name}
+          sub={[r.worker_username, r.worker_email].filter(Boolean).join(' · ') || null}
+          cols={[
+            { label: 'Wydział', value: r.department_name },
+            { label: 'Jednostka', value: r.unit_name },
+            { label: 'Stanowisko', value: r.worker_position },
+          ]} />
+      </Section>
+
+      <Section n={sec()} title={isRevoke ? 'Uprawnienia do odebrania' : 'Zmiany do wykonania'}>
+        {canRealize && grantProgress.total > 0 && (
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12,
+                          fontSize: 12, marginBottom: 4 }}>
+              <span>
+                <span style={{ color: 'var(--color-success)', fontWeight: 600 }}>
+                  zrobione: {grantProgress.done}/{grantProgress.total}
                 </span>
                 {grantProgress.denied > 0 && (
-                  <span style={{ color: 'var(--color-error-text)' }}>
-                    odmówione: <strong>{grantProgress.denied}</strong>
+                  <span style={{ color: 'var(--color-error-text)', fontWeight: 600 }}>
+                    {' · '}odmowy: {grantProgress.denied}
                   </span>
                 )}
-                {grantProgress.pending > 0 && (
-                  <span style={{ color: 'var(--color-text-muted)' }}>
-                    bez decyzji: <strong>{grantProgress.pending}</strong>
-                  </span>
-                )}
-              </div>
-            )}
-            <div style={{ marginTop: 8 }}>
-              <PermissionChanges items={items}
-                deny={{ can: canRealize, map: denials, toggle: toggleDeny, setComment: setDenyComment,
-                        save: saveDeny, remove: removeDeny, busyId: denyBusy }}
-                fulfill={canRealize
-                  ? { can: true, set: setFulfill, busyId: denyBusy }
-                  : undefined} />
+              </span>
+              <span style={{ color: 'var(--color-text-muted)' }}>
+                bez decyzji: {grantProgress.pending}
+              </span>
+            </div>
+            <div style={{ display: 'flex', height: 5, borderRadius: 3, overflow: 'hidden',
+                          background: 'var(--color-border)' }}>
+              <div style={{ width: `${grantProgress.done / grantProgress.total * 100}%`,
+                            background: 'var(--color-success)' }} />
+              <div style={{ width: `${grantProgress.denied / grantProgress.total * 100}%`,
+                            background: 'var(--color-error)' }} />
             </div>
           </div>
+        )}
+        <PermissionChanges items={items}
+          deny={{ can: canRealize, map: denials, toggle: toggleDeny, setComment: setDenyComment,
+                  save: saveDeny, remove: removeDeny, busyId: denyBusy }}
+          fulfill={canRealize
+            ? { can: true, set: setFulfill, busyId: denyBusy }
+            : undefined} />
+        {r.manager_comment && (
+          <div style={{ marginTop: 12 }}>
+            <div className="form-label">Komentarz kierownika</div>
+            <div style={{ background: 'var(--bg-secondary)', padding: '10px 14px', borderRadius: 6 }}>{r.manager_comment}</div>
+          </div>
+        )}
+      </Section>
 
-          {r.manager_comment && (
-            <div className="mb-4">
-              <div className="form-label">Komentarz kierownika</div>
-              <div style={{ background: 'var(--bg-secondary)', padding: '10px 14px', borderRadius: 6 }}>{r.manager_comment}</div>
+      {/* Dokładanie uprawnień — tylko przy nadaniu/zmianie.
+          Przy ustaniu stosunku pracy nie ma czego dokładać. */}
+      {canRealize && !isRevoke && (
+        <Section n={sec()} title="Uprawnienia techniczne" note="opcjonalne">
+          <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 8 }}>
+            Np. grupa AD potrzebna do działania nadanego systemu.
+          </div>
+          <button type="button" className="btn btn--ghost btn--sm"
+                  onClick={() => setShowAdd(v => !v)}
+                  style={{ marginBottom: showAdd ? 8 : 0 }}>
+            <Plus size={13} /> Dołóż uprawnienia
+            {addPicked.size > 0 && (
+              <span className="badge badge--warning" style={{ fontSize: 10, marginLeft: 6 }}>
+                {addPicked.size}
+              </span>
+            )}
+          </button>
+          {showAdd && (
+            <>
+              <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginBottom: 6 }}>
+                Zaznacz uprawnienia, których wniosek nie obejmował, a są konieczne
+                (np. moduł wymaga zależnego dostępu). Trafią do ewidencji pracownika,
+                a Twoje uzasadnienie do śladu audytowego.
+              </div>
+              <AddPermissionsPicker
+                unitId={r.unit_id}
+                excludeKeys={existingKeys}
+                picked={addPicked}
+                onLoaded={(sys, perms) => setAddPerms(perms)}
+                fieldValues={addFieldValues}
+                onTogglePerm={toggleAddPerm}
+                onFieldChange={setAddFieldValue}
+              />
+            </>
+          )}
+        </Section>
+      )}
+
+      {/* Nowy pracownik bez dowiązanego konta — login AD do założenia/dowiązania. */}
+      {canRealize && needsAd && (
+        <Section n={sec()} title="Konto pracownika">
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Login AD (sAMAccountName) pracownika *</label>
+            <input className="form-control" value={adUsername}
+                   onChange={e => setAdUsername(e.target.value)}
+                   placeholder="np. jkowalski" autoComplete="off" spellCheck={false} />
+            <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
+              <UserPlus size={11} style={{ verticalAlign: 'middle', marginRight: 4 }} />
+              Jeżeli konto nie istnieje w SZUP, zostanie założone automatycznie (typ LDAP).
+            </div>
+          </div>
+        </Section>
+      )}
+
+      {canRealize && (
+        <Section n={sec()} title="Uwagi" note={addPicked.size > 0 ? null : 'opcjonalne'}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">
+              {addPicked.size > 0
+                ? 'Uzasadnienie dodanych uprawnień *'
+                : 'Komentarz IT · widoczny w historii'}
+            </label>
+            <textarea className="form-control" style={{ minHeight: 70 }}
+                      placeholder={addPicked.size > 0
+                        ? 'Dlaczego te uprawnienia są konieczne?' : ''}
+                      value={comment} onChange={e => setComment(e.target.value)} />
+          </div>
+        </Section>
+      )}
+
+      {/* --- Przekazanie wniosku (kierownik IT) --- */}
+      {canRealize && isItManager && (
+        <Section n={sec()} title="Przekazanie do realizacji" note="opcjonalne">
+          <p style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 10 }}>
+            Możesz zrealizować wniosek samodzielnie (przycisk poniżej) albo przekazać go
+            pracownikowi IT. Przekazanie jest oznaczeniem „kto się tym zajmuje" — nie blokuje
+            realizacji przez innych.
+          </p>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+            <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
+              <label className="form-label">Pracownik IT</label>
+              <select className="form-control" value={assignee}
+                      onChange={e => setAssignee(e.target.value)}>
+                <option value="">— nieprzypisany —</option>
+                {itStaff.map(u => (
+                  <option key={u.id} value={u.id}>
+                    {u.full_name || u.username}{u.username ? ` (${u.username})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button type="button" className="btn btn--action" onClick={assign} disabled={busy}>
+              <UserPlus size={14} /> Przekaż
+            </button>
+          </div>
+          {r.assigned_to_name && (
+            <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 6 }}>
+              Obecnie przypisany: <strong>{r.assigned_to_name}</strong>
             </div>
           )}
+        </Section>
+      )}
 
-
-          {/* --- Akcja: realizacja / odebranie --- */}
-          {canRealize && (
-            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 16, marginTop: 4 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--color-navy)', marginBottom: 10 }}>
-                {isRevoke ? 'Potwierdzenie odebrania' : 'Realizacja'}
-              </div>
-              {needsAd ? (
-                <div className="form-group">
-                  <label className="form-label">Login AD (sAMAccountName) pracownika *</label>
-                  <input className="form-control" value={adUsername}
-                         onChange={e => setAdUsername(e.target.value)}
-                         placeholder="np. jkowalski" autoComplete="off" spellCheck={false} />
-                  <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
-                    <UserPlus size={11} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-                    Jeżeli konto nie istnieje w SZUP, zostanie założone automatycznie (typ LDAP).
-                  </div>
-                </div>
-              ) : (
-                <div className="alert alert--warning" style={{ fontSize: 12 }}>
-                  Wykonaj w systemach powyższe zmiany (nadaj / odbierz), a następnie potwierdź.
-                </div>
-              )}
-              {/* Dokładanie uprawnień — tylko przy nadaniu/zmianie.
-                  Przy ustaniu stosunku pracy nie ma czego dokładać. */}
-              {!isRevoke && (
-                <div className="form-group">
-                  <button
-                    type="button"
-                    className="btn btn--ghost btn--sm"
-                    onClick={() => setShowAdd(v => !v)}
-                    style={{ marginBottom: showAdd ? 8 : 0 }}
-                  >
-                    <Plus size={13} /> Dołóż uprawnienia (wymagane technicznie)
-                    {addPicked.size > 0 && (
-                      <span className="badge badge--warning" style={{ fontSize: 10, marginLeft: 6 }}>
-                        {addPicked.size}
-                      </span>
-                    )}
-                  </button>
-                  {showAdd && (
-                    <>
-                      <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginBottom: 6 }}>
-                        Zaznacz uprawnienia, których wniosek nie obejmował, a są konieczne
-                        (np. moduł wymaga zależnego dostępu). Trafią do ewidencji pracownika,
-                        a Twoje uzasadnienie do śladu audytowego.
-                      </div>
-                      <AddPermissionsPicker
-                        unitId={r.unit_id}
-                        excludeKeys={existingKeys}
-                        picked={addPicked}
-                        onLoaded={(sys, perms) => setAddPerms(perms)}
-                        fieldValues={addFieldValues}
-                        onTogglePerm={toggleAddPerm}
-                        onFieldChange={setAddFieldValue}
-                      />
-                    </>
-                  )}
-                </div>
-              )}
-
-              <div className="form-group">
-                <label className="form-label">
-                  {addPicked.size > 0
-                    ? 'Uzasadnienie dodanych uprawnień *'
-                    : 'Komentarz IT (opcjonalny)'}
-                </label>
-                <textarea className="form-control" style={{ minHeight: 60 }}
-                          placeholder={addPicked.size > 0
-                            ? 'Dlaczego te uprawnienia są konieczne?' : ''}
-                          value={comment} onChange={e => setComment(e.target.value)} />
-              </div>
-            </div>
-          )}
-
-          {/* --- Przekazanie wniosku (kierownik IT) --- */}
-          {canRealize && isItManager && (
-            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 16, marginTop: 4 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--color-navy)', marginBottom: 6 }}>
-                Przekazanie do realizacji
-              </div>
-              <p style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 10 }}>
-                Możesz zrealizować wniosek samodzielnie (przycisk poniżej) albo przekazać go
-                pracownikowi IT. Przekazanie jest oznaczeniem „kto się tym zajmuje" — nie blokuje
-                realizacji przez innych.
-              </p>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
-                  <label className="form-label">Pracownik IT</label>
-                  <select className="form-control" value={assignee}
-                          onChange={e => setAssignee(e.target.value)}>
-                    <option value="">— nieprzypisany —</option>
-                    {itStaff.map(u => (
-                      <option key={u.id} value={u.id}>
-                        {u.full_name || u.username}{u.username ? ` (${u.username})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <button type="button" className="btn btn--action" onClick={assign} disabled={busy}>
-                  <UserPlus size={14} /> Przekaż
-                </button>
-              </div>
-              {r.assigned_to_name && (
-                <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 6 }}>
-                  Obecnie przypisany: <strong>{r.assigned_to_name}</strong>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* --- Akcja: dowiązanie konta (zrealizowany bez konta) --- */}
-          {canLink && (
-            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 16, marginTop: 4 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--color-navy)', marginBottom: 6 }}>
-                Dowiąż konto pracownika
-              </div>
-              <p style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 10 }}>
-                Wniosek zrealizowano, ale nie dowiązano konta. Wpisz sAMAccountName, aby uprawnienia
-                pojawiły się w profilu pracownika i w widoku struktury.
-              </p>
-              <div className="form-group">
-                <label className="form-label">Login AD (sAMAccountName) *</label>
-                <input className="form-control" value={adUsername}
-                       onChange={e => setAdUsername(e.target.value)}
-                       placeholder="np. jkowalski" autoComplete="off" spellCheck={false} />
-              </div>
-            </div>
-          )}
+      {/* --- Akcja: dowiązanie konta (zrealizowany bez konta) --- */}
+      {canLink && (
+        <Section n={sec()} title="Dowiąż konto pracownika">
+          <p style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 10 }}>
+            Wniosek zrealizowano, ale nie dowiązano konta. Wpisz sAMAccountName, aby uprawnienia
+            pojawiły się w profilu pracownika i w widoku struktury.
+          </p>
+          <div className="form-group">
+            <label className="form-label">Login AD (sAMAccountName) *</label>
+            <input className="form-control" value={adUsername}
+                   onChange={e => setAdUsername(e.target.value)}
+                   placeholder="np. jkowalski" autoComplete="off" spellCheck={false} />
+          </div>
+        </Section>
+      )}
 
           {err && <div className="alert alert--error">{err}</div>}
     </RequestViewShell>

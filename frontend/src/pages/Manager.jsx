@@ -3,7 +3,7 @@ import { RefreshCw, Check, X, ListChecks, Search } from 'lucide-react'
 import { listRequests, workflowAction, listSystems, listPermissions, userPermissions, denyRequestItem } from '../api'
 import { fmtDate } from '../serverTime'
 import WorkflowRibbon from '../components/WorkflowRibbon'
-import RequestViewShell, { buildWorkflowSteps } from '../components/RequestView'
+import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard } from '../components/RequestView'
 import DeclarationModal from '../components/DeclarationModal'
 import PermissionChanges, {
   permChangeState, changeStyle, changeTextStyle, ChangeBadge,
@@ -584,9 +584,9 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   }
 
   const title = isSelect
-    ? `${isRevoke ? 'Odebranie uprawnień' : 'Wybór uprawnień'} — wniosek #${r.id}`
+    ? (isRevoke ? 'Odebranie uprawnień' : 'Wybór uprawnień')
     : isDecision
-      ? `Decyzja — wniosek #${r.id}`
+      ? 'Decyzja'
       : `Wniosek #${r.id}`
 
   const _subtitle = isSelect
@@ -602,14 +602,19 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     { label: 'Komórka', value: `${r.department_name || '—'} · ${r.unit_name || '—'}` },
     { label: 'Złożył(a)', value: r.requested_by_name || r.created_by_name || '—' },
   ]
+  // Numeracja sekcji 01, 02, … — liczone tylko sekcje faktycznie widoczne.
+  let _sec = 0
+  const sec = () => ++_sec
 
   return (
     <>
     <RequestViewShell
       icon={ListChecks} kind={r.kind} kindLabel={isRevoke ? 'Odejście' : 'Zatrudnienie'}
-      statusText={`Wniosek #${r.id}`} title={title} subtitle={_subtitle}
+      statusText={`Wniosek #${r.id}${(isSelect || isDecision) ? ' · czeka na Ciebie' : ''}`}
+      title={title} subtitle={_subtitle}
       backLabel="← Wróć do listy" onBack={onClose}
       steps={_steps} summary={_summary} historyRequestId={r.id}
+      historyCreatedBy={r.created_by_name}
       footerActions={<>
         <button className="btn btn--ghost" onClick={onClose} disabled={busy}>
           {(isSelect || isDecision) ? 'Anuluj' : 'Zamknij'}
@@ -638,11 +643,21 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
         )}
       </>}>
 
+          <Section n={sec()} title="Pracownik">
+            <WorkerCard name={r.worker_name}
+              sub={[r.worker_username, r.worker_email].filter(Boolean).join(' · ') || null}
+              cols={[
+                { label: 'Wydział', value: r.department_name },
+                { label: 'Jednostka', value: r.unit_name },
+                { label: r.employment_from ? 'Od dnia' : 'Stanowisko',
+                  value: r.employment_from ? fmtDate(r.employment_from) : r.worker_position },
+              ]} />
+          </Section>
+
           {/* Zmiany uprawnień — poza krokiem wyboru (tam jest picker).
               Kierownik nadrzędny widzi tu jasno, co jest NADAWANE, a co ODBIERANE. */}
           {!isSelect && (
-            <div className="mb-4">
-              <div className="form-label">Zmiany uprawnień we wniosku</div>
+            <Section n={sec()} title="Zmiany uprawnień we wniosku">
               {isDecision && twoStage && (
                 <p style={{ color: 'var(--color-text-muted)', fontSize: 12, margin: '4px 0 0' }}>
                   Możesz odmówić nadania pojedynczej pozycji (z komentarzem) — reszta wniosku przejdzie dalej.
@@ -655,27 +670,23 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                         save: saveDeny, remove: removeDeny, busyId: denyBusy }
                     : undefined} />
               </div>
-            </div>
+            </Section>
           )}
 
           {r.manager_comment && (
-            <div className="mb-4">
-              <div className="form-label">Komentarz kierownika</div>
+            <Section n={sec()} title="Komentarz kierownika">
               <div style={{ background: 'var(--bg-secondary)', padding: '10px 14px', borderRadius: 6 }}>{r.manager_comment}</div>
-            </div>
+            </Section>
           )}
 
 
           {/* --- Akcja: wybór uprawnień --- */}
           {isSelect && (
-            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--color-navy)', marginBottom: 6 }}>
-                {isRevoke ? 'Uprawnienia do odebrania' : 'Uprawnienia do nadania'}
-              </div>
+            <Section n={sec()} title={isRevoke ? 'Uprawnienia do odebrania' : 'Uprawnienia — stan docelowy'}>
               <p style={{ color: 'var(--color-text-muted)', fontSize: 13, marginBottom: 8 }}>
                 {isRevoke
                   ? 'Zaznacz uprawnienia do odebrania (domyślnie wszystkie).'
-                  : 'Zaznacz uprawnienia do nadania.'}
+                  : <>Zaznacz nowe, aby je <strong>nadać</strong>; odznacz posiadane, aby je <strong>odebrać</strong>.</>}
               </p>
               {/* Jawna informacja, dokąd trafi wniosek po zatwierdzeniu. */}
               <div className={`alert ${twoStage ? 'alert--info' : 'alert--success'}`}
@@ -917,16 +928,18 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                   })}
                 </div>
               )}
-            </div>
+            </Section>
           )}
 
           {/* --- Komentarz (dla obu akcji) --- */}
           {(isSelect || isDecision) && (
-            <div className="form-group" style={{ marginTop: 14 }}>
-              <label className="form-label">Komentarz (opcjonalny)</label>
-              <textarea className="form-control" style={{ minHeight: 60 }}
-                        value={comment} onChange={e => setComment(e.target.value)} />
-            </div>
+            <Section n={sec()} title="Uwagi" note="opcjonalne">
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">{isSelect ? 'Informacja dla IT' : 'Komentarz · widoczny w historii'}</label>
+                <textarea className="form-control" style={{ minHeight: 70 }}
+                          value={comment} onChange={e => setComment(e.target.value)} />
+              </div>
+            </Section>
           )}
 
           {err && <div className="alert alert--error">{err}</div>}
