@@ -475,7 +475,7 @@ function TerminationFormView({ onCancel, onCreated }) {
                            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                         <span style={{ fontWeight: 600 }}>{r.full_name || r.username}</span>
                         <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
-                          {r.username ? `(${r.username})` : ''}
+                          {[r.title, r.username].filter(Boolean).join(' · ')}
                         </span>
                         <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--color-text-muted)' }}>
                           {r.unit_name ? `${r.unit_name} › ` : ''}{r.department_name || '—'}
@@ -567,10 +567,10 @@ function TerminationFormView({ onCancel, onCreated }) {
                                 </span>
                                 <span style={{ display: 'block', fontSize: 11, color: 'var(--color-text-muted)',
                                                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                  {w.username || '—'}
+                                  {/* wg makiety: „stanowisko · login” (+ podkomórka, gdy inna niż wybrana) */}
+                                  {[w.title, w.username].filter(Boolean).join(' · ') || '—'}
                                   {w.department_name && w.department_name !== selectedDept?.name
                                     ? ` · ${w.department_name}` : ''}
-                                  {w.email ? ` · ${w.email}` : ''}
                                 </span>
                               </span>
                             </label>

@@ -109,7 +109,7 @@ class User(SQLModel, table=True):
     ldap_dn: Optional[str] = Field(default=None, index=True)   # znormalizowany DN
     # Stanowisko (atrybut `title` z AD) — służy do podpowiadania/wykrywania
     # kierowników komórek (np. „Kierownik", „Dyrektor", „Naczelnik").
-    title: Optional[str] = Field(default=None)
+    title: Optional[str] = Field(default="")
 
 
 # ---------------------------------------------------------------------------

@@ -293,7 +293,7 @@ def _run_migrations():
         ("appsettings",   "snapshot_enabled", "BOOLEAN DEFAULT 1"),
         ("appsettings",   "snapshot_hour",    "INTEGER DEFAULT 23"),
         ("appsettings",   "snapshot_minute",  "INTEGER DEFAULT 50"),
-        ("user",          "title",           "VARCHAR"),
+        ("user",          "title",           "VARCHAR DEFAULT ''"),
         ("requestitem",   "denied",          "BOOLEAN DEFAULT 0"),
         ("requestitem",   "deny_comment",    "VARCHAR"),
         ("requestitem",   "denied_by_user_id", "INTEGER"),

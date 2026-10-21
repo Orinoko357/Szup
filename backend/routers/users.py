@@ -80,7 +80,7 @@ class UserRead(BaseModel):
     created_at: datetime
     department_id: Optional[int] = None
     department_name: Optional[str] = None
-    title: Optional[str] = None          # stanowisko z AD
+    title: str = ""                      # stanowisko z AD (NULL → "")
     is_manager_title: bool = False       # stanowisko wskazuje na kierowanie komórką
     unit_ids: list[int] = []
     # Komunikat informacyjny po zapisie (np. „komórka ma już kierownika”).
@@ -137,7 +137,7 @@ def _user_read(u: User, dept_name: Optional[str] = None, session=None,
         locked_until=u.locked_until, must_change_password=bool(u.must_change_password),
         password_changed_at=u.password_changed_at, created_at=u.created_at,
         department_id=u.department_id, department_name=dept_name,
-        title=getattr(u, "title", None),
+        title=getattr(u, "title", None) or "",
         is_manager_title=_title_is_manager(getattr(u, "title", None)),
         unit_ids=_user_unit_ids(session, u.id),
         warning=warning,
@@ -396,6 +396,7 @@ def users_by_department(
     users.sort(key=lambda x: (x.full_name or x.username or "").lower())
     return [
         {"id": u.id, "full_name": u.full_name, "username": u.username, "email": u.email,
+         "title": u.title or "",
          "department_id": u.department_id,
          "department_name": dept_by_id.get(u.department_id).name if u.department_id in dept_by_id else None}
         for u in users
@@ -456,6 +457,7 @@ def users_search(
             continue
         out.append({
             "id": u.id, "full_name": u.full_name, "username": u.username, "email": u.email,
+            "title": u.title or "",
             "department_id": u.department_id,
             "department_name": d.name if d else None,
             "unit_id": d.unit_id if d else None,
@@ -1210,8 +1212,8 @@ def ldap_users_import(
             existing.is_active    = u["is_enabled_in_ad"]
             existing.department_id = dept_id or existing.department_id
             existing.ldap_dn      = ndn
-            if u.get("title"):
-                existing.title = u["title"]
+            # Stanowisko: AD jest źródłem prawdy — także wyczyszczenie w AD.
+            existing.title        = u.get("title") or ""
             session.add(existing); session.commit()
             updated += 1
             details.append(f"~ {u['username']} — zaktualizowany")
@@ -1220,7 +1222,7 @@ def ldap_users_import(
                 username=u["username"],
                 full_name=u["full_name"],
                 email=u["email"],
-                title=u.get("title"),
+                title=u.get("title") or "",
                 password_hash="!ldap-managed!",
                 roles=roles_to_json(["viewer"]),
                 auth_type=AuthType.ldap,
