@@ -52,6 +52,13 @@ export default function MyTeam() {
     )
   }, [workers, search])
 
+  // Otwarty formularz wniosku = pełnoekranowy widok (zamiast listy).
+  if (requestFor) {
+    return <NewRequestModal worker={requestFor}
+                            onClose={() => setRequestFor(null)}
+                            onDone={() => { setRequestFor(null); load() }} />
+  }
+
   return (
     <div>
       <div className="page-header">
@@ -181,12 +188,6 @@ export default function MyTeam() {
           </table>
         )}
       </div>
-
-      {requestFor && (
-        <NewRequestModal worker={requestFor}
-                         onClose={() => setRequestFor(null)}
-                         onDone={() => { setRequestFor(null); load() }} />
-      )}
     </div>
   )
 }
@@ -421,16 +422,17 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
   }
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 'min(94vw, 900px)', width: '100%' }}>
-        <div className="modal__header">
-          <span className="modal__title">
-            <ListChecks size={15} style={{ marginRight: 8, verticalAlign: 'middle' }} />
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-header__title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <ListChecks size={18} style={{ color: 'var(--color-navy)' }} />
             Wniosek o uprawnienia — {w.full_name || w.username}
-          </span>
-          <button className="modal__close" onClick={onClose}>×</button>
+          </div>
         </div>
-        <div className="modal__body">
+        <button type="button" className="btn btn--ghost" onClick={onClose}>← Wróć do listy</button>
+      </div>
+      <div className="card" style={{ maxWidth: 1000, margin: '0 auto', width: '100%' }}>
           <div className="form-row mb-4">
             <div>
               <div className="form-label">Pracownik</div>
@@ -645,8 +647,9 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
           </div>
 
           {err && <div className="alert alert--error">{err}</div>}
-        </div>
-        <div className="modal__footer">
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20,
+                      borderTop: '1px solid var(--color-border)', paddingTop: 16 }}>
           <button className="btn btn--ghost" onClick={onClose} disabled={busy}>Anuluj</button>
           <button className="btn btn--success" onClick={submit} disabled={busy || loading || noChange}>
             <Send size={13} /> Wyślij wniosek (+{toGrant.length} / −{toRevoke.length})

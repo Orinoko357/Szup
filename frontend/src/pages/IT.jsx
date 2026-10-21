@@ -72,6 +72,13 @@ function RequestsTab() {
   const STATUS_BADGE = { pending_selection: 'badge--warning', pending_it: 'badge--info', completed: 'badge--success', pending_manager: 'badge--warning', rejected: 'badge--error' }
   const STATUS_LABELS = { pending_selection: 'Wybór uprawnień', pending_it: 'Do realizacji', completed: 'Zrealizowany', pending_manager: 'Oczekuje kierownika', rejected: 'Odrzucony' }
 
+  // Otwarty wniosek = pełnoekranowy widok (zamiast listy), spójnie z Kartoteką.
+  if (openReq) {
+    return <RequestModal request={openReq} onClose={() => setOpenReq(null)}
+                         onDone={() => { setOpenReq(null); load() }}
+                         onRefresh={() => load({ silent: true })} />
+  }
+
   return (
     <>
       <div className="tabs" style={{ marginTop: 0 }}>
@@ -120,11 +127,6 @@ function RequestsTab() {
           </table>
         )}
       </div>
-      {openReq && (
-        <RequestModal request={openReq} onClose={() => setOpenReq(null)}
-                      onDone={() => { setOpenReq(null); load() }}
-                      onRefresh={() => load({ silent: true })} />
-      )}
     </>
   )
 }
@@ -342,16 +344,17 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     : `Wniosek #${r.id}`
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 'min(94vw, 900px)', width: '100%' }}>
-        <div className="modal__header">
-          <span className="modal__title">
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-header__title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {title}
-            {isRevoke && <span className="badge badge--warning" style={{ fontSize: 10, marginLeft: 8 }}>ustanie</span>}
-          </span>
-          <button className="modal__close" onClick={onClose}>×</button>
+            {isRevoke && <span className="badge badge--warning" style={{ fontSize: 10 }}>ustanie</span>}
+          </div>
         </div>
-        <div className="modal__body">
+        <button type="button" className="btn btn--ghost" onClick={onClose}>← Wróć do listy</button>
+      </div>
+      <div className="card" style={{ maxWidth: 1000, margin: '0 auto', width: '100%' }}>
           {/* --- Dane wniosku --- */}
           <div className="form-row mb-4">
             <div><div className="form-label">Pracownik</div><strong>{r.worker_name}</strong></div>
@@ -538,8 +541,9 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           )}
 
           {err && <div className="alert alert--error">{err}</div>}
-        </div>
-        <div className="modal__footer">
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20,
+                      borderTop: '1px solid var(--color-border)', paddingTop: 16 }}>
           <button className="btn btn--ghost" onClick={onClose} disabled={busy}>
             {canRealize || canLink ? 'Anuluj' : 'Zamknij'}
           </button>
