@@ -22,11 +22,12 @@
   --wl-info-text: #1A46A8;
   --wl-title: #1B2A4A;
 
+  position: relative;
   min-height: 100vh;
   box-sizing: border-box;
-  padding: 48px 16px;
+  padding: 64px 16px 48px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   background: var(--wl-bg);
   color: var(--wl-text);
@@ -46,7 +47,15 @@
   --wl-title: #E4B863;
 }
 
-.wl-wrap { width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 16px; }
+/* Granatowy pas u góry (jak w intranecie / dbac) — karta na niego nachodzi. */
+.wl-page::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0;
+  height: 280px;
+  background: var(--wl-navy);
+}
+
+.wl-wrap { position: relative; z-index: 1; width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 16px; }
 .wl-wrap--wide { max-width: 480px; gap: 18px; }
 
 .wl-card {
@@ -55,13 +64,17 @@
   border: 1px solid var(--wl-border);
   border-radius: 10px;
   padding: 32px 32px 28px;
+  box-shadow: 0 12px 36px rgba(13, 20, 36, 0.22);
   display: flex; flex-direction: column; gap: 18px;
 }
 .wl-card--form { padding: 28px; gap: 14px; }
 
 /* Lockup — w jednym rzędzie */
-.wl-lockup { display: flex; align-items: center; gap: 14px; }
-.wl-herb { height: 52px; width: auto; flex-shrink: 0; display: block; }
+.wl-lockup { display: flex; flex-direction: column; align-items: center; gap: 16px;
+             padding-bottom: 18px; border-bottom: 1px solid var(--wl-border); }
+.wl-herbrow { display: flex; justify-content: center; }
+.wl-brand { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.wl-herb { height: 132px; width: auto; flex-shrink: 0; display: block; }
 .wl-herb--dark { display: none; }
 [data-theme="dark"] .wl-herb--light { display: none; }
 [data-theme="dark"] .wl-herb--dark { display: block; }
@@ -76,8 +89,9 @@
 
 /* Nagłówek ekranu pierwszego uruchomienia */
 .wl-head { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
-.wl-head h1 { margin: 0; font-size: 26px; font-weight: 800; color: var(--wl-title); }
-.wl-head p { margin: 0; font-size: 14px; color: var(--wl-muted); }
+/* Nagłówek leży na granatowym pasie — jasny tekst. */
+.wl-head h1 { margin: 0; font-size: 26px; font-weight: 800; color: #FFFFFF; }
+.wl-head p { margin: 0; font-size: 14px; color: #C4CBD8; }
 
 /* Baner trybu testowego */
 .wl-testbanner {

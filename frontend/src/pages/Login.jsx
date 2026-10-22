@@ -132,13 +132,17 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
       <main className="wl-wrap">
       <section className="wl-card" aria-label="Logowanie">
         <div className="wl-lockup">
-          <img className="wl-herb wl-herb--light" src="/img/herb-ciemny.png"
-               alt="Herb Miasta Wodzisławia Śląskiego" />
-          <img className="wl-herb wl-herb--dark" src="/img/herb-bialy.png" alt="" aria-hidden="true" />
-          <WodsLogo size={44} />
-          <div className="wl-names">
-            <span className="wl-name">szup</span>
-            <span className="wl-sub">WODS · URZĄD MIASTA WODZISŁAWIA ŚLĄSKIEGO</span>
+          <div className="wl-herbrow">
+            <img className="wl-herb wl-herb--light" src="/img/herb-ciemny.png"
+                 alt="Herb Miasta Wodzisławia Śląskiego" />
+            <img className="wl-herb wl-herb--dark" src="/img/herb-bialy.png" alt="" aria-hidden="true" />
+          </div>
+          <div className="wl-brand">
+            <WodsLogo size={44} />
+            <div className="wl-names">
+              <span className="wl-name">szup</span>
+              <span className="wl-sub">WODS · URZĄD MIASTA WODZISŁAWIA ŚLĄSKIEGO</span>
+            </div>
           </div>
         </div>
 
