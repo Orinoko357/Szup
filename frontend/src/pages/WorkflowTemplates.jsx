@@ -202,7 +202,7 @@ function TemplateCard({ tpl, onEdit, onReload }) {
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 12 }}>
         <div style={{ flex: '1 1 360px', minWidth: 0 }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: 'var(--color-navy)' }}>{tpl.name}</h2>
+            <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: 'var(--color-heading)' }}>{tpl.name}</h2>
             <span style={{ padding: '1px 8px', borderRadius: 10, background: 'var(--color-neutral-bg)',
                            color: 'var(--color-neutral-text)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700 }}>
               v{tpl.version}
@@ -420,7 +420,7 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
                     alignItems: 'center', flexWrap: 'wrap', padding: '14px 16px', background: 'var(--color-card)',
                     border: '1px dashed var(--color-input-border)', borderRadius: 10 }}>
         <label style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, flex: '1 1 360px',
-                        fontSize: 14, fontWeight: 700, color: 'var(--color-navy)' }}>
+                        fontSize: 14, fontWeight: 700, color: 'var(--color-heading)' }}>
           Dodaj krok:
           <select className="form-control" style={{ ...INP, flex: 1 }}
                   value={addType} onChange={e => setAddType(e.target.value)}>
@@ -461,10 +461,10 @@ function StepTile({ fixed, type, index, label, sub, hint, editable, onLabel,
           </span>
           {editable ? (
             <input className="form-control" aria-label="Nazwa kroku"
-                   style={{ minHeight: 40, fontSize: 14, fontWeight: 700, color: 'var(--color-navy)' }}
+                   style={{ minHeight: 40, fontSize: 14, fontWeight: 700, color: 'var(--color-heading)' }}
                    value={label} onChange={e => onLabel(e.target.value)} />
           ) : (
-            <strong style={{ fontSize: 15, color: 'var(--color-navy)' }}>{label}</strong>
+            <strong style={{ fontSize: 15, color: 'var(--color-heading)' }}>{label}</strong>
           )}
           {(sub || hint) && (
             <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>{sub || hint}</span>

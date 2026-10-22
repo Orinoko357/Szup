@@ -27,7 +27,7 @@ function SelectedPlace({ unit, dept }) {
       fontSize: 13,
     }}>
       <Check size={14} style={{ color: 'var(--color-success)' }} />
-      <span><strong style={{ color: 'var(--color-navy)' }}>{unit || '?'}</strong> › {dept}</span>
+      <span><strong style={{ color: 'var(--color-heading)' }}>{unit || '?'}</strong> › {dept}</span>
     </div>
   )
 }
@@ -122,7 +122,7 @@ export default function HR() {
       <section aria-label="Moje zgłoszenia" className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12,
                       padding: '14px 18px', borderBottom: '1px solid var(--color-border)' }}>
-          <h2 style={{ margin: 0, flex: '1 1 200px', fontSize: 16, fontWeight: 800, color: 'var(--color-navy)' }}>
+          <h2 style={{ margin: 0, flex: '1 1 200px', fontSize: 16, fontWeight: 800, color: 'var(--color-heading)' }}>
             Moje zgłoszenia
           </h2>
           <div role="group" aria-label="Filtr statusu" style={{
@@ -203,7 +203,7 @@ function HRFormPage({ icon: Icon, title, subtitle, onCancel, onSubmit,
       <div className="page-header">
         <div>
           <div className="page-header__title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {Icon && <Icon size={18} style={{ color: 'var(--color-navy)' }} />}
+            {Icon && <Icon size={18} style={{ color: 'var(--color-heading)' }} />}
             {title}
           </div>
           {subtitle && <div className="page-header__sub">{subtitle}</div>}
@@ -536,7 +536,7 @@ function TerminationFormView({ onCancel, onCreated }) {
                                     minHeight: 44, padding: '0 12px', borderRadius: 6, fontSize: 14 }}
                            onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover, rgba(0,0,0,0.04))'}
                            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                        <span style={{ fontWeight: 700, color: 'var(--color-navy)' }}>{r.full_name || r.username}</span>
+                        <span style={{ fontWeight: 700, color: 'var(--color-heading)' }}>{r.full_name || r.username}</span>
                         <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
                           {[r.title, r.username].filter(Boolean).join(' · ')}
                         </span>
@@ -626,7 +626,7 @@ function TerminationFormView({ onCancel, onCreated }) {
                                      style={{ flexShrink: 0, width: 18, height: 18, margin: 0, accentColor: 'var(--color-navy)' }}
                                      onChange={() => setWorkerId(w.id)} />
                               <span style={{ minWidth: 0 }}>
-                                <span style={{ display: 'block', fontWeight: 700, color: 'var(--color-navy)' }}>
+                                <span style={{ display: 'block', fontWeight: 700, color: 'var(--color-heading)' }}>
                                   {w.full_name || w.username}
                                 </span>
                                 <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)',
@@ -760,7 +760,7 @@ function DeptSearchSelect({ units, depts, value, onChange }) {
                    onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = 'transparent' }}>
                 {/* wg projektu: „KOD · pełna nazwa” + ścieżka (mono) po prawej */}
                 <span style={{ flex: 1, minWidth: 0 }}>
-                  <strong style={{ color: 'var(--color-navy)' }}>{d.name}</strong>
+                  <strong style={{ color: 'var(--color-heading)' }}>{d.name}</strong>
                   {d.description && <span style={{ color: 'var(--color-text)' }}> · {d.description}</span>}
                 </span>
                 <span style={{
@@ -769,7 +769,7 @@ function DeptSearchSelect({ units, depts, value, onChange }) {
                 }}>
                   {path}
                 </span>
-                {isSel && <Check size={14} style={{ color: 'var(--color-navy)', flexShrink: 0 }} />}
+                {isSel && <Check size={14} style={{ color: 'var(--color-heading)', flexShrink: 0 }} />}
               </div>
             )
           })}

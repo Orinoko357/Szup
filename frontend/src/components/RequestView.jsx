@@ -68,10 +68,10 @@ export function WorkerCard({ name, sub, cols = [] }) {
                   background: 'var(--bg-secondary)' }}>
       <span style={{ flexShrink: 0, width: 38, height: 38, borderRadius: '50%',
                      display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 800,
-                     background: 'var(--color-card)', color: 'var(--color-navy)',
+                     background: 'var(--color-card)', color: 'var(--color-heading)',
                      border: '1px solid var(--color-border)' }}>{initials}</span>
       <div style={{ flex: '1 1 200px', minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--color-navy)' }}>{name || '—'}</div>
+        <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--color-heading)' }}>{name || '—'}</div>
         {sub && (
           <div style={{ fontSize: 12, color: 'var(--color-text-muted)',
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</div>
@@ -94,7 +94,7 @@ export function Section({ n, title, note, children }) {
     <section style={{ marginBottom: 22 }}>
       <h2 style={{ display: 'flex', alignItems: 'baseline', gap: 8, margin: '0 0 12px',
                    borderBottom: '1px solid var(--color-border)', paddingBottom: 8,
-                   fontWeight: 700, fontSize: 16, color: 'var(--color-navy)' }}>
+                   fontWeight: 700, fontSize: 16, color: 'var(--color-heading)' }}>
         {n != null && (
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
                          color: 'var(--color-gold-dark)' }}>{String(n).padStart(2, '0')}</span>
@@ -320,7 +320,7 @@ export default function RequestViewShell({
             {kindLabel && <KindBadge kind={kind} label={kindLabel} />}
             {statusText && <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>{statusText}</span>}
           </div>
-          <h1 style={{ margin: '2px 0 0', fontSize: 24, fontWeight: 800, color: 'var(--color-navy)' }}>{title}</h1>
+          <h1 style={{ margin: '2px 0 0', fontSize: 24, fontWeight: 800, color: 'var(--color-heading)' }}>{title}</h1>
           {subtitle && <p style={{ margin: '2px 0 0', fontSize: 14, color: 'var(--color-text-muted)' }}>{subtitle}</p>}
         </div>
         <button type="button" className="btn btn--ghost" style={{ minHeight: 44 }} onClick={onBack}>{backLabel}</button>

@@ -24,7 +24,7 @@ const tileStyle = (top) => ({
 })
 const TILE_LBL = { display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.07em',
                    textTransform: 'uppercase', color: 'var(--color-text-muted)' }
-const TILE_VAL = { display: 'block', fontSize: 28, fontWeight: 800, color: 'var(--color-navy)', lineHeight: 1.25 }
+const TILE_VAL = { display: 'block', fontSize: 28, fontWeight: 800, color: 'var(--color-heading)', lineHeight: 1.25 }
 
 export default function SecurityEvents() {
   const [rows, setRows] = useState([])
@@ -120,7 +120,7 @@ export default function SecurityEvents() {
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, whiteSpace: 'nowrap' }}>
                       {fmtDateTime(r.created_at)}
                     </td>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-navy)' }}>{r.event_type}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-heading)' }}>{r.event_type}</td>
                     <td>
                       <span className="badge" style={{ background: sb[0], color: sb[1] }}>
                         {SEV_PL[r.severity] || r.severity}

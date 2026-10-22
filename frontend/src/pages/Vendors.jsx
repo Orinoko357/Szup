@@ -167,7 +167,7 @@ function VendorForm({ vendor, onCancel, onSaved }) {
     <section className="card mb-4" aria-label={vendor ? 'Edycja dostawcy' : 'Nowy dostawca'}
              style={{ border: '2px solid var(--color-navy)', padding: '18px 18px 16px' }}>
       <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: 'var(--color-navy)' }}>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: 'var(--color-heading)' }}>
           {vendor ? `Edycja: ${vendor.name}` : 'Nowy dostawca'}
         </h2>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
@@ -230,13 +230,13 @@ function VendorRow({ vendor: v, onReload }) {
       }}>
         <span aria-hidden="true" style={{
           width: 34, height: 34, borderRadius: 8, flexShrink: 0, background: 'var(--bg-secondary)',
-          color: 'var(--color-navy)', display: 'grid', placeItems: 'center',
+          color: 'var(--color-heading)', display: 'grid', placeItems: 'center',
         }}>
           <Truck size={17} />
         </span>
         <div style={{ flex: '1 1 360px', minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <strong style={{ fontSize: 15, color: 'var(--color-navy)' }}>{v.name}</strong>
+            <strong style={{ fontSize: 15, color: 'var(--color-heading)' }}>{v.name}</strong>
             <StatusBadge v={v} />
             {v.contract_count > 0 && (
               <span className="badge badge--neutral" style={{ fontSize: 11, fontWeight: 700 }}>
@@ -346,8 +346,8 @@ function ContractsModal({ vendor, onClose, onChanged }) {
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal" role="dialog" aria-modal="true" style={{ maxWidth: 820 }}>
-        <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-navy)', padding: '12px 12px 12px 20px', gap: 12 }}>
-          <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-navy)' }}>
+        <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-heading)', padding: '12px 12px 12px 20px', gap: 12 }}>
+          <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
             Umowy serwisowe — {vendor.name}
           </h2>
           <button type="button" onClick={onClose} aria-label="Zamknij" title="Zamknij"
@@ -363,7 +363,7 @@ function ContractsModal({ vendor, onClose, onChanged }) {
           <div style={{
             padding: 14, background: 'var(--bg-secondary)', border: '1px solid var(--color-border)', borderRadius: 8, marginBottom: 16,
           }}>
-            <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 800, color: 'var(--color-navy)' }}>
+            <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 800, color: 'var(--color-heading)' }}>
               Dodaj umowę
             </h3>
             <div style={{

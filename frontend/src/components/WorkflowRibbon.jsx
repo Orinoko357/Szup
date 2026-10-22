@@ -19,7 +19,7 @@ const NODE_ICONS = {
 
 const STATE_STYLES = {
   done:    { color: 'var(--color-success)',    icon: CheckCircle2, bg: 'var(--color-success-bg)' },
-  current: { color: 'var(--color-navy)',       icon: Loader2,      bg: 'var(--color-warning-bg)' },
+  current: { color: 'var(--color-heading)',       icon: Loader2,      bg: 'var(--color-warning-bg)' },
   pending: { color: 'var(--color-text-muted)', icon: Circle,       bg: 'var(--bg-secondary)' },
   skipped: { color: 'var(--color-text-muted)', icon: MinusCircle,  bg: 'var(--bg-secondary)' },
 }
@@ -180,7 +180,7 @@ function ActionPanel({ data, requestId, unitId, onSubmit }) {
     <div style={{ marginTop: 12, padding: 14, background: 'var(--color-warning-bg)',
                   borderRadius: 4, border: '1px solid var(--color-border)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-        <NodeIcon size={16} style={{ color: 'var(--color-navy)' }} />
+        <NodeIcon size={16} style={{ color: 'var(--color-heading)' }} />
         <strong style={{ fontSize: 13 }}>Bieżący krok: {node.label || node.type}</strong>
       </div>
 
@@ -278,7 +278,7 @@ function SelectPanel({ requestId, unitId, onSubmit }) {
           const perms = permsBySys[sys.id] || []
           return (
             <div key={sys.id}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-navy)', marginBottom: 6 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-heading)', marginBottom: 6 }}>
                 {sys.name}
                 {sys.access_only && (
                   <span className="badge badge--neutral" style={{ fontSize: 10, marginLeft: 6 }}>dostęp</span>

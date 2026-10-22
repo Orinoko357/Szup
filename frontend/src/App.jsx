@@ -141,7 +141,7 @@ function AuthGate() {
         <Sidebar />
         <main className="app-main">
           <div>
-            <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: 'var(--color-navy)' }}>
+            <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: 'var(--color-heading)' }}>
               Wymagana zmiana hasła
             </h2>
             <p style={{ margin: '6px 0 0', fontSize: 14, color: 'var(--color-text-muted)' }}>

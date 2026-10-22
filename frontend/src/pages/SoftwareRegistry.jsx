@@ -766,7 +766,7 @@ export default function SoftwareRegistry() {
               </button>
 
               <button className="btn btn--sm"
-                      style={{ background: 'transparent', border: 0, color: 'var(--color-navy)', textDecoration: 'underline', fontWeight: 600 }}
+                      style={{ background: 'transparent', border: 0, color: 'var(--color-heading)', textDecoration: 'underline', fontWeight: 600 }}
                       onClick={() => setSelected(new Set())} disabled={bulkBusy}>
                 Odznacz
               </button>
@@ -1187,13 +1187,13 @@ function SystemRow({ system: s, units, vendors = [], allSystems = [], selected =
                style={{ width: 18, height: 18, marginTop: 8, flexShrink: 0, cursor: 'pointer', accentColor: 'var(--color-navy)' }} />
         <span aria-hidden="true" style={{
           width: 34, height: 34, borderRadius: 8, flexShrink: 0, background: 'var(--bg-secondary)',
-          color: 'var(--color-navy)', display: 'grid', placeItems: 'center',
+          color: 'var(--color-heading)', display: 'grid', placeItems: 'center',
         }}>
           <Package size={17} />
         </span>
         <div style={{ flex: '1 1 320px', minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <strong style={{ fontSize: 15, color: 'var(--color-navy)' }}>{s.name}</strong>
+            <strong style={{ fontSize: 15, color: 'var(--color-heading)' }}>{s.name}</strong>
             {/* Pozycja na wniosku — widoczna bez wchodzenia w edycję. */}
             {s.display_order != null && (
               <span className="badge badge--neutral"
@@ -1598,7 +1598,7 @@ function PermissionsPanel({ system: s }) {
                         </>
                       ) : (
                         <>
-                          <strong style={{ color: 'var(--color-navy)', fontSize: 14 }}>{group}</strong>
+                          <strong style={{ color: 'var(--color-heading)', fontSize: 14 }}>{group}</strong>
                           <span className="badge badge--neutral" style={{ fontSize: 11, fontWeight: 800 }}>
                             {items.length}
                           </span>
@@ -1655,7 +1655,7 @@ function PermissionsPanel({ system: s }) {
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center',
                                   flexWrap: 'wrap', padding: '8px 12px' }}>
                       <button className="btn btn--sm"
-                              style={{ background: 'transparent', border: 0, padding: 0, color: 'var(--color-navy)', textDecoration: 'underline', fontWeight: 600, fontSize: 13 }}
+                              style={{ background: 'transparent', border: 0, padding: 0, color: 'var(--color-heading)', textDecoration: 'underline', fontWeight: 600, fontSize: 13 }}
                               onClick={toggleAllInGroup}>
                         {allShownSel ? 'Odznacz wszystkie' : 'Zaznacz wszystkie'}
                       </button>

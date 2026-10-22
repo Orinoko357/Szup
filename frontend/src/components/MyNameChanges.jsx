@@ -52,11 +52,11 @@ export default function MyNameChanges() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '14px 18px',
                     borderBottom: rows.length > 0 ? '1px solid var(--color-border)' : 'none' }}>
         <span aria-hidden="true" style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--bg-secondary)',
-                                          color: 'var(--color-navy)', display: 'grid', placeItems: 'center' }}>
+                                          color: 'var(--color-heading)', display: 'grid', placeItems: 'center' }}>
           <UserPen size={16} />
         </span>
         <div style={{ flex: '1 1 240px' }}>
-          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: 'var(--color-navy)' }}>Zmiana nazwiska</h2>
+          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: 'var(--color-heading)' }}>Zmiana nazwiska</h2>
           <p style={{ margin: '2px 0 0', fontSize: 13, color: 'var(--color-text-muted)' }}>
             Obecnie: <strong style={{ color: 'var(--color-text)' }}>{currentName}</strong>
           </p>

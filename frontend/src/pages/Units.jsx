@@ -157,8 +157,8 @@ function UnitAccordion({ unit: u, depts, users, onChanged }) {
                          textAlign: 'left', padding: 0 }}>
           {open ? <ChevronDown size={18} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />
                 : <ChevronRight size={18} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />}
-          <Building2 size={18} aria-hidden="true" style={{ color: 'var(--color-navy)', flexShrink: 0 }} />
-          <strong style={{ fontSize: 16, color: 'var(--color-navy)' }}>{u.name}</strong>
+          <Building2 size={18} aria-hidden="true" style={{ color: 'var(--color-heading)', flexShrink: 0 }} />
+          <strong style={{ fontSize: 16, color: 'var(--color-heading)' }}>{u.name}</strong>
           <span className="badge badge--neutral">{depts.length} wydziałów</span>
           {u.description && (
             <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>— {u.description}</span>
@@ -194,7 +194,7 @@ function UnitAccordion({ unit: u, depts, users, onChanged }) {
             background: 'var(--bg-secondary)', borderBottom: '1px solid var(--color-border)',
           }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, fontWeight: 700,
-                            color: 'var(--color-navy)' }}>
+                            color: 'var(--color-heading)' }}>
               Kierownik jednostki:
               <select className="form-control" style={{ maxWidth: 320, fontSize: 14, fontWeight: 400 }}
                       value={u.manager_user_id || ''} disabled={mgrBusy}
@@ -412,7 +412,7 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
   return (
     <tr>
       <td style={{ paddingLeft: `calc(14px + ${indentPx}px)` }}>
-        <span style={{ display: 'block', fontWeight: 700, color: 'var(--color-navy)' }}>
+        <span style={{ display: 'block', fontWeight: 700, color: 'var(--color-heading)' }}>
           {depth > 0 && <span style={{ color: 'var(--color-text-muted)', marginRight: 6 }}>↳</span>}
           {d.name}
         </span>
@@ -855,7 +855,7 @@ function LdapImportModal({ onClose }) {
                         disabled={!!unitMap[unit.dn]}
                         onChange={() => toggleNode(unit, true)}
                       />
-                      <Building2 size={13} style={{ color: 'var(--color-navy)', flexShrink: 0 }} />
+                      <Building2 size={13} style={{ color: 'var(--color-heading)', flexShrink: 0 }} />
                       <span style={{ fontWeight: 700, fontSize: 13 }}>{unit.name}</span>
                       {unitMap[unit.dn] ? (
                         <span className="badge badge--info" style={{ fontSize: 10 }}>mapowana</span>
@@ -1194,7 +1194,7 @@ export function LdapUsersImportModal({ onClose }) {
                             : (u.unit_name ? `${u.unit_name} (bez wydziału)` : '— bez przypisania —')
                           rows.push(
                             <tr key={`grp-${key}`} style={{ background: 'var(--bg-secondary)' }}>
-                              <td colSpan={5} style={{ fontWeight: 700, color: 'var(--color-navy)', padding: '4px 10px' }}>
+                              <td colSpan={5} style={{ fontWeight: 700, color: 'var(--color-heading)', padding: '4px 10px' }}>
                                 {label}
                               </td>
                             </tr>
@@ -1355,7 +1355,7 @@ function DeputiesModal({ dept, users, onClose, onChanged }) {
         <div className="card" style={{ width: 620, maxWidth: '95vw',
                                         maxHeight: '90vh', overflowY: 'auto', padding: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <UserCog size={18} style={{ color: 'var(--color-navy)' }} />
+            <UserCog size={18} style={{ color: 'var(--color-heading)' }} />
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 14, fontWeight: 700 }}>Zastępcy w komórce „{dept.name}"</div>
               <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>

@@ -171,7 +171,7 @@ export default function Dashboard() {
                   <span style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.07em',
                                  textTransform: 'uppercase', color: 'var(--color-text-muted)' }}>{t.label}</span>
                   <span style={{ display: 'block', fontSize: 28, fontWeight: 800, lineHeight: 1.25,
-                                 color: 'var(--color-navy)' }}>{t.count ?? 0}</span>
+                                 color: 'var(--color-heading)' }}>{t.count ?? 0}</span>
                 </button>
               )
             })}
@@ -214,7 +214,7 @@ export default function Dashboard() {
                         <td style={{ fontWeight: 700 }}>{p.worker_name}</td>
                         <td>
                           {/* wg projektu: kod pogrubiony + pełna nazwa wyszarzona */}
-                          <strong style={{ color: 'var(--color-navy)' }}>{p.dept_name || '—'}</strong>
+                          <strong style={{ color: 'var(--color-heading)' }}>{p.dept_name || '—'}</strong>
                           {deptFull(p.dept_name, p.dept_description).includes(' · ') && (
                             <span style={{ color: 'var(--color-text-muted)' }}> · {p.dept_description}</span>
                           )}

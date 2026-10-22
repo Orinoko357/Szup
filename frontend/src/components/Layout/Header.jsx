@@ -34,7 +34,7 @@ export default function Header() {
         <span className="app-header__avatar" aria-hidden="true"
               style={{ width: 30, height: 30, fontSize: 11, fontWeight: 800 }}>{initials}</span>
         <span>
-          <strong style={{ color: 'var(--color-navy)', fontWeight: 700 }}>{user?.username || 'Użytkownik'}</strong>
+          <strong style={{ color: 'var(--color-heading)', fontWeight: 700 }}>{user?.username || 'Użytkownik'}</strong>
           {roleLabels && (
             <span style={{ color: 'var(--color-text-muted)', fontWeight: 400 }}> · {roleLabels}</span>
           )}
@@ -130,7 +130,7 @@ function ChangePasswordModal({ onClose, forced = false }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '18px 22px',
                       borderBottom: '1px solid var(--color-border)' }}>
           <KeyRound size={18} color="var(--color-gold)" aria-hidden="true" />
-          <h2 style={{ margin: 0, flex: 1, fontSize: 17, fontWeight: 800, color: 'var(--color-navy)' }}>Zmiana hasła</h2>
+          <h2 style={{ margin: 0, flex: 1, fontSize: 17, fontWeight: 800, color: 'var(--color-heading)' }}>Zmiana hasła</h2>
           {!forced && (
             <button type="button" onClick={onClose} aria-label="Zamknij"
                     style={{ width: 36, height: 36, border: 0, background: 'transparent', cursor: 'pointer',

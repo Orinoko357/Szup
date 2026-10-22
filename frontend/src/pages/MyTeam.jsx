@@ -209,7 +209,7 @@ function WorkersTab({ renderHeader }) {
                                       borderRadius: 6,
                                       background: 'var(--bg-secondary)',
                                     }}>
-                                <strong style={{ color: 'var(--color-navy)' }}>{p.system_name}</strong>
+                                <strong style={{ color: 'var(--color-heading)' }}>{p.system_name}</strong>
                                 <span style={{ color: 'var(--color-text-muted)' }}> › </span>
                                 {p.permission_name}
                               </span>

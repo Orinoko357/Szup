@@ -778,7 +778,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                           <input type="checkbox" checked={picked.has(key)}
                                  style={{ width: 16, height: 16, flexShrink: 0 }}
                                  onChange={() => togglePerm(p.system_id, p.permission_id)} />
-                          <span style={{ fontWeight: 600, color: 'var(--color-navy)' }}>{p.system_name}</span>
+                          <span style={{ fontWeight: 600, color: 'var(--color-heading)' }}>{p.system_name}</span>
                           <span style={{ color: 'var(--color-text-muted)' }}>›</span>
                           <span>{p.permission_name}</span>
                         </label>

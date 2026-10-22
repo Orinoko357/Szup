@@ -61,8 +61,8 @@ function DeclarationDetail({ detail, onClose }) {
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: 760, width: '92vw' }}>
-        <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-navy)', padding: '12px 12px 12px 20px', gap: 12 }}>
-          <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-navy)' }}>
+        <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-heading)', padding: '12px 12px 12px 20px', gap: 12 }}>
+          <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
             Oświadczenie — {detail.reference_code}
           </h2>
           <button type="button" onClick={onClose} aria-label="Zamknij" title="Zamknij"
@@ -157,7 +157,7 @@ function CurrentRegistry() {
           </button>
         )}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>Pozycji: <strong style={{ color: 'var(--color-navy)' }}>{total}</strong></span>
+          <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>Pozycji: <strong style={{ color: 'var(--color-heading)' }}>{total}</strong></span>
           <a className="btn btn--ghost btn--sm" href={grantedRegistryCsvUrl(params())}
              target="_blank" rel="noopener noreferrer">
             <Download size={14} /> CSV

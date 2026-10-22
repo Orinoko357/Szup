@@ -835,7 +835,7 @@ function TplEditor({ tpl, onSaved }) {
                     cursor: 'pointer', flexWrap: 'wrap' }}
            onClick={() => setOpen(v => !v)}>
         {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-        <strong style={{ fontSize: 13, color: 'var(--color-navy)' }}>{tpl.label}</strong>
+        <strong style={{ fontSize: 13, color: 'var(--color-heading)' }}>{tpl.label}</strong>
         {!enabled && <span className="badge badge--warning" style={{ fontSize: 9 }}>wyłączone</span>}
         {tpl.is_custom && <span className="badge badge--info" style={{ fontSize: 9 }}>zmienione</span>}
       </div>

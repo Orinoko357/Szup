@@ -90,9 +90,9 @@ function DeptNode({ dept: d, depth, defaultOpen = false }) {
         {(() => {
           const meta = kindMeta(d.kind)
           const Icon = meta.icon || Building2
-          return <Icon size={17} aria-hidden="true" style={{ color: 'var(--color-navy)' }} />
+          return <Icon size={17} aria-hidden="true" style={{ color: 'var(--color-heading)' }} />
         })()}
-        <strong style={{ fontSize: 14, color: 'var(--color-navy)' }}>{d.name}</strong>
+        <strong style={{ fontSize: 14, color: 'var(--color-heading)' }}>{d.name}</strong>
         <KindBadge kind={d.kind} />
         {d.requires_higher_approval && (
           <span className="badge badge--warning" style={{ fontSize: 11, fontWeight: 700 }}>
@@ -193,7 +193,7 @@ function WorkerRow({ worker: w }) {
         <div style={{ padding: '4px 12px 10px 35px', display: 'flex', flexDirection: 'column', gap: 6 }}>
           {systemNames.map(sn => (
             <div key={sn} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, fontSize: 13 }}>
-              <strong style={{ minWidth: 190, color: 'var(--color-navy)' }}>{sn}</strong>
+              <strong style={{ minWidth: 190, color: 'var(--color-heading)' }}>{sn}</strong>
               {bySystem[sn].map(p => (
                 <span key={`${p.system_id}:${p.permission_id}:${p.request_id}`}
                       className="badge badge--info"

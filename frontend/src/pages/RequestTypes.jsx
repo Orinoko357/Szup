@@ -108,12 +108,12 @@ function TypeRow({ t, onEdit, onReload }) {
     <tr>
       <td style={{ width: 48 }}>
         <span aria-hidden="true" style={{ width: 34, height: 34, borderRadius: 8, background: 'var(--bg-secondary)',
-                                          color: 'var(--color-navy)', display: 'grid', placeItems: 'center' }}>
+                                          color: 'var(--color-heading)', display: 'grid', placeItems: 'center' }}>
           <Icon size={17} />
         </span>
       </td>
       <td>
-        <span style={{ display: 'block', fontWeight: 700, color: 'var(--color-navy)' }}>{t.name}</span>
+        <span style={{ display: 'block', fontWeight: 700, color: 'var(--color-heading)' }}>{t.name}</span>
         {t.description && (
           <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>{t.description}</span>
         )}
@@ -178,7 +178,7 @@ function TypeForm({ type, templates, onCancel, onSaved }) {
     <section aria-label={isEdit ? 'Edycja typu wniosku' : 'Nowy typ wniosku'} className="card"
              style={{ padding: '18px 20px', borderTop: '3px solid var(--color-gold)',
                       margin: isEdit ? 0 : '0 0 18px 0', display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: 'var(--color-navy)' }}>
+      <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: 'var(--color-heading)' }}>
         {isEdit ? 'Edycja typu wniosku' : 'Nowy typ wniosku'}
       </h2>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>

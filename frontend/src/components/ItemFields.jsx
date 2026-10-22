@@ -27,7 +27,7 @@ export default function PermInput({ input, name, show, values, onChange, compact
     }}>
       {/* Co wpisać/wybrać — najpierw podpowiedź (prompt), potem ewentualny opis. */}
       {input?.prompt && (
-        <div style={{ fontSize: 12, color: 'var(--color-navy)', fontWeight: 600, marginBottom: 3 }}>
+        <div style={{ fontSize: 12, color: 'var(--color-heading)', fontWeight: 600, marginBottom: 3 }}>
           {input.prompt}
         </div>
       )}

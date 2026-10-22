@@ -177,6 +177,8 @@ export const linkRequestWorker = (id, ad_username) => api.post(`/requests/${id}/
 
 // --- Pulpit obiegu wniosków ---
 export const workflowDashboard = () => api.get('/requests/dashboard')
+// v3.1 — lista kontrolna konfiguracji + sygnały jakości danych (admin)
+export const getAdminHealth    = () => api.get('/settings/health')
 
 // --- Workflow — szablony obiegu i typy wniosków ---
 export const listWorkflowTemplates  = (params) => api.get('/workflow-templates/', { params })

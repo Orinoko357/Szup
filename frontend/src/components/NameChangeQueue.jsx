@@ -133,7 +133,7 @@ function ResolveModal({ req, onClose, onDone }) {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 10px 14px 22px',
                       borderBottom: '1px solid var(--color-border)' }}>
-          <h2 style={{ margin: 0, flex: 1, fontSize: 17, fontWeight: 800, color: 'var(--color-navy)' }}>
+          <h2 style={{ margin: 0, flex: 1, fontSize: 17, fontWeight: 800, color: 'var(--color-heading)' }}>
             Zmiana nazwiska — {req.username}
           </h2>
           <button type="button" aria-label="Zamknij" onClick={onClose}
@@ -149,7 +149,7 @@ function ResolveModal({ req, onClose, onDone }) {
             <dt style={{ color: 'var(--color-text-muted)' }}>Obecnie:</dt>
             <dd style={{ margin: 0, fontWeight: 600 }}>{req.current_full_name || '—'}</dd>
             <dt style={{ color: 'var(--color-text-muted)' }}>Nowe:</dt>
-            <dd style={{ margin: 0, fontWeight: 800, color: 'var(--color-navy)' }}>{req.requested_full_name}</dd>
+            <dd style={{ margin: 0, fontWeight: 800, color: 'var(--color-heading)' }}>{req.requested_full_name}</dd>
           </dl>
 
           <label style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 44, fontSize: 14, cursor: 'pointer' }}>

@@ -42,6 +42,7 @@
   --color-gold:        #C9A227;   /* Złoto — akcent (markery, sygnet, podkreślenia) */
   --color-gold-dark:   #8A6D1C;   /* złoto jako tekst na jasnym tle (kontrast) */
   --color-gold-light:  #D9A441;
+  --color-heading:     var(--color-navy);   /* kolor TEKSTU nagłówków/akcentów (v3.1) */
 
   --color-bg:          #F5F6F8;   /* Tło aplikacji */
   --color-card:        #FFFFFF;
@@ -107,6 +108,7 @@
   --color-gold:        #D9A441;
   --color-gold-dark:   #C9A227;
   --color-gold-light:  #E4B863;
+  --color-heading:     #E4B863;             /* w trybie ciemnym granatowy tekst byłby niewidoczny */
 
   --color-bg:          #121A2B;
   --color-card:        #1A2438;

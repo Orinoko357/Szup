@@ -124,7 +124,7 @@ export default function AuditLog() {
                       {fmtDateTime(r.timestamp)}
                     </td>
                     <td style={{ fontWeight: 600 }}>{r.username || <span style={{ color: 'var(--color-text-muted)' }}>—</span>}</td>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-navy)' }}>{r.action}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-heading)' }}>{r.action}</td>
                     <td style={{ maxWidth: 320 }}>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                         {r.method && (

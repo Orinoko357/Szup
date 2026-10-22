@@ -64,7 +64,7 @@ export default function MyPermissions() {
           <div>
             {systems.map((sn, i) => (
               <div key={sn} style={{ borderBottom: i < systems.length - 1 ? '1px solid var(--color-border)' : 'none' }}>
-                <h2 style={{ margin: 0, padding: '14px 18px 10px', fontSize: 15, fontWeight: 800, color: 'var(--color-navy)' }}>
+                <h2 style={{ margin: 0, padding: '14px 18px 10px', fontSize: 15, fontWeight: 800, color: 'var(--color-heading)' }}>
                   {sn}
                 </h2>
                 <div style={{ overflowX: 'auto' }}>
@@ -87,7 +87,7 @@ export default function MyPermissions() {
                         <td style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>
                           {fmtDate(p.granted_at)}
                         </td>
-                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--color-navy)' }}>
+                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--color-heading)' }}>
                           #{p.request_id}
                         </td>
                       </tr>
@@ -103,7 +103,7 @@ export default function MyPermissions() {
 
       {reqs.length > 0 && (
         <section aria-label="Historia zrealizowanych wniosków" className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          <h2 style={{ margin: 0, padding: '14px 18px', fontSize: 16, fontWeight: 800, color: 'var(--color-navy)',
+          <h2 style={{ margin: 0, padding: '14px 18px', fontSize: 16, fontWeight: 800, color: 'var(--color-heading)',
                        borderBottom: '1px solid var(--color-border)' }}>
             Historia zrealizowanych wniosków
           </h2>
@@ -120,7 +120,7 @@ export default function MyPermissions() {
             <tbody>
               {reqs.map(r => (
                 <tr key={r.id}>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--color-navy)' }}>#{r.id}</td>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--color-heading)' }}>#{r.id}</td>
                   <td style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>
                     {fmtDate(r.created_at)}
                   </td>

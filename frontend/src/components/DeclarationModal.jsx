@@ -64,7 +64,7 @@ export default function DeclarationModal({
                                             color: 'var(--color-gold-dark)', display: 'grid', placeItems: 'center' }}>
             <ShieldAlert size={20} />
           </span>
-          <h2 id="decl-title" style={{ margin: 0, flex: 1, fontSize: 18, fontWeight: 800, color: 'var(--color-navy)' }}>
+          <h2 id="decl-title" style={{ margin: 0, flex: 1, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
             Oświadczenie wnioskującego
           </h2>
           <button type="button" aria-label="Zamknij" onClick={onClose} disabled={busy}

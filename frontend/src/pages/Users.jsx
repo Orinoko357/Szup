@@ -152,7 +152,7 @@ function DeptCombo({ depts = [], units = [], value, onChange, className = 'form-
                 position: 'sticky', top: 0, zIndex: 1,
                 padding: '4px 10px', fontSize: 11, fontWeight: 700,
                 letterSpacing: '.03em', textTransform: 'uppercase',
-                color: 'var(--color-navy)', background: 'var(--bg-secondary)',
+                color: 'var(--color-heading)', background: 'var(--bg-secondary)',
                 borderTop: '1px solid var(--color-border)',
               }}>
                 {g.name}
@@ -484,7 +484,7 @@ export default function Users() {
                                     }}>
                                   <span style={{
                                     display: 'inline-flex', alignItems: 'center', gap: 8,
-                                    fontSize: 14, fontWeight: 700, color: 'var(--color-navy)',
+                                    fontSize: 14, fontWeight: 700, color: 'var(--color-heading)',
                                   }}>
                                     {deptOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                                     {d.label}
