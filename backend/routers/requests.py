@@ -79,7 +79,7 @@ def _validate_items_scope(session: Session, unit_id: int, items) -> None:
             )
 
 
-def _clean_custom_values(session: Session, item) -> Optional[str]:
+def _clean_custom_values(session: Session, item, *, allow_incomplete: bool = False) -> Optional[str]:
     """Zwaliduj i zserializuj wartość kontrolki JEDNEJ pozycji wniosku.
 
     Kontrolka (lista wyboru albo pole do wpisania) jest cechą KONKRETNEGO
@@ -91,6 +91,10 @@ def _clean_custom_values(session: Session, item) -> Optional[str]:
     nazwa→wartość — dzięki temu podgląd, PDF i „Moje uprawnienia" działają
     bez zmian, a wartości zapisane wcześniej (gdy pola definiowano przy
     programie) pozostają czytelne.
+
+    `allow_incomplete=True` (wersja robocza kierownika) — brak wartości pola
+    obowiązkowego nie jest błędem; zostanie sprawdzony przy wysłaniu wniosku.
+    Niedozwolone wartości z listy są odrzucane zawsze.
     """
     import json as _json
     from routers.systems import INPUT_OPTION_TYPES, _parse_options
@@ -105,6 +109,8 @@ def _clean_custom_values(session: Session, item) -> Optional[str]:
     required = bool(getattr(perm, "input_required", False))
     # Pozycje odbierane (revoke) nie wymagają doprecyzowania — odbieramy całość.
     is_revoke = getattr(item, "kind", "grant") == "revoke"
+    if allow_incomplete:
+        required = False
 
     supplied = getattr(item, "custom_values", None) or {}
     raw = supplied.get(label)
@@ -155,6 +161,40 @@ def _clean_custom_values(session: Session, item) -> Optional[str]:
     return _json.dumps({label: val}, ensure_ascii=False)
 
 
+def _item_kind_for(item, request_kind: str) -> str:
+    """Kierunek pozycji z formularza: własny (grant/revoke), a gdy brak — kierunek wniosku."""
+    if item.kind in ("grant", "revoke"):
+        return item.kind
+    return "revoke" if request_kind == "revoke" else "grant"
+
+
+def _replace_request_items(session: Session, r: AccessRequest, items, *,
+                           allow_incomplete: bool = False) -> list[dict]:
+    """Zastąp pozycje wniosku dokładnie tym, co przyszło z formularza kierownika
+    (akcja „select" i zapis wersji roboczej). Każda pozycja niesie własny
+    kierunek (grant/revoke) — stan docelowy. Waliduje zakres systemów
+    i wartości kontrolek; zwraca listę pozycji do payloadu kroku / audytu.
+    Tylko flush — commit robi wywołujący."""
+    _validate_items_scope(session, r.unit_id, items)
+    rkind = getattr(r, "kind", "grant") or "grant"
+    # Najpierw walidacja wartości (bez zmian w bazie), dopiero potem podmiana.
+    cleaned = [_clean_custom_values(session, it, allow_incomplete=allow_incomplete)
+               for it in items]
+    for old in session.exec(select(RequestItem).where(RequestItem.request_id == r.id)).all():
+        session.delete(old)
+    session.flush()
+    for it, cv in zip(items, cleaned):
+        session.add(RequestItem(
+            request_id=r.id, system_id=it.system_id,
+            permission_id=it.permission_id, kind=_item_kind_for(it, rkind),
+            custom_values=cv))
+    session.flush()
+    return [{"system_id": it.system_id, "permission_id": it.permission_id,
+             "kind": _item_kind_for(it, rkind),
+             "custom_values": it.custom_values or {}}
+            for it in items]
+
+
 router = APIRouter()
 
 
@@ -201,6 +241,15 @@ class RequestCreate(BaseModel):
     # Oświadczenie wnioskującego — wymagane, gdy złożenie wniosku od razu
     # kieruje go do IT (kierownik składa i sam zatwierdza wybór w 1-stopniu).
     declaration: Optional[DeclarationIn] = None
+    # „Zapisz roboczy" kierownika komórki: wniosek powstaje z pozycjami, ale BEZ
+    # automatycznego wyboru — zostaje u kierownika jako wersja robocza.
+    draft: bool = False
+
+
+class DraftSaveIn(BaseModel):
+    """Zapis wersji roboczej na etapie kierownika komórki (bez przesuwania obiegu)."""
+    items: list[RequestItemSchema] = []
+    comment: Optional[str] = None
 
 
 class DenyItemIn(BaseModel):
@@ -360,6 +409,14 @@ def _serialize_request(r: AccessRequest, items: list, session: Session | None = 
         "completed_at": r.completed_at.isoformat() if r.completed_at else None,
         "rejected_at": r.rejected_at.isoformat() if r.rejected_at else None,
         "selected_at": r.selected_at.isoformat() if r.selected_at else None,
+        # Wersja robocza kierownika i przejęcie przez przełożonego (historia
+        # zostaje także po przejściu etapu kierownika).
+        "draft_saved_at": (r.draft_saved_at.isoformat()
+                           if getattr(r, "draft_saved_at", None) else None),
+        "taken_over_by_id": getattr(r, "taken_over_by_id", None),
+        "taken_over_by_name": getattr(r, "taken_over_by_name", None),
+        "taken_over_at": (r.taken_over_at.isoformat()
+                          if getattr(r, "taken_over_at", None) else None),
         "items": items,
     }
 
@@ -485,15 +542,19 @@ def _preload_for_requests(session: Session, rows: list) -> dict[int, list]:
 
 def _attach_node_info(session: Session, out: list[dict], rows: list, user: User) -> None:
     """Dopisz do zserializowanych wniosków `current_node_type` (typ bieżącego
-    węzła aktywnego obiegu albo None) i `can_act` (czy `user` może na nim działać)."""
+    węzła aktywnego obiegu albo None), `can_act` (czy `user` może na nim działać)
+    oraz informacje o etapie kierownika komórki: `manager_stage` (etap roboczy
+    komórki z własnym kierownikiem), `is_draft` (jest zapisana wersja robocza)
+    i `can_take_over` (czy `user` może wniosek przejąć jako przełożony)."""
     from models import WorkflowInstance, WorkflowInstanceStatus
-    from services.workflow import can_act, find_node
+    from services.workflow import can_act, find_node, is_manager_stage, can_take_over
     by_id = {r.id: r for r in rows}
     cached = session.info.get("_wf_rows", {})
     preloaded = session.info.get("_wf_inst_by_req", {})
     for row in out:
         r = by_id[row["id"]]
         node_type, act = None, False
+        stage, take = False, False
         if r.id in cached:
             # Instancja i węzeł już wczytane w _serialize_request.
             inst, node = cached[r.id]
@@ -516,8 +577,14 @@ def _attach_node_info(session: Session, out: list[dict], rows: list, user: User)
                 dept = session.get(Department, r.department_id) if r.department_id else None
                 allowed, _reason = can_act(node, r, dept, user, session)
                 act = bool(allowed)
+                stage = is_manager_stage(session, node_type, dept)
+                if stage:
+                    take = can_take_over(session, r, user, node_type, dept)[0]
         row["current_node_type"] = node_type
         row["can_act"] = act
+        row["manager_stage"] = stage
+        row["is_draft"] = bool(stage and getattr(r, "draft_saved_at", None))
+        row["can_take_over"] = take
 
 
 def _item_kind(item, request_kind: str) -> str:
@@ -647,6 +714,10 @@ def list_requests(
     stmt = stmt.order_by(col(AccessRequest.created_at).desc()).limit(limit).offset(offset)
     rows = session.exec(stmt).all()
     items_by_req = _preload_for_requests(session, rows)
+    # Wnioski na etapie kierownika komórki (wersja robocza) „nie istnieją" dla
+    # osób spoza kręgu kierownika — także dla IT i administratora.
+    from services.workflow import can_view_request
+    rows = [r for r in rows if can_view_request(session, r, current_user)]
     out = [_serialize_request(r, _get_items(session, r.id, items_by_req.get(r.id, [])), session)
            for r in rows]
 
@@ -904,18 +975,21 @@ def create_request(
                 session.add(RequestItem(
                     request_id=req.id, system_id=item.system_id,
                     permission_id=item.permission_id, kind=ik,
-                    custom_values=_clean_custom_values(session, item)))
+                    custom_values=_clean_custom_values(
+                        session, item, allow_incomplete=data.draft)))
             session.flush()
 
         start_instance(session, req, tpl)
         session.flush()
 
+        if data.draft:
+            _save_initial_draft(session, req, dept, current_user)
         # Jeśli wniosek składa osoba, która i tak wykonywałaby krok „wybór
         # uprawnień" (kierownik/zastępca tej komórki) i podała już pozycje —
         # zaliczamy ten krok automatycznie. Inaczej musiałaby zatwierdzać
         # własny wniosek drugi raz. Krok trafia do śladu audytowego z nią
         # jako aktorem, a obieg idzie od razu dalej (wyższy rząd albo IT).
-        if data.items:
+        if data.items and not data.draft:
             from models import WorkflowInstance, WorkflowInstanceStatus
             from services.workflow import can_act, find_node, execute_action
             from services.after_commit import discard_jobs
@@ -972,6 +1046,54 @@ def create_request(
     out = _serialize_request(req, _get_items(session, req.id), session)
     _attach_node_info(session, [out], [req], current_user)
     return out
+
+
+def _save_initial_draft(session: Session, req: AccessRequest, dept: Optional[Department],
+                        user: User) -> None:
+    """„Zapisz roboczy" przy składaniu wniosku przez kierownika komórki.
+
+    Wniosek zostaje na kroku wyboru uprawnień (bez automatycznego wyboru i bez
+    oświadczenia), oznaczony jako wersja robocza. E-mail „wybierz uprawnienia",
+    zlecony przy wejściu w ten krok, jest zbędny — adresatem byłby sam składający.
+    """
+    from models import WorkflowInstance, WorkflowInstanceStatus
+    from services.workflow import can_act, find_node
+    from services.after_commit import discard_jobs
+    from services.email_alerts import notify_workflow_stage
+    from services.audit import record_event
+
+    inst = session.exec(
+        select(WorkflowInstance).where(WorkflowInstance.request_id == req.id)
+    ).first()
+    node = None
+    if inst and inst.status == WorkflowInstanceStatus.active and inst.current_node_id:
+        try:
+            node = find_node(json.loads(inst.template_snapshot), inst.current_node_id)
+        except Exception:
+            node = None
+    if not node or node.get("type") != "select_permissions" \
+            or not can_act(node, req, dept, user, session)[0]:
+        raise HTTPException(400, "Wersję roboczą może zapisać tylko kierownik komórki.")
+
+    discard_jobs(session, lambda fn, kw: (
+        fn is notify_workflow_stage
+        and kw.get("request_id") == req.id
+        and kw.get("node_type") == "select_permissions"))
+    req.draft_saved_at = datetime.utcnow()
+    session.add(req)
+    try:
+        record_event(
+            session, action="request.draft_saved",
+            user_id=user.id, username=user.username,
+            target_type="access_request", target_id=req.id,
+            details={"items": len(session.exec(
+                select(RequestItem).where(RequestItem.request_id == req.id)).all()),
+                "created": True},
+            commit=False,
+        )
+    except Exception:
+        pass
+    session.flush()
 
 
 # Cały obieg wniosków idzie wyłącznie przez silnik workflow
@@ -1043,6 +1165,15 @@ def link_worker(
 
 
 def _check_access(user: User, r: AccessRequest, session: Session) -> None:
+    # Najpierw etap kierownika komórki (wersja robocza): krąg osób jest zamknięty
+    # (kierownik i zastępcy, twórca, przejmujący, przełożeni, superadmin) —
+    # ukryty także przed IT i administratorem.
+    from services.workflow import manager_stage_visibility, DRAFT_HIDDEN_MSG
+    vis = manager_stage_visibility(session, r, user)
+    if vis is False:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, DRAFT_HIDDEN_MSG)
+    if vis is True:
+        return
     if is_admin(user) or has_role(user, "it_staff"):
         return
     # Twórca zawsze widzi swój wniosek (np. kierownik Wydziału Kadr składający
@@ -1205,8 +1336,6 @@ def workflow_action(
     if data.action == "select":
         # Zastąp RequestItem tym co przyszło (kierownik uzupełnia koszyk).
         # Każda pozycja niesie własny kierunek (grant/revoke) — stan docelowy.
-        _validate_items_scope(session, r.unit_id, data.items)
-        rkind = getattr(r, "kind", "grant") or "grant"
         old = session.exec(select(RequestItem).where(RequestItem.request_id == r.id)).all()
         # Pusty wybór na wniosku z pozycjami (np. wpisanymi przez kadry) skasowałby
         # je po cichu — typowo, gdy front nie zdołał wczytać listy uprawnień.
@@ -1217,22 +1346,7 @@ def workflow_action(
                 "Nie wybrano żadnych uprawnień, a wniosek zawiera już pozycje "
                 "(np. wpisane przez kadry). Zatwierdzenie pustego wyboru usunęłoby je. "
                 "Odśwież wniosek i zaznacz uprawnienia albo potwierdź wniosek bez pozycji.")
-        for it in old:
-            session.delete(it)
-        session.flush()
-        for it in data.items:
-            ik = it.kind if it.kind in ("grant", "revoke") else (
-                "revoke" if rkind == "revoke" else "grant")
-            session.add(RequestItem(
-                request_id=r.id, system_id=it.system_id,
-                permission_id=it.permission_id, kind=ik,
-                custom_values=_clean_custom_values(session, it)))
-        session.flush()
-        payload = {"items": [{"system_id": it.system_id, "permission_id": it.permission_id,
-                              "kind": (it.kind if it.kind in ("grant", "revoke")
-                                       else ("revoke" if rkind == "revoke" else "grant")),
-                              "custom_values": it.custom_values or {}}
-                             for it in data.items]}
+        payload = {"items": _replace_request_items(session, r, data.items)}
     elif data.action == "execute":
         payload = {"ad_username": data.ad_username} if data.ad_username else None
 
@@ -1360,6 +1474,157 @@ def workflow_action(
     out = serialize_instance(session, inst)
     out["workflow_enabled"] = True
     return out
+
+
+def _active_node(session: Session, request_id: int):
+    """(instancja, bieżący węzeł) aktywnego obiegu albo 409/400, gdy go nie ma."""
+    from models import WorkflowInstance, WorkflowInstanceStatus
+    from services.workflow import find_node
+    inst = session.exec(
+        select(WorkflowInstance).where(WorkflowInstance.request_id == request_id)
+    ).first()
+    if not inst:
+        raise HTTPException(400, "Wniosek nie ma podpiętego obiegu (starszy wniosek?).")
+    if inst.status != WorkflowInstanceStatus.active or not inst.current_node_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, STEP_ALREADY_DONE_MSG)
+    try:
+        node = find_node(json.loads(inst.template_snapshot), inst.current_node_id)
+    except Exception:
+        node = None
+    if not node:
+        raise HTTPException(400, "Instancja nie ma aktualnego węzła.")
+    return inst, node
+
+
+def _request_out(session: Session, r: AccessRequest, user: User) -> dict:
+    out = _serialize_request(r, _get_items(session, r.id), session)
+    _attach_node_info(session, [out], [r], user)
+    return out
+
+
+@router.post("/{request_id}/draft")
+def save_draft(
+    request_id: int,
+    data: DraftSaveIn,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """„Zapisz roboczy" — kierownik komórki zapisuje wybór uprawnień BEZ wysyłania
+    wniosku dalej. Pozycje są zastępowane dokładnie jak przy akcji „select",
+    ale obieg stoi w miejscu, a wniosek pozostaje widoczny tylko dla kręgu
+    kierownika (patrz `_check_access`). Pusta lista pozycji jest dozwolona."""
+    from services.workflow import can_act
+    from services.audit import record_event
+
+    r = session.get(AccessRequest, request_id)
+    if not r:
+        raise HTTPException(404, "Wniosek nie istnieje")
+    _check_access(current_user, r, session)
+
+    _inst, node = _active_node(session, request_id)
+    if node.get("type") != "select_permissions":
+        raise HTTPException(status.HTTP_409_CONFLICT,
+            "Wersję roboczą można zapisać tylko na etapie wyboru uprawnień. Odśwież wniosek.")
+    dept = session.get(Department, r.department_id) if r.department_id else None
+    allowed, reason = can_act(node, r, dept, current_user, session)
+    if not allowed:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            reason or "Brak uprawnień do zapisania wersji roboczej.")
+
+    try:
+        saved = _replace_request_items(session, r, data.items, allow_incomplete=True)
+        r.draft_saved_at = datetime.utcnow()
+        comment = (data.comment or "").strip()
+        # Komentarz kierownika z wersji roboczej (pole `manager_comment`) — front
+        # podpowiada go przy wysyłce wniosku.
+        r.manager_comment = comment or None
+        session.add(r)
+        try:
+            record_event(
+                session, action="request.draft_saved",
+                user_id=current_user.id, username=current_user.username,
+                target_type="access_request", target_id=r.id,
+                details={"items": saved, "comment": comment or None},
+                commit=False,
+            )
+        except Exception:
+            pass
+        session.commit()
+    except HTTPException:
+        session.rollback()
+        raise
+    session.refresh(r)
+    return _request_out(session, r, current_user)
+
+
+@router.post("/{request_id}/take-over")
+def take_over_request(
+    request_id: int,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """„Przejmij" — przełożony (kierownik komórki wyżej / dyrektor jednostki)
+    przejmuje wniosek czekający u kierownika komórki. Od tej chwili krok
+    kierowniczy wykonuje wyłącznie on; kierownik komórki dostaje 403."""
+    from services.workflow import can_take_over
+    from services.audit import record_event
+
+    r = session.get(AccessRequest, request_id)
+    if not r:
+        raise HTTPException(404, "Wniosek nie istnieje")
+    _check_access(current_user, r, session)
+
+    _inst, node = _active_node(session, request_id)
+    dept = session.get(Department, r.department_id) if r.department_id else None
+    ok, code, reason = can_take_over(session, r, current_user, node.get("type"), dept)
+    if not ok:
+        raise HTTPException(code, reason)
+
+    taker_name = current_user.full_name or current_user.username
+    r.taken_over_by_id = current_user.id
+    r.taken_over_by_name = taker_name
+    r.taken_over_at = datetime.utcnow()
+    session.add(r)
+    try:
+        record_event(
+            session, action="request.taken_over",
+            user_id=current_user.id, username=current_user.username,
+            target_type="access_request", target_id=r.id,
+            details={"department_id": r.department_id,
+                     "node_type": node.get("type"),
+                     "taken_over_by_name": taker_name},
+            commit=False,
+        )
+    except Exception:
+        pass
+
+    # Poinformuj kierownika komórki (i zastępców), że wniosek przejął przełożony.
+    try:
+        from services.after_commit import defer
+        from services.email_alerts import notify_request_taken_over
+        from models import DepartmentDeputy
+        targets = [dept.manager_user_id] if dept and dept.manager_user_id else []
+        if dept:
+            targets += [int(x) for x in session.exec(
+                select(DepartmentDeputy.user_id)
+                .where(DepartmentDeputy.department_id == dept.id)).all()]
+        sent: set[str] = set()
+        for uid in targets:
+            u = session.get(User, uid)
+            if not u or not u.is_active or not u.email or u.id == current_user.id \
+                    or u.email in sent:
+                continue
+            sent.add(u.email)
+            defer(session, notify_request_taken_over,
+                  to_address=u.email, request_id=r.id, worker_name=r.worker_name,
+                  dept_name=dept.name if dept else "", taker_name=taker_name,
+                  from_name=taker_name, from_email=current_user.email)
+    except Exception as exc:
+        _log.warning("Powiadomienie o przejęciu wniosku nie zostało zlecone: %s", exc)
+
+    session.commit()
+    session.refresh(r)
+    return _request_out(session, r, current_user)
 
 
 class ItemDenyIn(BaseModel):

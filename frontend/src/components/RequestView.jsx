@@ -41,6 +41,8 @@ const ACTION_VERB = {
   approve: 'zatwierdził(a)',
   execute: 'zrealizował(a)',
   reject:  'odrzucił(a)',
+  draft:     'zapisał(a) wersję roboczą',
+  take_over: 'przejął(-ęła) wniosek',
 }
 
 // Kolory odznaki rodzaju — tokeny motywu (działają w trybie ciemnym).

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import Structure from './Structure'
-import { Users, RefreshCw, FilePlus, Search, ListChecks, Send, ChevronDown, ChevronRight } from 'lucide-react'
+import { Users, RefreshCw, FilePlus, Search, ListChecks, Send, Save, ChevronDown, ChevronRight } from 'lucide-react'
 import {
   listMyWorkers, listSystems, listPermissions, createRequest, listRequestTypes, errorMessage,
 } from '../api'
@@ -452,6 +452,13 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
     if (!(await confirmAdminRights(admins))) { setErr(ADMIN_CONFIRM_ABORTED); setReviewOpen(false); return }
 
     setBusy(true); setErr(null)
+    await sendRequest(selectionItems())
+  }
+
+  // Pozycje wniosku ze stanu docelowego: zaznaczone-nowe → nadanie,
+  // odznaczone-posiadane → odebranie, posiadane ze zmienionym zakresem →
+  // ponowne nadanie z nowym zakresem.
+  function selectionItems() {
     const mk = (k, kind) => {
       const [sid, pid] = k.split(':').map(Number)
       const item = { system_id: sid, permission_id: pid, kind }
@@ -461,21 +468,16 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
       }
       return item
     }
-    // Stan docelowy: zaznaczone-nowe → nadanie, odznaczone-posiadane → odebranie,
-    // posiadane ze zmienionym zakresem → ponowne nadanie z nowym zakresem.
-    const items = [
+    return [
       ...toGrant.map(k => mk(k, 'grant')),
       ...scopeChanged.map(k => mk(k, 'grant')),
       ...toRevoke.map(k => mk(k, 'revoke')),
     ]
-    await sendRequest(items)
   }
 
-  // Wyślij wniosek; `declaration` dokładane po zebraniu w modalu. W 1-stopniu
-  // auto-select ląduje wprost na IT — backend zażąda oświadczenia (428), wtedy
-  // pokazujemy modal i ponawiamy z podpisem.
-  async function sendRequest(items, declaration = null) {
-    const body = {
+  // Wspólna treść zgłoszenia (wysłanie i wersja robocza).
+  function requestBody(items) {
+    return {
       kind:            'change',
       worker_name:     w.full_name || w.username,
       worker_email:    w.email || null,
@@ -486,6 +488,28 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
       items,
       request_type_id: requestTypeId,
     }
+  }
+
+  // „Zapisz roboczy" — zapis bez wysyłania: bez podsumowania i bez oświadczenia
+  // (to zbierane jest dopiero przy wysłaniu). Wniosek czeka w „Do obsługi”.
+  async function saveDraft() {
+    if (!requestTypeId) { setErr(NO_TYPE_MSG); return }
+    setBusy(true); setErr(null)
+    try {
+      const res = await createRequest({ ...requestBody(selectionItems()), draft: true })
+      toast(`Zapisano wersję roboczą wniosku #${res?.data?.id ?? ''}.`)
+      onDone()
+    } catch (ex) {
+      setErr(errorMessage(ex, 'Nie udało się zapisać wersji roboczej'))
+      setBusy(false)
+    }
+  }
+
+  // Wyślij wniosek; `declaration` dokładane po zebraniu w modalu. W 1-stopniu
+  // auto-select ląduje wprost na IT — backend zażąda oświadczenia (428), wtedy
+  // pokazujemy modal i ponawiamy z podpisem.
+  async function sendRequest(items, declaration = null) {
+    const body = requestBody(items)
     if (declaration) body.declaration = declaration
     try {
       const res = await createRequest(body)
@@ -517,6 +541,9 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
              skippedUnavailable: res.skippedUnavailable, skippedRevoke: res.skippedRevoke }
   }
 
+  // Dokąd trafi wniosek po wysłaniu — ta sama etykieta na przycisku i w podsumowaniu.
+  const sendLabel = w.requires_higher_approval ? 'Wyślij do akceptacji' : 'Wyślij do realizacji'
+
   const _steps = buildWorkflowSteps({
     sent: true, nodeType: 'select_permissions',
     requiresHigher: !!w.requires_higher_approval, kind: 'grant',
@@ -541,9 +568,13 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
         {' · '}<strong style={{ color: 'var(--color-error-text)' }}>−{toRevoke.length}</strong> odebrania</>}
       footerActions={<>
         <button className="btn btn--ghost" onClick={guardedClose} disabled={busy}>Anuluj</button>
+        <button className="btn btn--ghost" onClick={saveDraft} disabled={busy || loading || !requestTypeId}
+                title={!loading && !requestTypeId ? NO_TYPE_MSG : 'Zapisz bez wysyłania — wrócisz do wniosku później'}>
+          <Save size={13} /> Zapisz roboczy
+        </button>
         <button className="btn btn--success" onClick={submit} disabled={busy || loading || noChange || !requestTypeId}
                 title={!loading && !requestTypeId ? NO_TYPE_MSG : undefined}>
-          <Send size={13} /> Sprawdź i wyślij
+          <Send size={13} /> {sendLabel}
         </button>
       </>}>
           <Section n={1} title="Pracownik">
@@ -779,7 +810,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
         target={w.requires_higher_approval
           ? 'Po wysłaniu wniosek trafi do akceptacji kierownika nadrzędnego, potem do IT.'
           : 'Po wysłaniu wniosek trafi do realizacji przez IT.'}
-        confirmLabel="Wyślij wniosek"
+        confirmLabel={sendLabel}
         busy={busy}
         onBack={() => setReviewOpen(false)}
         onConfirm={confirmFromReview}

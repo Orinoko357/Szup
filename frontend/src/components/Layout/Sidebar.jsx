@@ -166,7 +166,7 @@ export default function Sidebar() {
         })}
       </nav>
 
-      <div className="sidebar-footer">v3.3 · NIS2/KSC</div>
+      <div className="sidebar-footer">v3.4 · NIS2/KSC</div>
     </aside>
     </>
   )

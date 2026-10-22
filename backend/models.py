@@ -367,6 +367,16 @@ class AccessRequest(SQLModel, table=True):
     rejected_at: Optional[datetime] = None
     selected_at: Optional[datetime] = None
 
+    # Wersja robocza kierownika komórki — chwila ostatniego „Zapisz roboczy"
+    # na etapie kierownika (wybór / akceptacja). NULL = brak zapisanej wersji.
+    draft_saved_at: Optional[datetime] = None
+    # Przejęcie wniosku przez przełożonego (kierownik komórki wyżej / dyrektor
+    # jednostki). Od tej chwili krok kierowniczy wykonuje wyłącznie przejmujący;
+    # po przejściu etapu pola zostają jako ślad historii.
+    taken_over_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    taken_over_by_name: Optional[str] = None   # snapshot na wypadek usunięcia konta
+    taken_over_at: Optional[datetime] = None
+
 
 class RequestItem(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

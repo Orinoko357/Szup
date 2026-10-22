@@ -373,6 +373,136 @@ def grants_permissions(session: Session, request: AccessRequest) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Etap kierownika komórki — wersja robocza, widoczność i przejęcie
+# ---------------------------------------------------------------------------
+
+# Węzły „etapu kierownika komórki" — kierownik przygotowuje wniosek (wybór
+# uprawnień / akceptacja) i może go zapisywać jako wersję roboczą.
+MANAGER_STAGE_TYPES = ("select_permissions", "manager_approve")
+
+# Komunikat 403 dla osób, przed którymi wniosek na etapie kierownika jest ukryty.
+DRAFT_HIDDEN_MSG = "Wniosek jest jeszcze u kierownika komórki (roboczy)."
+
+
+def dept_has_own_manager(session: Session, dept: Optional[Department]) -> bool:
+    """Czy komórka ma WŁASNEGO, aktywnego kierownika (i nie jest samodzielnym
+    stanowiskiem). Tylko wtedy istnieje etap roboczy kierownika komórki —
+    w pozostałych komórkach krok wykonuje od razu kierownik wyżej."""
+    if dept is None or getattr(dept, "kind", None) == "standalone" or not dept.manager_user_id:
+        return False
+    mgr = session.get(User, dept.manager_user_id)
+    return bool(mgr and mgr.is_active)
+
+
+def is_manager_stage(session: Session, node_type: Optional[str],
+                     dept: Optional[Department]) -> bool:
+    """Wniosek stoi na etapie kierownika komórki, która ma własnego kierownika
+    (wybór / akceptacja) — wtedy obowiązują reguły wersji roboczej i przejęcia."""
+    return node_type in MANAGER_STAGE_TYPES and dept_has_own_manager(session, dept)
+
+
+def current_node_of(session: Session, request: AccessRequest) -> Optional[dict]:
+    """Bieżący węzeł AKTYWNEGO obiegu wniosku (albo None).
+
+    Korzysta z danych wczytanych hurtem przez router (`_wf_rows`,
+    `_wf_inst_by_req` w `session.info`), żeby lista wniosków nie odpytywała bazy
+    osobno dla każdego wiersza."""
+    cached = session.info.get("_wf_rows", {})
+    if request.id in cached:
+        return cached[request.id][1]
+    preloaded = session.info.get("_wf_inst_by_req", {})
+    if request.id in preloaded:
+        inst = preloaded[request.id]
+    else:
+        inst = session.exec(
+            select(WorkflowInstance).where(WorkflowInstance.request_id == request.id)
+        ).first()
+    if not inst or inst.status != WorkflowInstanceStatus.active or not inst.current_node_id:
+        return None
+    try:
+        return find_node(json.loads(inst.template_snapshot), inst.current_node_id)
+    except Exception:
+        return None
+
+
+_UNSET = object()
+
+
+def manager_stage_visibility(session: Session, request: AccessRequest, user: User,
+                             node_type: Any = _UNSET,
+                             dept: Any = _UNSET) -> Optional[bool]:
+    """Widoczność wniosku na etapie kierownika komórki.
+
+    Zwraca None, gdy wniosek NIE jest na takim etapie (obowiązują zwykłe reguły
+    dostępu), True — gdy jest i `user` może go zobaczyć, False — gdy jest
+    i wniosek ma być przed `user` ukryty (np. IT, administrator, inni kierownicy).
+
+    Widzą go: superadmin, twórca wniosku (np. kadry), kierownik komórki i jego
+    zastępcy, osoba, która wniosek przejęła, oraz przełożeni (kierownik / zastępca
+    komórki wyżej w strukturze, dyrektor jednostki) — ci ostatni tylko do odczytu,
+    dopóki wniosku nie przejmą.
+    """
+    from services.permissions import is_department_manager_or_deputy, is_superior_for
+
+    if dept is _UNSET:
+        dept = session.get(Department, request.department_id) if request.department_id else None
+    if node_type is _UNSET:
+        node = current_node_of(session, request)
+        node_type = node.get("type") if node else None
+    if not is_manager_stage(session, node_type, dept):
+        return None
+    if has_role(user, "superadmin"):
+        return True
+    if request.created_by_id and request.created_by_id == user.id:
+        return True
+    if request.taken_over_by_id and request.taken_over_by_id == user.id:
+        return True
+    if is_department_manager_or_deputy(session, user, dept):
+        return True
+    return bool(is_superior_for(session, user, dept, include_self=False))
+
+
+def can_view_request(session: Session, request: AccessRequest, user: User,
+                     node_type: Any = _UNSET, dept: Any = _UNSET) -> bool:
+    """False tylko wtedy, gdy wniosek jest na etapie kierownika komórki i ma być
+    przed `user` ukryty. Pozostałe reguły dostępu sprawdza router."""
+    return manager_stage_visibility(session, request, user, node_type, dept) is not False
+
+
+def can_take_over(session: Session, request: AccessRequest, user: User,
+                  node_type: Any = _UNSET, dept: Any = _UNSET) -> tuple[bool, int, str]:
+    """Czy `user` może przejąć wniosek (przycisk „Przejmij").
+
+    Zwraca (dozwolone, kod HTTP odmowy, powód). Przejąć może przełożony
+    (kierownik / zastępca komórki wyżej, dyrektor jednostki) — nie kierownik
+    ani zastępca samej komórki — i tylko na etapie kierownika komórki, która
+    ma własnego kierownika. Wniosek przejęty już przez kogoś → 409.
+    """
+    from services.permissions import is_department_manager_or_deputy, is_superior_for
+
+    if dept is _UNSET:
+        dept = session.get(Department, request.department_id) if request.department_id else None
+    if node_type is _UNSET:
+        node = current_node_of(session, request)
+        node_type = node.get("type") if node else None
+    if not is_manager_stage(session, node_type, dept):
+        return False, 409, ("Wniosek można przejąć tylko wtedy, gdy czeka na kierownika "
+                            "komórki (wybór lub akceptacja uprawnień).")
+    if request.taken_over_by_id:
+        if request.taken_over_by_id == user.id:
+            return False, 409, "Ten wniosek został już przez Ciebie przejęty."
+        return False, 409, (f"Wniosek przejął(-ęła) już "
+                            f"{request.taken_over_by_name or 'inny przełożony'}.")
+    if is_department_manager_or_deputy(session, user, dept):
+        return False, 403, ("Kierownik komórki i jego zastępcy obsługują wniosek "
+                            "bezpośrednio — przejęcie nie jest potrzebne.")
+    if not is_superior_for(session, user, dept, include_self=False):
+        return False, 403, ("Wniosek może przejąć tylko przełożony kierownika komórki "
+                            "(kierownik komórki wyżej w strukturze lub dyrektor jednostki).")
+    return True, 0, ""
+
+
+# ---------------------------------------------------------------------------
 # Uprawnienia — kto może wykonać akcję na węźle danego typu
 # ---------------------------------------------------------------------------
 
@@ -399,11 +529,27 @@ def can_act(node: dict, request: AccessRequest, dept: Optional[Department],
 
     ntype = node["type"]
 
-    if ntype in ("manager_approve", "select_permissions"):
+    if ntype in MANAGER_STAGE_TYPES:
+        if dept_has_own_manager(session, dept):
+            # Komórka z własnym kierownikiem — etap roboczy kierownika komórki.
+            # Po przejęciu krok wykonuje WYŁĄCZNIE przejmujący przełożony.
+            if request.taken_over_by_id:
+                if request.taken_over_by_id == user.id:
+                    return True, ""
+                who = request.taken_over_by_name or "przełożony"
+                return False, f"Wniosek przejął(-ęła) {who} — krok wykona przełożony."
+            if is_department_manager_or_deputy(session, user, dept):
+                return True, ""
+            # Przełożony widzi wniosek tylko do odczytu — działać może dopiero
+            # po jego przejęciu („Przejmij").
+            if is_superior_for(session, user, dept, include_self=False):
+                return False, ("Wniosek jest u kierownika komórki. Aby wykonać ten krok, "
+                               "najpierw przejmij wniosek („Przejmij”).")
+            return False, "Tylko kierownik komórki lub jego zastępca może wykonać ten krok."
         # Samodzielne stanowisko / komórka bez kierownika → krok wykonuje
         # najbliższy kierownik wyżej w strukturze.
         resp = dept
-        if dept and (getattr(dept, "kind", None) == "standalone" or not dept.manager_user_id):
+        if dept:
             resp = effective_manager_dept(session, dept) or dept
         if is_department_manager_or_deputy(session, user, resp):
             return True, ""
@@ -696,6 +842,11 @@ def waiting_for_label(session: Session, node: Optional[dict], request: AccessReq
         return None
     from models import Unit
     ntype = node.get("type")
+    # Wniosek przejęty przez przełożonego — krok kierowniczy wykona przejmujący.
+    if ntype in MANAGER_STAGE_TYPES and getattr(request, "taken_over_by_id", None):
+        who = request.taken_over_by_name or _person_name(session, request.taken_over_by_id)
+        if who:
+            return f"{who} (przełożony — przejął wniosek)"
     if ntype in ("manager_approve", "select_permissions", "higher_manager_approve"):
         higher = ntype == "higher_manager_approve"
         own = (session.get(Department, dept.parent_dept_id)

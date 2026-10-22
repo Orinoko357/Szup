@@ -6,6 +6,26 @@ Wersjonowanie: [Semantic Versioning](https://semver.org/lang/pl/).
 
 ## [Unreleased]
 
+## [3.4.0] — 2026-10-22
+
+Wnioski robocze i przejmowanie przez przełożonego.
+
+### Dodano
+- Krok wyboru uprawnień i nowy wniosek kierownika: przyciski „Anuluj”,
+  „Zapisz roboczy”, „Wyślij do akceptacji” / „Wyślij do realizacji”.
+  Wybór trafia do bazy dopiero przy zapisie roboczym albo wysłaniu.
+- Wniosek na etapie kierownika komórki (z własnym kierownikiem) jest widoczny
+  tylko dla tego kierownika i zastępców, składającego i superadmina — IT,
+  administrator i inni zobaczą go dopiero po wysłaniu.
+- Przełożony (kierownik wyższego rzędu, dyrektor jednostki) widzi takie wnioski
+  w sekcji „W przygotowaniu w podległych komórkach”, może je podejrzeć
+  i kliknąć „Przejmij” — dopiero wtedy obsługa należy do niego; kierownik
+  komórki dostaje e-mail i przy próbie działania komunikat o przejęciu.
+
+### Zmieniono
+- Przełożony nie wykonuje już kroku kierownika w komórce z własnym kierownikiem
+  bez przejęcia wniosku. Komórki bez kierownika i samodzielne stanowiska — bez zmian.
+
 ## [3.3.0] — 2026-10-22
 
 Poprawki po audycie 3.2: bezpieczeństwo logowania, logika obiegu, dostępność

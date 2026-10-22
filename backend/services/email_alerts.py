@@ -232,3 +232,20 @@ def notify_workflow_stage(to_address: str, request_id: int, worker_name: str,
         "action_hint": action_hint,
         "request_url": request_url(request_id, "it" if node_type == "it_execute" else "handle"),
     }, from_name=from_name, from_email=from_email)
+
+
+def notify_request_taken_over(to_address: str, request_id: int, worker_name: str,
+                              dept_name: str, taker_name: str,
+                              from_name: str | None = None,
+                              from_email: str | None = None) -> None:
+    """Przełożony przejął wniosek czekający u kierownika komórki — informacja
+    dla kierownika (i zastępców), że krok kierowniczy wykona przejmujący."""
+    where = f" ({dept_name})" if dept_name else ""
+    _send(to_address,
+          f"Wniosek nr {request_id} przejęty przez przełożonego",
+          f"{taker_name} przejął(-ęła) wniosek nr {request_id} dotyczący "
+          f"pracownika {worker_name}{where}.\n\n"
+          f"Dalsze kroki na etapie kierownika komórki wykona przełożony — "
+          f"Ty możesz jedynie podejrzeć wniosek.\n\n"
+          f"Podgląd wniosku w SZUP: {request_url(request_id)}",
+          from_name=from_name, from_email=from_email)

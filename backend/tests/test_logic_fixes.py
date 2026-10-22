@@ -150,7 +150,13 @@ def test_superior_can_do_both_manager_steps_and_own_manager_cannot_higher(api):
     rid = _new_request(api, w)
     kier, kierP = api.login("kier"), api.login("kierP")
 
-    # Przełożony (kierownik komórki nadrzędnej) wykonuje krok wyboru podległej komórki.
+    # Przełożony (kierownik komórki nadrzędnej) bez przejęcia nie działa na
+    # etapie kierownika komórki — najpierw „Przejmij”, potem krok wyboru.
+    r = api.post(f"/requests/{rid}/workflow/action", token=kierP, json={
+        "action": "select",
+        "items": [{"system_id": w["sid"], "permission_id": w["pid"]}]})
+    assert r.status_code == 403, r.text
+    assert api.post(f"/requests/{rid}/take-over", token=kierP).status_code == 200
     r = api.post(f"/requests/{rid}/workflow/action", token=kierP, json={
         "action": "select",
         "items": [{"system_id": w["sid"], "permission_id": w["pid"]}]})
@@ -193,6 +199,8 @@ def test_unit_director_can_do_every_step_for_subordinate_departments(api):
                      json={"manager_user_id": did}).status_code == 200
     rid = _new_request(api, w)
     dyr = api.login("dyr")
+    # Komórka ma własnego kierownika → dyrektor najpierw przejmuje wniosek.
+    assert api.post(f"/requests/{rid}/take-over", token=dyr).status_code == 200
     r = api.post(f"/requests/{rid}/workflow/action", token=dyr, json={
         "action": "select", "items": [{"system_id": w["sid"], "permission_id": w["pid"]}]})
     assert r.status_code == 200, r.text
@@ -232,10 +240,19 @@ def test_get_request_and_unscoped_list_expose_node_and_can_act(api):
     kier, it = api.login("kier"), api.login("it")
     det = api.get(f"/requests/{rid}", token=kier).json()
     assert det["current_node_type"] == "select_permissions" and det["can_act"] is True
+    row = next(x for x in api.get("/requests/", token=kier).json() if x["id"] == rid)
+    assert row["current_node_type"] == "select_permissions" and row["can_act"] is True
+    # Na etapie kierownika komórki wniosek jest ukryty przed IT.
+    assert api.get(f"/requests/{rid}", token=it).status_code == 403
+    assert all(x["id"] != rid for x in api.get("/requests/", token=it).json())
+    # Po wysłaniu do realizacji IT widzi go z węzłem i może działać.
+    assert api.post(f"/requests/{rid}/workflow/action", token=kier, json={
+        "action": "select",
+        "items": [{"system_id": w["sid"], "permission_id": w["pid"]}]}).status_code == 200
     det_it = api.get(f"/requests/{rid}", token=it).json()
-    assert det_it["current_node_type"] == "select_permissions" and det_it["can_act"] is False
+    assert det_it["current_node_type"] == "it_execute" and det_it["can_act"] is True
     row = next(x for x in api.get("/requests/", token=it).json() if x["id"] == rid)
-    assert row["current_node_type"] == "select_permissions" and row["can_act"] is False
+    assert row["current_node_type"] == "it_execute" and row["can_act"] is True
 
 
 # --- powiadomienia ------------------------------------------------------------

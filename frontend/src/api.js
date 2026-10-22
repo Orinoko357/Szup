@@ -202,6 +202,10 @@ export const deletePermission  = (permId)        => api.delete(`/systems/permiss
 export const listRequests      = (params)        => api.get('/requests/', { params })
 export const getRequest        = (id)            => api.get(`/requests/${id}`)
 export const createRequest     = (data)          => api.post('/requests/', data)
+// Wersja robocza wyboru kierownika (bez wysyłania) — pozycje jak w akcji „select”.
+export const saveRequestDraft  = (id, data)      => api.post(`/requests/${id}/draft`, data)
+// Przejęcie wniosku z podległej komórki przez przełożonego (bez treści).
+export const takeOverRequest   = (id)            => api.post(`/requests/${id}/take-over`)
 export const linkRequestWorker = (id, ad_username) => api.post(`/requests/${id}/link-worker`, { ad_username })
 
 // --- Pulpit obiegu wniosków ---

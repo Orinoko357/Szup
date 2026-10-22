@@ -356,6 +356,11 @@ def _run_migrations():
         ("workflowinstance", "pending_ezd_confirmed",  "BOOLEAN DEFAULT 0"),
         ("workflowinstance", "pending_pdf_by_user_id", "INTEGER"),
         ("workflowinstance", "pending_ezd_by_user_id", "INTEGER"),
+        # Wersje robocze kierownika i przejęcie wniosku przez przełożonego
+        ("accessrequest",    "draft_saved_at",      "DATETIME DEFAULT NULL"),
+        ("accessrequest",    "taken_over_by_id",    "INTEGER DEFAULT NULL"),
+        ("accessrequest",    "taken_over_by_name",  "VARCHAR DEFAULT NULL"),
+        ("accessrequest",    "taken_over_at",       "DATETIME DEFAULT NULL"),
     ]
     from sqlalchemy import text
     with engine.connect() as conn:
