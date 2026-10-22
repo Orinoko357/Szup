@@ -7,4 +7,9 @@ export function getUserRoles() {
   } catch { return [] }
 }
 
+/** Dane zalogowanego użytkownika z sesji (username, full_name, roles…). */
+export function getCurrentUser() {
+  try { return JSON.parse(localStorage.getItem('szup_user') || '{}') || {} } catch { return {} }
+}
+
 export const hasAnyRole = (roles, wanted) => wanted.some(r => roles.includes(r))

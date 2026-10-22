@@ -29,6 +29,28 @@ api.interceptors.response.use(
 
 export default api
 
+/** Czytelny komunikat błędu z odpowiedzi API. Obsługuje też 422 z Pydantic
+ *  (lista błędów walidacji), które wcześniej pokazywało „[object Object]”. */
+export function errorMessage(ex, fallback = 'Wystąpił błąd') {
+  const det = ex?.response?.data?.detail
+  if (typeof det === 'string' && det.trim()) return det
+  if (Array.isArray(det) && det.length) {
+    return det.map(d => {
+      const field = Array.isArray(d.loc) ? d.loc.filter(x => x !== 'body').join('.') : ''
+      return field ? `${field}: ${d.msg}` : d.msg
+    }).join('; ')
+  }
+  if (det && typeof det === 'object' && det.message) return det.message
+  if (ex?.response?.status === 403) return 'Brak uprawnień do tej operacji.'
+  if (!ex?.response && ex?.message) return 'Brak połączenia z serwerem.'
+  return fallback
+}
+
+// Wspólny budowniczy query-stringu (pomija puste wartości).
+const toQs = (params) => new URLSearchParams(
+  Object.entries(params || {}).filter(([, v]) => v !== '' && v != null)
+).toString()
+
 // --- Auth ---
 export const getAuthStatus    = ()       => api.get('/auth/status')
 export const setupAdmin       = (data)   => api.post('/auth/setup', data)
@@ -94,7 +116,6 @@ export const listUnits         = ()              => api.get('/units/')
 export const createUnit        = (data)          => api.post('/units/', data)
 export const updateUnit        = (id, data)      => api.patch(`/units/${id}`, data)
 export const deleteUnit        = (id)            => api.delete(`/units/${id}`)
-export const listDepartments   = (unitId)        => api.get(`/units/${unitId}/departments`)
 export const listAllDepartments = ()             => api.get('/units/departments/all')
 export const listActiveDepts   = (unitId)        => api.get('/units/departments/active', { params: unitId ? { unit_id: unitId } : {} })
 export const listActiveUnits   = ()              => api.get('/units/active')
@@ -117,7 +138,6 @@ export const ldapImportUsers   = (usernames, search_base) => api.post('/users/ld
 // --- Systemy IT / Rejestr oprogramowania ---
 // params: { unit_id?: number, active_only?: boolean }
 export const listSystems       = (params)        => api.get('/systems/', { params })
-export const listActiveSystems = (params)        => api.get('/systems/active', { params })
 export const createSystem      = (data)          => api.post('/systems/', data)
 export const updateSystem      = (id, data)      => api.patch(`/systems/${id}`, data)
 export const deleteSystem      = (id)            => api.delete(`/systems/${id}`)
@@ -162,7 +182,6 @@ export const updateVendor      = (id, data)       => api.patch(`/vendors/${id}`,
 export const deleteVendor      = (id)             => api.delete(`/vendors/${id}`)
 export const listContracts     = (vendorId)       => api.get(`/vendors/${vendorId}/contracts`)
 export const addContract       = (vendorId, data) => api.post(`/vendors/${vendorId}/contracts`, data)
-export const updateContract    = (contractId, data) => api.patch(`/vendors/contracts/${contractId}`, data)
 export const deleteContract    = (contractId)     => api.delete(`/vendors/contracts/${contractId}`)
 // Alerty o umowach na pulpit IT (endpoint wymaga roli IT/admin)
 export const vendorContractAlerts = ()            => api.get('/vendors/contract-alerts')
@@ -186,7 +205,6 @@ export const getWorkflowTemplate    = (id)     => api.get(`/workflow-templates/$
 export const createWorkflowTemplate = (data)   => api.post('/workflow-templates/', data)
 export const updateWorkflowTemplate = (id, d)  => api.patch(`/workflow-templates/${id}`, d)
 export const deleteWorkflowTemplate = (id)     => api.delete(`/workflow-templates/${id}`)
-export const listWorkflowNodeTypes  = ()       => api.get('/workflow-templates/node-types')
 
 export const listRequestTypes       = (params) => api.get('/request-types/', { params })
 export const createRequestType      = (data)   => api.post('/request-types/', data)
@@ -204,9 +222,7 @@ export const fulfillRequestItem     = (rid, iid, d) => api.post(`/requests/${rid
 // --- Rejestr nadanych uprawnień + oświadczenia ---
 export const listGrantedRegistry = (params)        => api.get('/registry/granted', { params })
 export const grantedRegistryCsvUrl = (params) => {
-  const qs = new URLSearchParams(
-    Object.entries(params || {}).filter(([, v]) => v !== '' && v != null)
-  ).toString()
+  const qs = toQs(params)
   return `/api/registry/granted.csv${qs ? `?${qs}` : ''}`
 }
 export const getDeclaration      = (code)          => api.get(`/registry/declarations/${encodeURIComponent(code)}`)
@@ -217,9 +233,7 @@ export const getDeclarationText  = ()              => api.get('/settings/declara
 export const listSnapshots       = ()              => api.get('/snapshots')
 export const getSnapshot         = (date, params)  => api.get(`/snapshots/${date}`, { params })
 export const snapshotCsvUrl      = (date, params) => {
-  const qs = new URLSearchParams(
-    Object.entries(params || {}).filter(([, v]) => v !== '' && v != null)
-  ).toString()
+  const qs = toQs(params)
   return `/api/snapshots/${date}.csv${qs ? `?${qs}` : ''}`
 }
 export const runSnapshot         = (force)         => api.post(`/snapshots/run${force ? '?force=true' : ''}`)

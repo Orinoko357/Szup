@@ -60,3 +60,10 @@ export function fmtDateTime(ts) {
   const d = serverTs(ts)
   return d ? d.toLocaleString('pl-PL', OPT_DATETIME) : '—'
 }
+
+/** dd.mm.rrrr, hh:mm (bez sekund) — dla historii i pozycji wniosku. */
+export function fmtDateTimeShort(ts) {
+  const d = serverTs(ts)
+  return d ? d.toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric',
+                                          hour: '2-digit', minute: '2-digit' }) : ''
+}

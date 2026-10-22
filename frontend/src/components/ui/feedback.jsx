@@ -40,6 +40,13 @@ export function promptDialog({ title = 'Podaj wartość', message = '', label = 
   })
 }
 
+/** Wspólne potwierdzenie (zastępuje kopie `ask()` w stronach). Dla operacji
+ *  niszczących/ryzykownych przekaż danger:true i konkretny czasownik
+ *  (np. confirmLabel: 'Usuń konto', 'Włącz tryb testowy'). */
+export function ask(message, { title = 'Potwierdź', confirmLabel = 'Potwierdź', danger = false } = {}) {
+  return confirmDialog({ title, message, confirmLabel, danger })
+}
+
 const TONE = {
   success: { icon: CheckCircle,   fg: 'var(--color-success)', bg: 'var(--color-success-bg)' },
   error:   { icon: AlertTriangle, fg: 'var(--color-error)',   bg: 'var(--color-error-bg)' },

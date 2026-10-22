@@ -603,3 +603,29 @@ button, input, select, textarea, optgroup {
 .gap-2 { gap: 8px; }
 .gap-3 { gap: 12px; }
 .w-full { width: 100%; }
+
+/* ── v3.2: wspólne komponenty UI ─────────────────────────────────────── */
+.segmented { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 8px;
+             background: var(--color-neutral-bg); }
+.segmented__btn { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px;
+                  border: 0; border-radius: 6px; background: transparent; cursor: pointer;
+                  font: inherit; font-size: 13px; font-weight: 600; color: var(--color-text-muted); }
+.segmented__btn:hover { color: var(--color-heading); }
+.segmented__btn.is-active { background: var(--color-card); color: var(--color-heading); font-weight: 700;
+                            box-shadow: 0 1px 3px rgba(13,20,36,.15); }
+.segmented__count { padding: 0 6px; border-radius: 9px; font-size: 11px; font-weight: 800;
+                    background: var(--color-border); color: var(--color-text); }
+.ui-modal { width: 100%; max-height: calc(100vh - 32px); display: flex; flex-direction: column;
+            background: var(--color-card); color: var(--color-text); border: 1px solid var(--color-border);
+            border-radius: 10px; box-shadow: 0 16px 40px rgba(13,20,36,.3); outline: none; }
+.ui-modal__header { display: flex; align-items: center; gap: 12px; padding: 16px 20px;
+                    border-bottom: 1px solid var(--color-border); }
+.ui-modal__title { flex: 1; margin: 0; font-size: 18px; font-weight: 800; color: var(--color-heading); }
+.ui-modal__close { width: 44px; height: 44px; display: grid; place-items: center; border: 0; border-radius: 8px;
+                   background: transparent; color: var(--color-text-muted); cursor: pointer; }
+.ui-modal__close:hover { background: var(--color-neutral-bg); color: var(--color-text); }
+.ui-modal__body { padding: 20px; overflow: auto; flex: 1; }
+.ui-modal__footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 14px 20px;
+                    border-top: 1px solid var(--color-border); }
+.form-hint { font-size: 12px; color: var(--color-text-muted); margin-top: 4px; }
+h1.page-header__title { margin: 0; }

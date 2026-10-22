@@ -4,7 +4,7 @@ import {
 } from 'lucide-react'
 import {
   listVendors, createVendor, updateVendor, deleteVendor,
-  listContracts, addContract, updateContract, deleteContract,
+  listContracts, addContract, deleteContract,
 } from '../api'
 import { fmtDate } from '../serverTime'
 import { toast, confirmDialog } from '../components/ui/feedback'

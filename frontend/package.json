@@ -13,8 +13,7 @@
     "lucide-react": "^0.460.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-router-dom": "^7.0.2",
-    "reactflow": "^11.11.4"
+    "react-router-dom": "^7.0.2"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",

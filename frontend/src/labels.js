@@ -1,3 +1,5 @@
+import { serverNow } from './serverTime'
+
 // v3.1 — JEDEN słownik etykiet dla całej aplikacji (statusy, kroki, rodzaje,
 // istotność, role). Wcześniej ten sam status miał różne nazwy na różnych
 // ekranach („Oczekuje na IT” / „Realizacja IT” / „Do realizacji”).
@@ -31,13 +33,26 @@ export const NAME_CHANGE_STATUS = {
 
 export const SEVERITY_LABEL = { low: 'niska', medium: 'średnia', high: 'wysoka', critical: 'krytyczna' }
 
-export const ROLE_LABEL = {
-  superadmin: 'superadmin', admin: 'administrator', it_staff: 'IT',
-  manager: 'kierownik', hr: 'kadry', viewer: 'przeglądający',
+export const ROLE_META = {
+  superadmin: { label: 'superadmin',    badge: 'badge--error' },
+  admin:      { label: 'administrator', badge: 'badge--warning' },
+  it_staff:   { label: 'IT',            badge: 'badge--success' },
+  manager:    { label: 'kierownik',     badge: 'badge--info' },
+  hr:         { label: 'kadry',         badge: 'badge--info' },
+  viewer:     { label: 'przeglądający', badge: 'badge--neutral' },
+}
+export const ROLE_LABEL = Object.fromEntries(Object.entries(ROLE_META).map(([k, v]) => [k, v.label]))
+
+// Kolor odznaki kroku obiegu (pulpit, listy).
+export const NODE_TONE = {
+  select_permissions:     'badge--warning',
+  manager_approve:        'badge--warning',
+  higher_manager_approve: 'badge--warning',
+  it_execute:             'badge--info',
 }
 
 /** „X dni” od daty (Date) — do „czeka od”. */
-export function daysSince(date, now = new Date()) {
+export function daysSince(date, now = serverNow()) {
   if (!date) return null
   return Math.max(0, Math.floor((now - date) / 86400000))
 }
