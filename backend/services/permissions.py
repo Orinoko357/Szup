@@ -167,6 +167,54 @@ def unit_manager_dept_ids(session, user: "User") -> list[int]:
     return [int(x) for x in rows]
 
 
+def superior_dept_ids(session, user: "User") -> list[int]:
+    """Komórki, w których user jest PRZEŁOŻONYM — może w nich wykonać każdy
+    krok kierowniczy obiegu (wybór uprawnień, akceptacja, akceptacja wyższa):
+      - całe poddrzewo komórek, którymi kieruje (lub jest zastępcą),
+      - wszystkie komórki jednostek, których jest kierownikiem (dyrektor jednostki).
+    Pozwala przełożonemu dokończyć wniosek, który utknął u kierownika niżej.
+    """
+    from sqlmodel import select
+    from models import Department, DepartmentDeputy
+    roots = {d.id for d in session.exec(
+        select(Department).where(Department.manager_user_id == user.id)).all()}
+    roots.update(int(x) for x in session.exec(
+        select(DepartmentDeputy.department_id).where(DepartmentDeputy.user_id == user.id)).all())
+    out: set[int] = set(unit_manager_dept_ids(session, user))
+    if roots:
+        children: dict[int, list[int]] = {}
+        for d in session.exec(select(Department)).all():
+            if d.parent_dept_id is not None:
+                children.setdefault(d.parent_dept_id, []).append(d.id)
+        stack = list(roots)
+        while stack:
+            cur = stack.pop()
+            if cur in out:
+                continue
+            out.add(cur)
+            stack.extend(children.get(cur, []))
+    return sorted(out)
+
+
+def is_superior_for(session, user: "User", dept, *, include_self: bool = True) -> bool:
+    """True, jeśli user kieruje (lub jest zastępcą) `dept` albo dowolną komórką
+    NAD nią w strukturze, albo jest kierownikiem jednostki tej komórki.
+    include_self=False — liczymy tylko komórki wyżej (dla akceptacji wyższej)."""
+    if dept is None:
+        return False
+    from models import Department, Unit
+    seen: set[int] = set()
+    cur = dept if include_self else (
+        session.get(Department, dept.parent_dept_id) if dept.parent_dept_id else None)
+    while cur is not None and cur.id not in seen:
+        seen.add(cur.id)
+        if is_department_manager_or_deputy(session, user, cur):
+            return True
+        cur = session.get(Department, cur.parent_dept_id) if cur.parent_dept_id else None
+    unit = session.get(Unit, dept.unit_id) if getattr(dept, "unit_id", None) else None
+    return bool(unit and unit.manager_user_id == user.id)
+
+
 def users_with_role(session, role: str, *, active_only: bool = True) -> list["User"]:
     """Zwraca użytkowników posiadających daną rolę — filtrowanie przez has_role
     w Pythonie (parsowanie JSON), a nie kruchym `roles LIKE '%\"x\"%'`, które

@@ -391,7 +391,9 @@ def can_act(node: dict, request: AccessRequest, dept: Optional[Department],
     dla swojej komórki oraz `higher_manager_approve` gdy są zastępcą
     kierownika wydziału nadrzędnego.
     """
-    from services.permissions import is_department_manager_or_deputy, effective_manager_dept
+    from services.permissions import (
+        is_department_manager_or_deputy, effective_manager_dept, is_superior_for,
+    )
 
     if has_role(user, "superadmin"):
         return True, ""
@@ -406,7 +408,11 @@ def can_act(node: dict, request: AccessRequest, dept: Optional[Department],
             resp = effective_manager_dept(session, dept) or dept
         if is_department_manager_or_deputy(session, user, resp):
             return True, ""
-        return False, ("Tylko kierownik lub jego zastępca w tym wydziale może wykonać ten krok.")
+        # Przełożony (kierownik komórki wyżej / dyrektor jednostki) może wykonać
+        # każdy krok kierowniczy — np. dokończyć wniosek, który utknął niżej.
+        if is_superior_for(session, user, dept):
+            return True, ""
+        return False, ("Tylko kierownik, jego zastępca lub przełożony w strukturze może wykonać ten krok.")
 
     if ntype == "higher_manager_approve":
         parent = None
@@ -414,7 +420,10 @@ def can_act(node: dict, request: AccessRequest, dept: Optional[Department],
             parent = session.get(Department, dept.parent_dept_id)
         if is_department_manager_or_deputy(session, user, parent):
             return True, ""
-        return False, ("Tylko kierownik lub zastępca w wydziale nadrzędnym może wykonać ten krok.")
+        # Każdy przełożony NAD komórką (wyżej niż jej kierownik) oraz dyrektor jednostki.
+        if is_superior_for(session, user, dept, include_self=False):
+            return True, ""
+        return False, ("Tylko kierownik wydziału nadrzędnego, jego zastępca lub przełożony wyżej może wykonać ten krok.")
 
     if ntype == "it_execute":
         if has_role(user, "it_staff"):

@@ -24,7 +24,7 @@ from models import (
 from services.auth_service import get_current_user
 from services.permissions import (
     require_hr, require_it_staff,
-    is_admin, managed_dept_ids, hr_scoped_unit_ids, unit_manager_dept_ids,
+    is_admin, managed_dept_ids, hr_scoped_unit_ids, unit_manager_dept_ids, superior_dept_ids,
 )
 
 _log = logging.getLogger("szup.requests")
@@ -35,8 +35,13 @@ _log = logging.getLogger("szup.requests")
 # ---------------------------------------------------------------------------
 
 def _managed_dept_ids(session: Session, user: User) -> tuple[list[int], list[int]]:
-    """Cienki proxy do services.permissions.managed_dept_ids (historyczna nazwa)."""
-    return managed_dept_ids(session, user)
+    """Zakres wniosków kierownika: managed_dept_ids + komórki, w których jest
+    PRZEŁOŻONYM (poddrzewo swoich komórek i komórki jednostki, którą kieruje) —
+    przełożony widzi i może dokończyć każdy wniosek z podległych komórek.
+    Komórki „przełożonego” dokładamy do drugiej listy (escalated)."""
+    direct_ids, escalated_ids = managed_dept_ids(session, user)
+    extra = set(superior_dept_ids(session, user)) - set(direct_ids)
+    return direct_ids, sorted(set(escalated_ids) | extra)
 
 
 def _validate_items_scope(session: Session, unit_id: int, items) -> None:
@@ -642,12 +647,16 @@ def workflow_dashboard(
     pending: list[dict] = []
     seen_ids: set[int] = set()
 
-    # 1) Perspektywa kierownika — wnioski z komórek, którymi zarządza.
-    direct_ids, escalated_ids = managed_dept_ids(session, user)
+    # 1) Perspektywa kierownika — wnioski z komórek, którymi zarządza
+    #    (także jako przełożony / dyrektor jednostki).
+    direct_ids, escalated_ids = _managed_dept_ids(session, user)
     all_managed = set(direct_ids) | set(escalated_ids)
     if all_managed:
         for r in session.exec(
-            select(AccessRequest).where(AccessRequest.department_id.in_(all_managed))
+            select(AccessRequest)
+            .where(AccessRequest.department_id.in_(all_managed))
+            # tylko wnioski w toku — zakończone/odrzucone nie mają aktywnego kroku
+            .where(col(AccessRequest.status).notin_([RequestStatus.completed, RequestStatus.rejected]))
         ).all():
             e = _entry(r)
             if e:
@@ -692,7 +701,8 @@ def workflow_dashboard(
         #    2-stopniowe) — kierownik I stopnia nie akceptuje,
         #  - realizacja: tylko pracownik IT.
         "show_prepare": bool(all_managed),
-        "show_approve": bool(escalated_ids),
+        # + gdy w kolejce są akceptacje (np. osobny krok akceptacji kierownika).
+        "show_approve": bool(escalated_ids) or pending_approve > 0,
         "show_execute": has_role(user, "it_staff"),
     }
 
