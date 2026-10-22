@@ -28,7 +28,7 @@ const NODE_ACCENT = {
   select_permissions: 'var(--color-warning)',
   manager_approve: 'var(--color-info)',
   higher_manager_approve: 'var(--color-gold-dark)',
-  it_execute: 'var(--color-navy)',
+  it_execute: 'var(--color-selected)',
   end: 'var(--color-text-muted)',
 }
 
@@ -42,7 +42,7 @@ const STEP_CATALOG = [
   {
     type: 'higher_manager_approve',
     label: NODE_LABEL.higher_manager_approve,
-    hint: 'Kierownik wydziału nadrzędnego. Pomijany automatycznie, gdy komórka nie ma flagi „wymaga akceptacji wyższego rzędu".',
+    hint: 'Kierownik nadrzędny (kierownik komórki nadrzędnej). Pomijany automatycznie, gdy komórka nie ma flagi „wymaga akceptacji wyższego rzędu".',
   },
   {
     type: 'it_execute',
@@ -74,27 +74,34 @@ const DEFAULT_MIDDLE = [
 // -----------------------------------------------------------------------
 // Konwersja graph_json ↔ liniowa lista kroków
 // -----------------------------------------------------------------------
+// Zwraca listę kroków albo null, gdy grafu nie da się bezpiecznie przedstawić
+// jako listy (brak startu/końca, rozgałęzienia, węzły poza łańcuchem, pętle).
+// Wtedy edytor NIE podstawia kroków domyślnych — zapis nadpisałby prawdziwy graf.
 function linearizeGraph(graph) {
-  const nodes = graph?.nodes || []
-  const edges = graph?.edges || []
+  const nodes = graph?.nodes
+  const edges = graph?.edges
+  if (!Array.isArray(nodes) || !Array.isArray(edges) || nodes.length < 2) return null
   const byId = Object.fromEntries(nodes.map(n => [n.id, n]))
   const nextOf = {}
-  for (const e of edges) if (!(e.from in nextOf)) nextOf[e.from] = e.to
-
-  const startNode = nodes.find(n => n.type === 'start')
-  const ordered = []
-  if (startNode) {
-    let cur = startNode
-    const seen = new Set()
-    while (cur && !seen.has(cur.id)) {
-      seen.add(cur.id)
-      ordered.push(cur)
-      cur = byId[nextOf[cur.id]]
-    }
+  for (const e of edges) {
+    if (e.from in nextOf && nextOf[e.from] !== e.to) return null   // rozgałęzienie
+    nextOf[e.from] = e.to
   }
-  // Fallback: gdy graf nieliniowy/uszkodzony — po prostu kolejność z tablicy.
-  const list = ordered.length >= 2 ? ordered : nodes
-  return list.map(n => ({ type: n.type, label: n.label || n.type, props: n.props || {} }))
+
+  const starts = nodes.filter(n => n.type === 'start')
+  if (starts.length !== 1) return null
+  const ordered = []
+  let cur = starts[0]
+  const seen = new Set()
+  while (cur) {
+    if (seen.has(cur.id)) return null                                 // pętla
+    seen.add(cur.id)
+    ordered.push(cur)
+    cur = byId[nextOf[cur.id]]
+  }
+  if (ordered.length !== nodes.length) return null                    // węzły poza łańcuchem
+  if (ordered[ordered.length - 1].type !== 'end') return null
+  return ordered.map(n => ({ type: n.type, label: n.label || n.type, props: n.props || {} }))
 }
 
 function buildGraph(middle) {
@@ -257,6 +264,8 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(isEdit)
   const [err, setErr] = useState(null)
+  // Błąd wczytania szablonu — blokuje zapis (nie nadpisujemy grafu, którego nie znamy).
+  const [loadErr, setLoadErr] = useState(null)
 
   useEffect(() => {
     if (isEdit && templateId) {
@@ -266,15 +275,21 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
           is_active: r.data.is_active, version: r.data.version,
           created_by_name: r.data.created_by_name,
         })
-        try {
-          const g = JSON.parse(r.data.graph_json)
-          const lin = linearizeGraph(g).filter(s => s.type !== 'start' && s.type !== 'end')
-          setMiddle(lin.length ? lin : DEFAULT_MIDDLE)
-        } catch {
-          setMiddle(DEFAULT_MIDDLE)
+        let lin = null
+        try { lin = linearizeGraph(JSON.parse(r.data.graph_json)) } catch { lin = null }
+        const steps = lin && lin.filter(s => s.type !== 'start' && s.type !== 'end')
+        if (steps && steps.length) {
+          setMiddle(steps)
+        } else {
+          // Nie podstawiamy kroków domyślnych — zapis zniszczyłby istniejący obieg.
+          setMiddle([])
+          setLoadErr('Grafu tego szablonu nie da się przedstawić jako listy kroków (uszkodzony lub nieliniowy graph_json). Edycja i zapis są zablokowane.')
         }
         setLoading(false)
-      }).catch(() => setLoading(false))
+      }).catch(ex => {
+        setLoadErr(errorMessage(ex, 'Nie udało się wczytać szablonu. Edycja i zapis są zablokowane.'))
+        setLoading(false)
+      })
     }
   }, [isEdit, templateId])
 
@@ -300,6 +315,7 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
 
   async function save() {
     setErr(null)
+    if (loadErr) return
     if (!meta.name.trim()) { setErr('Podaj nazwę szablonu'); return }
     if (middle.length === 0) { setErr('Dodaj przynajmniej jeden krok między zgłoszeniem a zakończeniem'); return }
     if (!middle.some(s => s.type === 'it_execute')) {
@@ -324,6 +340,24 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
 
   if (loading) {
     return <div className="card" style={{ color: 'var(--color-text-muted)' }}>Ładowanie szablonu…</div>
+  }
+
+  if (loadErr) {
+    return (
+      <div>
+        <div className="page-header">
+          <div>
+            <h1 className="page-header__title">Edycja: {meta.name || 'szablon'}</h1>
+          </div>
+          <button className="btn btn--ghost" onClick={onCancel}>
+            <X size={14} /> Wróć do listy
+          </button>
+        </div>
+        <div className="alert alert--error" role="alert" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <AlertTriangle size={14} /> {loadErr}
+        </div>
+      </div>
+    )
   }
 
   return (

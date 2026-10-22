@@ -10,6 +10,8 @@ import RequestViewShell, { Section, buildWorkflowSteps, KindBadge } from '../com
 
 const FIELD_GRID  = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px 16px' }
 const FIELD_INPUT = { minHeight: 44, borderRadius: 8, fontSize: 14 }
+// Bez typu wniosku backend odrzuca zgłoszenie (400) — blokujemy wysłanie od razu.
+const NO_TYPE_MSG = 'Brak aktywnego typu wniosku — wysłanie jest zablokowane. Poproś administratora o włączenie typu wniosku.'
 const NOTE_BOX = {
   display: 'flex', alignItems: 'flex-start', gap: 10, marginTop: 14, padding: '12px 14px',
   borderRadius: 8, background: 'var(--bg-secondary)', border: '1px solid var(--color-border)',
@@ -21,7 +23,7 @@ const NOTE_BOX = {
 function NextSteps({ revoke = false }) {
   const steps = [
     revoke ? 'Kierownik komórki wskaże uprawnienia do odebrania.' : 'Kierownik komórki wybierze uprawnienia.',
-    'Jeśli komórka tego wymaga — akceptacja kierownika wyższego rzędu.',
+    'Jeśli komórka tego wymaga — akceptacja wyższa (kierownik nadrzędny).',
     revoke ? 'IT odbierze dostępy w systemach.' : 'IT zrealizuje uprawnienia w systemach.',
     'Dostaniesz potwierdzenie e-mailem, a status zobaczysz w Kartotece.',
   ]
@@ -248,6 +250,7 @@ function RequestFormView({ onCancel, onCreated }) {
   const [deptId, setDeptId]           = useState(null)
   const [requestTypes, setRequestTypes] = useState([])
   const [requestTypeId, setRequestTypeId] = useState(null)
+  const [typesLoaded, setTypesLoaded] = useState(false)
 
   const [err, setErr]   = useState(null)
   const [busy, setBusy] = useState(false)
@@ -259,6 +262,7 @@ function RequestFormView({ onCancel, onCreated }) {
         // HR zawsze składa wniosek „nowy pracownik" — bez wyboru rodzaju.
         const emp = t.data.find(x => x.code === 'NEW_EMP') || t.data[0]
         if (emp) setRequestTypeId(emp.id)
+        setTypesLoaded(true)
       })
       .catch(ex => setErr(errorMessage(ex,
         'Nie udało się wczytać słowników (jednostki, komórki, typy wniosków). Odśwież stronę.')))
@@ -291,6 +295,7 @@ function RequestFormView({ onCancel, onCreated }) {
     if (!workerName) { setErr('Podaj imię i nazwisko'); return }
     if (!position.trim()) { setErr('Podaj stanowisko'); return }
     if (!selectedDept) { setErr('Wybierz miejsce pracy'); return }
+    if (!requestTypeId) { setErr(NO_TYPE_MSG); return }
 
     setBusy(true)
     try {
@@ -301,7 +306,7 @@ function RequestFormView({ onCancel, onCreated }) {
         unit_id:         selectedDept.unit_id,
         department_id:   selectedDept.id,
         items:           [],
-        request_type_id: requestTypeId || null,
+        request_type_id: requestTypeId,
       })
       toast(`Wysłano zgłoszenie zatrudnienia: ${workerName}. Trafi teraz do kierownika komórki.`)
       onCreated({
@@ -337,7 +342,9 @@ function RequestFormView({ onCancel, onCreated }) {
                       footerLeft="* pola wymagane"
                       footerActions={<>
                         <button type="button" className="btn btn--ghost" onClick={leave}>Anuluj</button>
-                        <button type="button" className="btn btn--action" onClick={submit} disabled={busy}>
+                        <button type="button" className="btn btn--action" onClick={submit}
+                                disabled={busy || !requestTypeId}
+                                title={!requestTypeId ? (typesLoaded ? NO_TYPE_MSG : 'Wczytywanie typów wniosków…') : undefined}>
                           {busy ? 'Zapisywanie…' : 'Wyślij do kierownika →'}
                         </button>
                       </>}>
@@ -384,6 +391,7 @@ function RequestFormView({ onCancel, onCreated }) {
 
       <NextSteps />
 
+      {typesLoaded && !requestTypeId && <div className="alert alert--error mt-4" role="alert">{NO_TYPE_MSG}</div>}
       {err && <div className="alert alert--error mt-4">{err}</div>}
     </RequestViewShell>
   )
@@ -398,6 +406,7 @@ function TerminationFormView({ onCancel, onCreated }) {
   const [units, setUnits] = useState([])
   const [depts, setDepts] = useState([])
   const [requestTypeId, setRequestTypeId] = useState(null)
+  const [typesLoaded, setTypesLoaded] = useState(false)
 
   const [deptId, setDeptId]   = useState(null)
   const [workers, setWorkers] = useState([])
@@ -419,6 +428,7 @@ function TerminationFormView({ onCancel, onCreated }) {
       .then(([u, d, t]) => {
         setUnits(u.data); setDepts(d.data)
         if (t.data.length > 0) setRequestTypeId(t.data[0].id)
+        setTypesLoaded(true)
       })
       .catch(ex => setErr(errorMessage(ex,
         'Nie udało się wczytać słowników (jednostki, komórki, typy wniosków). Odśwież stronę.')))
@@ -495,6 +505,7 @@ function TerminationFormView({ onCancel, onCreated }) {
     setErr(null)
     if (!effWorker) { setErr('Wskaż pracownika (wyszukaj po nazwisku albo wybierz z komórki)'); return }
     if (!effWorker.department_id) { setErr('Nie udało się ustalić komórki pracownika'); return }
+    if (!requestTypeId) { setErr(NO_TYPE_MSG); return }
 
     setBusy(true)
     try {
@@ -506,7 +517,7 @@ function TerminationFormView({ onCancel, onCreated }) {
         unit_id:         effWorker.unit_id,
         department_id:   effWorker.department_id,
         items:           [],
-        request_type_id: requestTypeId || null,
+        request_type_id: requestTypeId,
       })
       toast(`Wysłano zgłoszenie odejścia: ${effWorker.name}. Trafi teraz do kierownika komórki.`)
       onCreated()
@@ -535,7 +546,9 @@ function TerminationFormView({ onCancel, onCreated }) {
                       footerLeft="* pola wymagane"
                       footerActions={<>
                         <button type="button" className="btn btn--ghost" onClick={leave}>Anuluj</button>
-                        <button type="button" className="btn btn--action" onClick={submit} disabled={busy || !effWorker}>
+                        <button type="button" className="btn btn--action" onClick={submit}
+                                disabled={busy || !effWorker || !requestTypeId}
+                                title={!requestTypeId ? (typesLoaded ? NO_TYPE_MSG : 'Wczytywanie typów wniosków…') : undefined}>
                           {busy ? 'Zapisywanie…' : 'Wyślij do kierownika →'}
                         </button>
                       </>}>
@@ -545,7 +558,7 @@ function TerminationFormView({ onCancel, onCreated }) {
             <label className="form-label" htmlFor="hr-term-search">Znajdź po nazwisku lub loginie</label>
             {picked ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-                            minHeight: 52, padding: '6px 12px', border: '2px solid var(--color-navy)',
+                            minHeight: 52, padding: '6px 12px', border: '2px solid var(--color-selected)',
                             background: 'var(--bg-secondary)', borderRadius: 8 }}>
                 <strong>{picked.full_name || picked.username}</strong>
                 <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
@@ -661,11 +674,11 @@ function TerminationFormView({ onCancel, onCreated }) {
                               display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
                               minHeight: 52, padding: '6px 12px', borderRadius: 8, fontSize: 14,
                               boxSizing: 'border-box',
-                              border: sel ? '2px solid var(--color-navy)' : '1px solid var(--color-input-border)',
+                              border: sel ? '2px solid var(--color-selected)' : '1px solid var(--color-input-border)',
                               background: sel ? 'var(--bg-secondary)' : 'var(--color-card)',
                             }}>
                               <input type="radio" name="term-worker" checked={sel}
-                                     style={{ flexShrink: 0, width: 18, height: 18, margin: 0, accentColor: 'var(--color-navy)' }}
+                                     style={{ flexShrink: 0, width: 18, height: 18, margin: 0, accentColor: 'var(--color-selected)' }}
                                      onChange={() => setWorkerId(w.id)} />
                               <span style={{ minWidth: 0 }}>
                                 <span style={{ display: 'block', fontWeight: 700, color: 'var(--color-heading)' }}>
@@ -705,6 +718,7 @@ function TerminationFormView({ onCancel, onCreated }) {
             </div>
           </div>
 
+          {typesLoaded && !requestTypeId && <div className="alert alert--error mt-4" role="alert">{NO_TYPE_MSG}</div>}
           {err && <div className="alert alert--error mt-4">{err}</div>}
       </Section>
 
@@ -776,7 +790,7 @@ function DeptSearchSelect({ units, depts, value, onChange }) {
         }} />
         <input type="search" className="form-control" value={query} aria-label="Komórka organizacyjna"
                style={{ ...FIELD_INPUT, paddingLeft: 36,
-                        ...(open ? { border: '2px solid var(--color-navy)' } : {}) }}
+                        ...(open ? { border: '2px solid var(--color-selected)' } : {}) }}
                placeholder="Wpisz fragment nazwy komórki lub jednostki…"
                onFocus={() => setOpen(true)} onChange={e => { setQuery(e.target.value); setOpen(true) }} />
       </div>
@@ -890,7 +904,7 @@ function DepartmentPicker({ units, depts, selectedId, onSelect, flush = false })
                placeholder="Szukaj komórki…" aria-label="Szukaj komórki"
                value={query} onChange={e => setQuery(e.target.value)} />
       </div>
-      <div role="tree" aria-label="Struktura" style={{ padding: '4px 6px 10px',
+      <div role="tree" aria-label="Struktura" onKeyDown={onTreeKeyDown} style={{ padding: '4px 6px 10px',
                     ...(flush ? {} : { maxHeight: 'min(48vh, 420px)', overflowY: 'auto' }) }}>
         {units.length === 0 && (
           <div style={{ padding: 12, fontSize: 12, color: 'var(--color-text-muted)' }}>
@@ -903,10 +917,14 @@ function DepartmentPicker({ units, depts, selectedId, onSelect, flush = false })
             <div style={{ padding: 12, fontSize: 13, color: 'var(--color-text-muted)' }}>
               Brak komórek pasujących do „{query}".
             </div>
-          ) : matches.map(({ d, path }) => {
+          ) : matches.map(({ d, path }, i) => {
             const isSelected = selectedId === d.id
+            // Roving tabindex: jedno miejsce w kolejności Tab — wybrana komórka
+            // albo pierwsza pozycja, gdy wybranej nie ma wśród wyników.
+            const tabStop = isSelected || (i === 0 && !matches.some(m => m.d.id === selectedId))
             return (
-              <div key={d.id} role="treeitem" aria-selected={isSelected} onClick={() => onSelect(d.id)}
+              <div key={d.id} role="treeitem" aria-selected={isSelected} aria-level={1}
+                   tabIndex={tabStop ? 0 : -1} onClick={() => onSelect(d.id)}
                    style={{ ...treeRow(isSelected, false), paddingLeft: 10 }}
                    onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)' }}
                    onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent' }}>
@@ -915,7 +933,7 @@ function DepartmentPicker({ units, depts, selectedId, onSelect, flush = false })
             )
           })
         ) : (
-          units.map(u => {
+          units.map((u, i) => {
             const byParent = buildTree(u.id)
             const hasAny = (byParent.get(null) || []).length > 0
             return (
@@ -928,6 +946,7 @@ function DepartmentPicker({ units, depts, selectedId, onSelect, flush = false })
                 onSelect={onSelect}
                 initiallyOpen={expandedPath.has(`unit-${u.id}`)}
                 expandedPath={expandedPath}
+                tabStop={i === 0 && !selectedId}
               />
             )
           })
@@ -937,18 +956,65 @@ function DepartmentPicker({ units, depts, selectedId, onSelect, flush = false })
   )
 }
 
-// Wiersz drzewa komórek (v3.0, wg projektu): 36 px, zaokrąglony, wybrany = granat.
+// Obsługa klawiatury drzewa (wzorzec WAI-ARIA „tree”): strzałki góra/dół
+// przechodzą po widocznych pozycjach, prawo/lewo rozwijają i zwijają (albo
+// przechodzą do dziecka/rodzica), Home/End — skrajne pozycje, Enter/Spacja
+// wybiera komórkę. Działa na DOM, więc obejmuje też gałęzie rozwinięte lokalnie.
+function onTreeKeyDown(e) {
+  const tree = e.currentTarget
+  const cur = e.target.closest?.('[role="treeitem"]')
+  if (!cur || !tree.contains(cur)) return
+  const items = Array.from(tree.querySelectorAll('[role="treeitem"]'))
+  const idx = items.indexOf(cur)
+  const level = Number(cur.getAttribute('aria-level') || 1)
+  const expanded = cur.getAttribute('aria-expanded')
+  const focusAt = (i) => { const el = items[i]; if (el) el.focus() }
+  // Rozwiń/zwiń: wiersz komórki ma osobny przycisk, jednostka sama jest przyciskiem.
+  const toggle = () => (cur.querySelector('button[data-tree-toggle]') || cur).click()
+
+  switch (e.key) {
+    case 'ArrowDown': focusAt(idx + 1); break
+    case 'ArrowUp':   focusAt(idx - 1); break
+    case 'Home':      focusAt(0); break
+    case 'End':       focusAt(items.length - 1); break
+    case 'ArrowRight':
+      if (expanded === 'false') toggle()
+      else if (expanded === 'true') focusAt(idx + 1)
+      else return
+      break
+    case 'ArrowLeft':
+      if (expanded === 'true') toggle()
+      else {
+        // Do rodzica: najbliższa wcześniejsza pozycja o niższym poziomie.
+        for (let i = idx - 1; i >= 0; i--) {
+          if (Number(items[i].getAttribute('aria-level') || 1) < level) { items[i].focus(); break }
+        }
+      }
+      break
+    case 'Enter':
+    case ' ':
+      // Przycisk jednostki obsługuje Enter/Spację natywnie.
+      if (cur.tagName === 'BUTTON') return
+      cur.click()
+      break
+    default: return
+  }
+  e.preventDefault()
+}
+
+// Wiersz drzewa komórek (v3.0, wg projektu): 36 px, zaokrąglony, wybrany = granat
+// (w trybie ciemnym złoto — token --color-selected).
 function treeRow(selected, isUnit) {
   return {
     display: 'flex', alignItems: 'center', gap: 6, minHeight: 36, paddingRight: 10,
     borderRadius: 6, cursor: 'pointer', fontSize: 14, boxSizing: 'border-box',
-    background: selected ? 'var(--color-navy)' : 'transparent',
-    color: selected ? '#fff' : (isUnit ? 'var(--color-heading)' : 'var(--color-text)'),
+    background: selected ? 'var(--color-selected)' : 'transparent',
+    color: selected ? 'var(--color-on-selected, #fff)' : (isUnit ? 'var(--color-heading)' : 'var(--color-text)'),
     fontWeight: selected || isUnit ? 700 : 400,
   }
 }
 
-function UnitNode({ unit, byParent, hasAny, selectedId, onSelect, initiallyOpen, expandedPath }) {
+function UnitNode({ unit, byParent, hasAny, selectedId, onSelect, initiallyOpen, expandedPath, tabStop }) {
   const [open, setOpen] = useState(initiallyOpen)
   useEffect(() => { if (initiallyOpen) setOpen(true) }, [initiallyOpen])
 
@@ -958,6 +1024,8 @@ function UnitNode({ unit, byParent, hasAny, selectedId, onSelect, initiallyOpen,
     <div>
       <button
         type="button"
+        role="treeitem" aria-level={1} aria-selected={false}
+        tabIndex={tabStop ? 0 : -1}
         aria-expanded={hasAny ? open : undefined}
         onClick={() => hasAny && setOpen(v => !v)}
         style={{
@@ -974,7 +1042,7 @@ function UnitNode({ unit, byParent, hasAny, selectedId, onSelect, initiallyOpen,
         {!hasAny && <span style={{ fontSize: 12, color: 'var(--color-text-muted)', fontWeight: 400 }}>(brak wydziałów)</span>}
       </button>
       {open && hasAny && (
-        <div>
+        <div role="group">
           {roots.map(d => (
             <DeptNode
               key={d.id}
@@ -1005,7 +1073,9 @@ function DeptNode({ dept, byParent, depth, selectedId, onSelect, expandedPath })
   return (
     <div>
       <div
-        role="treeitem" aria-selected={isSelected}
+        role="treeitem" aria-selected={isSelected} aria-level={depth + 1}
+        aria-expanded={hasKids ? open : undefined}
+        tabIndex={isSelected ? 0 : -1}
         onClick={() => onSelect(dept.id)}
         style={{ ...treeRow(isSelected, false), paddingLeft: 10 + depth * 22 }}
         onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)' }}
@@ -1013,9 +1083,9 @@ function DeptNode({ dept, byParent, depth, selectedId, onSelect, expandedPath })
       >
         {hasKids ? (
           <button
-            type="button"
+            type="button" tabIndex={-1} data-tree-toggle
             onClick={e => { e.stopPropagation(); setOpen(v => !v) }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: isSelected ? '#fff' : 'var(--color-text-muted)', display: 'inline-flex' }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: isSelected ? 'var(--color-on-selected, #fff)' : 'var(--color-text-muted)', display: 'inline-flex' }}
             aria-label={open ? 'Zwiń' : 'Rozwiń'}
           >
             {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
@@ -1025,7 +1095,7 @@ function DeptNode({ dept, byParent, depth, selectedId, onSelect, expandedPath })
         )}
         <span style={{ flex: 1 }}>{dept.name}</span>
       </div>
-      {hasKids && open && kids.map(c => (
+      {hasKids && open && <div role="group">{kids.map(c => (
         <DeptNode
           key={c.id}
           dept={c}
@@ -1035,7 +1105,7 @@ function DeptNode({ dept, byParent, depth, selectedId, onSelect, expandedPath })
           onSelect={onSelect}
           expandedPath={expandedPath}
         />
-      ))}
+      ))}</div>}
     </div>
   )
 }

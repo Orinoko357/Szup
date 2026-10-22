@@ -17,7 +17,7 @@ from sqlmodel import Session, select
 
 from database import get_session
 from models import (
-    User, UserRole, AuthType, Unit, Department,
+    User, AuthType, Unit, Department,
     parse_roles, roles_to_json, primary_role, VALID_ROLES, has_role,
 )
 from services.auth_service import hash_password, validate_password_strength
@@ -169,7 +169,6 @@ def _effective_permissions(session: Session, user_id: int) -> dict:
     if not reqs:
         return {"permissions": [], "requests": []}
 
-    req_by_id = {r.id: r for r in reqs}
     req_ids = [r.id for r in reqs]
     items = session.exec(
         select(RequestItem).where(_col(RequestItem.request_id).in_(req_ids))
@@ -325,10 +324,45 @@ def user_permissions(
         # uprawnień dla pracownika podległej komórki (403).
         scope = manager_scope_ids(session, current_user)
         scope.update(unit_manager_dept_ids(session, current_user))
-        if target.department_id not in scope:
+        if target.department_id not in scope and not _can_act_on_worker_request(
+                session, current_user, user_id):
             raise HTTPException(status.HTTP_403_FORBIDDEN,
                 "Brak dostępu do uprawnień tego pracownika")
     return _effective_permissions(session, user_id)
+
+
+def _can_act_on_worker_request(session: Session, user: User, worker_id: int) -> bool:
+    """Czy `user` może działać na bieżącym kroku któregoś AKTYWNEGO wniosku
+    pracownika. Np. AD przeniosło pracownika do innej komórki, a wniosek jest
+    wciąż w starej — kierownik starej komórki musi widzieć obecne uprawnienia,
+    żeby dokończyć wybór (inaczej 403 i pusta lista)."""
+    import json as _json
+    from models import AccessRequest, WorkflowInstance, WorkflowInstanceStatus
+    # Import w funkcji — services.workflow importuje sporo modułów (cykl importów).
+    from services.workflow import can_act, find_node
+    rows = session.exec(
+        select(AccessRequest, WorkflowInstance)
+        .join(WorkflowInstance, WorkflowInstance.request_id == AccessRequest.id)
+        .where(AccessRequest.worker_user_id == worker_id)
+        .where(WorkflowInstance.status == WorkflowInstanceStatus.active)
+    ).all()
+    for req, inst in rows:
+        if not inst.current_node_id:
+            continue
+        try:
+            node = find_node(_json.loads(inst.template_snapshot), inst.current_node_id)
+        except Exception:
+            node = None
+        if not node:
+            continue
+        dept = session.get(Department, req.department_id) if req.department_id else None
+        try:
+            allowed, _reason = can_act(node, req, dept, user, session)
+        except Exception:
+            allowed = False
+        if allowed:
+            return True
+    return False
 
 
 @router.get("/it-staff")
@@ -496,16 +530,17 @@ def my_workers(
 ):
     """
     Zwraca listę pracowników, dla których zalogowany kierownik może
-    składać wnioski:
-      - wszyscy z wydziałów, którymi kieruje bezpośrednio,
-      - dodatkowo wszyscy z wydziałów podrzędnych 2-stopniowych
-        (requires_higher_approval=True).
+    składać wnioski — ten sam zakres „przełożonego” co wyszukiwarka
+    (users/search), podgląd uprawnień i obieg wniosków:
+      - komórki, którymi kieruje bezpośrednio (lub jest zastępcą), z
+        samodzielnymi stanowiskami i komórkami bez kierownika pod nim,
+      - całe poddrzewo podległych komórek,
+      - wszystkie komórki jednostek, których jest kierownikiem.
     """
-    direct_ids, escalated_ids = managed_dept_ids(session, current_user)
-    # Kierownik całej jednostki może wnioskować za wszystkich jej pracowników —
-    # dokładamy komórki jego jednostek (podgląd + wnioskowanie, bez akceptacji).
-    unit_scope_ids = unit_manager_dept_ids(session, current_user)
-    all_ids = list({*direct_ids, *escalated_ids, *unit_scope_ids})
+    _direct_ids, escalated_ids = managed_dept_ids(session, current_user)
+    scope = manager_scope_ids(session, current_user)
+    scope.update(unit_manager_dept_ids(session, current_user))
+    all_ids = list(scope)
     if not all_ids:
         return []
 
@@ -784,7 +819,14 @@ def create_user(
     current_user: User = Depends(require_admin),
 ):
     _guard_superadmin_role(current_user, data.roles)
-    if session.exec(select(User).where(User.username == data.username)).first():
+    from services.ldap_service import normalize_login, find_user_by_login
+    if data.auth_type == AuthType.ldap:
+        # Konto AD zapisujemy pod loginem znormalizowanym — tak samo jak przy
+        # logowaniu AD/SSO i imporcie (inaczej powstałby duplikat).
+        data.username = normalize_login(data.username)
+        if not data.username:
+            raise HTTPException(400, "Nieprawidłowy login konta AD")
+    if find_user_by_login(session, data.username):
         raise HTTPException(400, "Użytkownik o tej nazwie już istnieje")
     if data.auth_type == AuthType.local and not data.password:
         raise HTTPException(400, "Hasło jest wymagane dla konta lokalnego")
@@ -861,6 +903,12 @@ def update_user(
         invalid = [r for r in data.roles if r not in VALID_ROLES]
         if invalid:
             raise HTTPException(400, f"Nieznane role: {invalid}")
+        # Admin (nie superadmin) nie zmienia SWOICH ról — ani nie nadaje sobie
+        # ról operacyjnych (kierownik, IT, HR), ani nie odbiera. Robi to superadmin.
+        if (user.id == current_user.id and not has_role(current_user, "superadmin")
+                and set(data.roles) != set(parse_roles(user.roles))):
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                "Administrator nie może zmieniać własnych ról — poproś o to superadmina")
         # Ochrona własnego konta — nie można odebrać sobie roli dającej dostęp
         if user.id == current_user.id:
             if has_role(current_user, "superadmin") and "superadmin" not in data.roles:
@@ -870,6 +918,21 @@ def update_user(
     if data.is_active is not None:
         if user.id == current_user.id and not data.is_active:
             raise HTTPException(400, "Nie możesz dezaktywować własnego konta")
+    if user.id == current_user.id and not has_role(current_user, "superadmin"):
+        # Zmiana własnej komórki / jednostek kadrowych poszerza własny zakres
+        # (np. kierownik obejmuje komórkę bez kierownika) — tylko superadmin.
+        from models import UserUnit
+        if ("department_id" in data.model_fields_set
+                and (data.department_id or None) != user.department_id):
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                "Administrator nie może zmieniać własnej komórki — poproś o to superadmina")
+        if data.unit_ids is not None:
+            own_units = set(session.exec(
+                select(UserUnit.unit_id).where(UserUnit.user_id == user.id)).all())
+            if set(data.unit_ids) != own_units:
+                raise HTTPException(status.HTTP_403_FORBIDDEN,
+                    "Administrator nie może zmieniać własnych jednostek — poproś o to superadmina")
+    deactivated = data.is_active is False and user.is_active
 
     if data.full_name is not None:  user.full_name = data.full_name
     if data.email is not None:      user.email = data.email
@@ -896,7 +959,13 @@ def update_user(
     #  - nadanie roli „manager" + komórka bez kierownika → obejmuje ją,
     #  - odebranie roli „manager" → zwolnij stanowiska, którymi kierował.
     warning = None
-    if data.roles is not None or "department_id" in data.model_fields_set:
+    if deactivated:
+        # Dezaktywacja zwalnia stanowiska (kierownik / zastępca / dyrektor
+        # jednostki) — inaczej wnioski czekałyby na osobę, która się nie zaloguje.
+        from services.org_sync import release_manager_posts
+        if release_manager_posts(session, user.id):
+            session.commit(); session.refresh(user)
+    elif data.roles is not None or "department_id" in data.model_fields_set:
         from services.org_sync import sync_after_user_change, release_manager_posts
         changed = False
         if "manager" in parse_roles(user.roles):
@@ -1086,7 +1155,11 @@ def ldap_users_preview(
     _require_structure(dept_by_dn, unit_by_dn)
     dept_names = {d.id: d.name for d in session.exec(select(Department)).all()}
     unit_names = {u.id: u.name for u in session.exec(select(Unit)).all()}
-    existing = {u.username: u for u in session.exec(select(User)).all()}
+    from services.ldap_service import normalize_login
+    # Dopasowanie BEZ względu na wielkość liter — tak jak przy imporcie.
+    existing: dict[str, User] = {}
+    for eu in session.exec(select(User).order_by(User.id)).all():
+        existing.setdefault((eu.username or "").lower(), eu)
 
     from services.ldap_service import parent_dn as _parent_of
 
@@ -1118,7 +1191,7 @@ def ldap_users_preview(
     out: list[LdapUserPreviewItem] = []
     for u in users_raw:
         dept_id, unit_id = _resolve_dept_unit(u["parent_dn"])
-        existing_user = existing.get(u["username"])
+        existing_user = existing.get(normalize_login(u["username"]))
         if existing_user is None:
             status_v = "new"
         elif existing_user.auth_type == AuthType.ldap:
@@ -1157,7 +1230,10 @@ def ldap_users_import(
     - Konta lokalne o tym samym loginie → pomijane (konflikt).
     """
     from models import LdapSettings
-    from services.ldap_service import fetch_ldap_users, normalize_dn
+    from services.ldap_service import (
+        fetch_ldap_users, normalize_dn, normalize_login, find_user_by_login, is_valid_login,
+    )
+    from services.org_sync import release_manager_posts
 
     cfg = session.exec(select(LdapSettings)).first()
     if not cfg or not cfg.enabled:
@@ -1171,7 +1247,11 @@ def ldap_users_import(
     except Exception as exc:
         raise HTTPException(502, f"Błąd LDAP: {exc}")
 
-    wanted = set(data.usernames)
+    # Loginy normalizujemy tak samo jak przy logowaniu AD/SSO (małe litery,
+    # bez realmu) — jedno konto AD = jedno konto w aplikacji.
+    wanted = {normalize_login(n) for n in data.usernames}
+    for u in users_raw:
+        u["username"] = normalize_login(u["username"])
     dept_by_dn = _build_dn_to_dept_map(session)
     unit_by_dn = _build_dn_to_unit_map(session)
     _require_structure(dept_by_dn, unit_by_dn)
@@ -1203,11 +1283,25 @@ def ldap_users_import(
     for u in users_raw:
         if u["username"] not in wanted:
             continue
-
-        # Pomiń konta WYŁĄCZONE w AD — nie tworzymy dla nich kont w systemie.
-        if not u["is_enabled_in_ad"]:
+        if not is_valid_login(u["username"]):
             skipped += 1
-            details.append(f"⚠ {u['username']} — wyłączony w AD, pominięty")
+            details.append(f"⚠ {u['username']} — niedozwolone znaki w loginie, pominięty")
+            continue
+
+        # Konto WYŁĄCZONE w AD: nowego nie tworzymy, a istniejące konto
+        # domenowe dezaktywujemy (i zwalniamy jego stanowiska w strukturze).
+        if not u["is_enabled_in_ad"]:
+            ex = find_user_by_login(session, u["username"])
+            if ex and ex.auth_type == AuthType.ldap and ex.is_active:
+                ex.is_active = False
+                session.add(ex)
+                release_manager_posts(session, ex.id)
+                session.commit()
+                updated += 1
+                details.append(f"~ {u['username']} — wyłączony w AD, dezaktywowany")
+            else:
+                skipped += 1
+                details.append(f"⚠ {u['username']} — wyłączony w AD, pominięty")
             continue
 
         # Pomiń zduplikowany login — importujemy tylko pierwsze wystąpienie.
@@ -1226,7 +1320,7 @@ def ldap_users_import(
             continue
         ndn = normalize_dn(u["dn"])
 
-        existing = session.exec(select(User).where(User.username == u["username"])).first()
+        existing = find_user_by_login(session, u["username"])
         if existing and existing.auth_type != AuthType.ldap:
             conflicts += 1
             details.append(f"⚠ {u['username']} — konflikt z kontem lokalnym, pominięty")

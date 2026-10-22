@@ -19,7 +19,7 @@
 | Hasło SMTP | Poufne | `/opt/szup/data/szup.db` (zaszyfrowane Fernet) |
 | Hasło konta LDAP | Poufne | `/opt/szup/data/szup.db` (zaszyfrowane Fernet) |
 | Klucz Fernet | Ściśle poufne | `/opt/szup/.env` |
-| Klucz JWT | Ściśle poufne | `/opt/szup/.env` lub `/opt/szup/data/jwt_secret.key` |
+| Klucz JWT | Ściśle poufne | `/opt/szup/data/jwt_secret.key` (0600) |
 | Audit log | Wewnętrzne | `/opt/szup/data/szup.db` (append-only) |
 
 ## Zasady ochrony danych
@@ -33,7 +33,7 @@
 ## Prawa podmiotów danych
 
 Żądania realizacji praw (dostęp, sprostowanie, usunięcie) należy kierować do administratora danych.
-Audit log jest append-only — usunięcie wymaga fizycznej interwencji DBA z zachowaniem procedury audytu.
+Audit log jest append-only — triggery w bazie blokują UPDATE/DELETE, a aplikacja nie udostępnia usuwania wpisów. Wyczyszczenie logu jest możliwe wyłącznie przy przywróceniu ustawień fabrycznych (superadmin) albo narzędziem `tools/reset_data.py` uruchamianym na serwerze — z zachowaniem procedury audytu.
 
 ## Podstawa prawna
 

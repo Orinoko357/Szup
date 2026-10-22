@@ -18,6 +18,29 @@ from services.permissions import require_admin, is_admin
 router = APIRouter()
 
 
+def _guard_self_post(current_user: User, user_id: Optional[int]) -> None:
+    """Admin (nie superadmin) nie może przypisać SIEBIE na stanowisko w strukturze
+    (kierownik komórki/jednostki, zastępca) — dostałby kroki kierownicze obiegu
+    i rolę „manager” z automatu. Robi to superadmin."""
+    if user_id and user_id == current_user.id and not has_role(current_user, "superadmin"):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Administrator nie może przypisać samego siebie jako kierownika ani zastępcy "
+            "— poproś o to superadmina",
+        )
+
+
+def _guard_self_hr(session: Session, current_user: User, dept: "Department") -> None:
+    """Admin (nie superadmin) nie oznacza własnej komórki jako kadrowej (is_hr) —
+    pracownik takiej komórki dostaje uprawnienia kadr."""
+    if (not has_role(current_user, "superadmin") and dept.id is not None
+            and current_user.department_id == dept.id):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Administrator nie może oznaczyć własnej komórki jako kadrowej — poproś o to superadmina",
+        )
+
+
 def _hr_scoped_unit_ids(session: Session, user: User) -> Optional[list[int]]:
     """Zakres jednostek dla pracownika kadr.
 
@@ -116,7 +139,7 @@ def update_unit(
     unit_id: int,
     data: UnitUpdate,
     session: Session = Depends(get_session),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
 ):
     unit = session.get(Unit, unit_id)
     if not unit:
@@ -125,6 +148,8 @@ def update_unit(
     # exclude_unset: pozwala jawnie zdjąć kierownika (manager_user_id=None w patchu),
     # nie gubiąc przy tym pozostałych pól.
     payload = data.model_dump(exclude_unset=True)
+    if "manager_user_id" in payload and payload["manager_user_id"] != prev_manager_id:
+        _guard_self_post(current_user, payload["manager_user_id"])
     if "manager_user_id" in payload and payload["manager_user_id"]:
         mgr = session.get(User, payload["manager_user_id"])
         if not mgr:
@@ -269,18 +294,6 @@ def _validate_higher_approval(dept: Department, session: Session) -> None:
         )
 
 
-@router.get("/{unit_id}/departments", response_model=list[DepartmentRead])
-def list_departments(
-    unit_id: int,
-    session: Session = Depends(get_session),
-    _: User = Depends(require_admin),
-):
-    depts = session.exec(
-        select(Department).where(Department.unit_id == unit_id).order_by(Department.name)
-    ).all()
-    return [_enrich_dept(d, session) for d in depts]
-
-
 @router.get("/departments/all", response_model=list[DepartmentRead])
 def list_all_departments(
     session: Session = Depends(get_session),
@@ -314,8 +327,10 @@ def list_active_departments(
 def create_department(
     data: DepartmentCreate,
     session: Session = Depends(get_session),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
 ):
+    if data.kind != "standalone":
+        _guard_self_post(current_user, data.manager_user_id)
     if not session.get(Unit, data.unit_id):
         raise HTTPException(400, "Jednostka nie istnieje")
     _validate_kind(data.kind)
@@ -350,7 +365,7 @@ def update_department(
     dept_id: int,
     data: DepartmentUpdate,
     session: Session = Depends(get_session),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
 ):
     dept = session.get(Department, dept_id)
     if not dept:
@@ -358,6 +373,10 @@ def update_department(
     prev_manager_id = dept.manager_user_id   # do synchronizacji roli po zmianie
     # requires_higher_approval=False jest prawidłową wartością (nie pomijaj None-em)
     payload = data.model_dump(exclude_unset=True)
+    if "manager_user_id" in payload and payload["manager_user_id"] != prev_manager_id:
+        _guard_self_post(current_user, payload["manager_user_id"])
+    if payload.get("is_hr") and not dept.is_hr:
+        _guard_self_hr(session, current_user, dept)
 
     # Walidacja typu (jeśli w patchu)
     if "kind" in payload:
@@ -409,7 +428,7 @@ class AutoManagersResult(BaseModel):
 def auto_assign_managers(
     data: AutoManagersIn,
     session: Session = Depends(get_session),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
 ):
     """Przypisz kierowników komórek na podstawie stanowiska z AD (`title`
     zawiera „kierownik"/„dyrektor"/„naczelnik"). Dla każdej komórki szukamy
@@ -425,6 +444,9 @@ def auto_assign_managers(
     details: list[str] = []
 
     users = session.exec(select(User).where(User.is_active == True)).all()  # noqa: E712
+    # Admin (nie superadmin) nie może w ten sposób przypisać SIEBIE (_guard_self_post).
+    if not has_role(current_user, "superadmin"):
+        users = [u for u in users if u.id != current_user.id]
     by_dept: dict[int, list[User]] = {}
     for u in users:
         if u.department_id and title_indicates_manager(getattr(u, "title", None)):
@@ -971,8 +993,9 @@ def add_deputy(
     department_id: int,
     data: DeputyIn,
     session: Session = Depends(get_session),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
 ):
+    _guard_self_post(current_user, data.user_id)
     dept = session.get(Department, department_id)
     if not dept:
         raise HTTPException(404, "Wydział nie istnieje")

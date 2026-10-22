@@ -13,5 +13,17 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Biblioteki w osobnych paczkach — zmieniają się rzadko, więc
+        // przeglądarka trzyma je w cache między wydaniami aplikacji.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (/[\\/]node_modules[\\/](react|react-dom|scheduler|react-router|react-router-dom)[\\/]/.test(id)) return 'react-vendor'
+          if (id.includes('lucide-react')) return 'icons'
+          return 'vendor'
+        },
+      },
+    },
   },
 })

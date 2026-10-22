@@ -3,7 +3,8 @@ import { useSearchParams } from 'react-router-dom'
 import Manager from './Manager'
 import { RequestsTab } from './IT'
 import NameChangeQueue from '../components/NameChangeQueue'
-import { workflowDashboard } from '../api'
+import { workflowDashboard, errorMessage } from '../api'
+import { toast } from '../components/ui/feedback'
 import { getUserRoles, hasAnyRole } from '../roles'
 
 /**
@@ -14,7 +15,7 @@ import { getUserRoles, hasAnyRole } from '../roles'
  */
 const TABS = [
   { id: 'handle', label: 'Do obsługi',      roles: ['manager'],
-    sub: 'Do zrobienia: wybór uprawnień dla pracowników i akceptacje (w tym wyższego rzędu)' },
+    sub: 'Do zrobienia: wybór uprawnień dla pracowników i akceptacje (w tym akceptacja wyższa)' },
   { id: 'mine',   label: 'Moje wnioski',    roles: ['manager'],
     sub: 'Wnioski, które złożyłeś(aś) — bieżący status i etap obiegu' },
   { id: 'it',     label: 'Realizacja IT',   roles: ['it_staff'],
@@ -22,6 +23,23 @@ const TABS = [
   { id: 'names',  label: 'Zmiany nazwiska', roles: ['it_staff'],
     sub: 'Zgłoszenia zmiany nazwiska do realizacji przez IT' },
 ]
+
+// Zakładki (wzorzec WAI-ARIA „tabs”): strzałki lewo/prawo, Home/End
+// przechodzą między zakładkami i od razu je aktywują.
+function onTablistKeyDown(e) {
+  const tabs = Array.from(e.currentTarget.querySelectorAll('[role="tab"]'))
+  const i = tabs.indexOf(e.target)
+  if (i < 0) return
+  const next = e.key === 'ArrowRight' ? (i + 1) % tabs.length
+    : e.key === 'ArrowLeft' ? (i - 1 + tabs.length) % tabs.length
+    : e.key === 'Home' ? 0
+    : e.key === 'End' ? tabs.length - 1
+    : null
+  if (next == null) return
+  e.preventDefault()
+  tabs[next].focus()
+  tabs[next].click()
+}
 
 export default function Requests() {
   const roles = getUserRoles()
@@ -57,7 +75,7 @@ export default function Requests() {
         it: d.pending_execute_count || 0,
         names: d.pending_names_count || 0,
       })
-    }).catch(() => {})
+    }).catch(ex => toast(errorMessage(ex, 'Nie udało się pobrać liczników zakładek'), { tone: 'warning' }))
   }
   useEffect(() => { loadCounts() }, [])
 
@@ -77,9 +95,10 @@ export default function Requests() {
         </div>
       )}
       {!fullView && tabs.length > 1 && (
-        <div className="tabs" role="tablist" style={{ marginTop: 0 }}>
+        <div className="tabs" role="tablist" aria-label="Rodzaj wniosków" style={{ marginTop: 0 }}
+             onKeyDown={onTablistKeyDown}>
           {tabs.map(t => (
-            <button key={t.id} role="tab" aria-selected={t.id === tab}
+            <button key={t.id} role="tab" aria-selected={t.id === tab} tabIndex={t.id === tab ? 0 : -1}
                     className={`tab-btn${t.id === tab ? ' active' : ''}`} onClick={() => pick(t.id)}>
               {t.label}
               {counts[t.id] > 0 && <span className="tab-count">{counts[t.id]}</span>}

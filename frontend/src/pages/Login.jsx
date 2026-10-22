@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Eye, EyeOff } from 'lucide-react'
-import { loginLocal, loginLdap, loginTest } from '../api'
+import { loginLocal, loginLdap, loginTest, errorMessage } from '../api'
 import { syncServerTime } from '../serverTime'
 import WodsLogo from '../components/Layout/WodsLogo'
 import { toast } from '../components/ui/feedback'
@@ -96,6 +96,7 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
         role:                res.data.role,
         auth_type:           res.data.auth_type,
         must_change_password: !!res.data.must_change_password,
+        password_expired: !!res.data.password_expired,
       }))
       if (res.data.must_change_password) {
         toast('Twoje hasło musi zostać zmienione — za chwilę otworzy się formularz.', { tone: 'warning' })
@@ -107,7 +108,8 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
       onLogin()
     } catch (err) {
       const st = err.response?.status
-      const detail = err.response?.data?.detail || ''
+      // errorMessage: detail z 422 to tablica obiektów — nie może trafić wprost do renderu.
+      const detail = errorMessage(err, '')
       if (passwordless && st === 403 && /hasł/i.test(detail)) {
         setForcePassword(true)
         setOpen(true)
@@ -130,12 +132,13 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
   const loginLabel = passwordless
     ? 'Login (tryb testowy)'
     : (mode === 'ldap' ? 'Login AD (sAMAccountName)' : 'Login')
-  const tabIdx = collapsible && !open ? -1 : undefined
+  const collapsed = collapsible && !open
+  const tabIdx = collapsed ? -1 : undefined
 
   return (
     <div className="wl-page">
       <main className="wl-wrap">
-      <section className="wl-card" aria-label="Logowanie">
+      <section className="wl-card" aria-labelledby="wl-title">
         <div className="wl-lockup">
           <div className="wl-herbrow">
             <img className="wl-herb wl-herb--light" src="/img/herb-ciemny.png"
@@ -145,7 +148,7 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
           <div className="wl-brand">
             <WodsLogo size={44} />
             <div className="wl-names">
-              <span className="wl-name">szup</span>
+              <h1 id="wl-title" className="wl-name">szup<span className="wl-sr"> — logowanie</span></h1>
               <span className="wl-sub">WODS · URZĄD MIASTA WODZISŁAWIA ŚLĄSKIEGO</span>
             </div>
           </div>
@@ -186,7 +189,7 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
 
           <div id="wl-classic"
                className={`wl-classic${collapsible ? (open ? ' is-open' : '') : ' wl-classic--static'}`}
-               aria-hidden={collapsible && !open}>
+               inert={collapsed} aria-hidden={collapsed}>
             <form onSubmit={submit}>
               <div className="wl-field">
                 <label htmlFor="login">{loginLabel} <span className="wl-req" aria-hidden="true">*</span></label>

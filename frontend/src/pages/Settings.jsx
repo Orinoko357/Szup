@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Mail, ShieldCheck, TestTube, AlertTriangle, FileText, Camera, Bell } from 'lucide-react'
 import {
   getEmailSettings, updateEmailSettings, testEmail,
@@ -265,27 +265,27 @@ export default function Settings() {
             </label>
             <div className="form-row">
               <div className="form-group">
-                <label className="form-label">Serwer SMTP</label>
-                <input aria-label="Serwer SMTP" className="form-control" value={email.smtp_host || ''}
+                <label className="form-label" htmlFor="set-smtp-host">Serwer SMTP</label>
+                <input id="set-smtp-host" className="form-control" value={email.smtp_host || ''}
                        onChange={e => setE('smtp_host', e.target.value)} placeholder="smtp.firma.local" />
               </div>
               <div className="form-group">
-                <label className="form-label">Port SMTP</label>
-                <input aria-label="Port SMTP" className="form-control" type="number" value={email.smtp_port || 587}
+                <label className="form-label" htmlFor="set-smtp-port">Port SMTP</label>
+                <input id="set-smtp-port" className="form-control" type="number" value={email.smtp_port || 587}
                        onChange={e => setE('smtp_port', parseInt(e.target.value))} />
               </div>
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label className="form-label">Użytkownik SMTP</label>
-                <input aria-label="Użytkownik SMTP" className="form-control" value={email.smtp_user || ''}
+                <label className="form-label" htmlFor="set-smtp-user">Użytkownik SMTP</label>
+                <input id="set-smtp-user" className="form-control" value={email.smtp_user || ''}
                        onChange={e => setE('smtp_user', e.target.value)} />
               </div>
               <div className="form-group">
-                <label className="form-label">
+                <label className="form-label" htmlFor="set-smtp-pass">
                   Hasło SMTP {email.has_password && <span className="badge badge--neutral" style={{ fontSize: 10, marginLeft: 6 }}>Ustawione</span>}
                 </label>
-                <input aria-label="Hasło SMTP" className="form-control" type="password" value={email.smtp_password || ''}
+                <input id="set-smtp-pass" className="form-control" type="password" value={email.smtp_password || ''}
                        onChange={e => setE('smtp_password', e.target.value)}
                        placeholder={email.has_password ? 'Pozostaw puste, by nie zmieniać' : ''}
                        autoComplete="new-password" />
@@ -293,14 +293,14 @@ export default function Settings() {
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label className="form-label">Nadawca (From)</label>
-                <input aria-label="Nadawca (From)" className="form-control" type="email" value={email.from_address || ''}
+                <label className="form-label" htmlFor="set-smtp-from">Nadawca (From)</label>
+                <input id="set-smtp-from" className="form-control" type="email" value={email.from_address || ''}
                        onChange={e => setE('from_address', e.target.value)}
                        placeholder="szup@firma.local" />
               </div>
               <div className="form-group">
-                <label className="form-label">Domyślny odbiorca CC (opcjonalny)</label>
-                <input aria-label="Domyślny odbiorca CC (opcjonalny)" className="form-control" type="email" value={email.to_address || ''}
+                <label className="form-label" htmlFor="set-smtp-cc">Domyślny odbiorca CC (opcjonalny)</label>
+                <input id="set-smtp-cc" className="form-control" type="email" value={email.to_address || ''}
                        onChange={e => setE('to_address', e.target.value)}
                        placeholder="it@firma.local" />
               </div>
@@ -356,8 +356,8 @@ export default function Settings() {
               Powiadomienia imienne do pracowników IT nie są wysyłane.
             </div>
             <div className="form-group">
-              <label className="form-label">Adres e-mail helpdesku IT</label>
-              <input aria-label="Adres e-mail helpdesku IT"
+              <label className="form-label" htmlFor="set-helpdesk">Adres e-mail helpdesku IT</label>
+              <input id="set-helpdesk"
                 className="form-control"
                 type="email"
                 placeholder={app.helpdesk_email_effective || 'helpdesk@…'}
@@ -395,8 +395,8 @@ export default function Settings() {
               złożone oświadczenia zachowują swoją pierwotną treść.
             </div>
             <div className="form-group">
-              <label className="form-label">Treść oświadczenia</label>
-              <textarea aria-label="Treść oświadczenia" className="form-control"
+              <label className="form-label" htmlFor="set-declaration">Treść oświadczenia</label>
+              <textarea id="set-declaration" className="form-control"
                         style={{ minHeight: 320, fontSize: 13, lineHeight: 1.5,
                                  fontFamily: 'inherit' }}
                         value={declText}
@@ -447,14 +447,14 @@ export default function Settings() {
             </label>
             <div className="form-row" style={{ maxWidth: 320 }}>
               <div className="form-group">
-                <label className="form-label">Godzina</label>
-                <input aria-label="Godzina" className="form-control" type="number" min={0} max={23}
+                <label className="form-label" htmlFor="set-snap-hour">Godzina</label>
+                <input id="set-snap-hour" className="form-control" type="number" min={0} max={23}
                        value={snap.hour} disabled={!snap.enabled}
                        onChange={e => setSnap(s => ({ ...s, hour: e.target.value }))} />
               </div>
               <div className="form-group">
-                <label className="form-label">Minuta</label>
-                <input aria-label="Minuta" className="form-control" type="number" min={0} max={59}
+                <label className="form-label" htmlFor="set-snap-minute">Minuta</label>
+                <input id="set-snap-minute" className="form-control" type="number" min={0} max={59}
                        value={snap.minute} disabled={!snap.enabled}
                        onChange={e => setSnap(s => ({ ...s, minute: e.target.value }))} />
               </div>
@@ -511,14 +511,14 @@ export default function Settings() {
             </label>
             <div className="form-row">
               <div className="form-group">
-                <label className="form-label">Serwer LDAP / AD</label>
-                <input aria-label="Serwer LDAP / AD" className="form-control" value={ldap.host || ''}
+                <label className="form-label" htmlFor="set-ldap-host">Serwer LDAP / AD</label>
+                <input id="set-ldap-host" className="form-control" value={ldap.host || ''}
                        onChange={e => setL('host', e.target.value)}
                        placeholder="192.168.1.10 lub dc.firma.local" />
               </div>
               <div className="form-group">
-                <label className="form-label">Port</label>
-                <input aria-label="Port" className="form-control" type="number" value={ldap.port || 389}
+                <label className="form-label" htmlFor="set-ldap-port">Port</label>
+                <input id="set-ldap-port" className="form-control" type="number" value={ldap.port || 389}
                        onChange={e => setL('port', parseInt(e.target.value))} />
               </div>
             </div>
@@ -528,38 +528,38 @@ export default function Settings() {
               Użyj SSL (LDAPS, port 636)
             </label>
             <div className="form-group">
-              <label className="form-label">Kontener bazowy (Base DN)</label>
-              <input aria-label="Kontener bazowy (Base DN)" className="form-control" value={ldap.base_dn || ''}
+              <label className="form-label" htmlFor="set-ldap-base">Kontener bazowy (Base DN)</label>
+              <input id="set-ldap-base" className="form-control" value={ldap.base_dn || ''}
                      onChange={e => setL('base_dn', e.target.value)}
                      placeholder="DC=firma,DC=local" />
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label className="form-label">Konto usługowe (Bind DN)</label>
-                <input aria-label="Konto usługowe (Bind DN)" className="form-control" value={ldap.bind_dn || ''}
+                <label className="form-label" htmlFor="set-ldap-bind">Konto usługowe (Bind DN)</label>
+                <input id="set-ldap-bind" className="form-control" value={ldap.bind_dn || ''}
                        onChange={e => setL('bind_dn', e.target.value)}
                        placeholder="CN=svc-szup,OU=Service,DC=firma,DC=local" />
               </div>
               <div className="form-group">
-                <label className="form-label">
+                <label className="form-label" htmlFor="set-ldap-pass">
                   Hasło konta usługowego
                   {ldap.has_bind_password && <span className="badge badge--neutral" style={{ fontSize: 10, marginLeft: 6 }}>Ustawione</span>}
                 </label>
-                <input aria-label="Hasło konta usługowego" className="form-control" type="password" value={ldapBindPassword}
+                <input id="set-ldap-pass" className="form-control" type="password" value={ldapBindPassword}
                        onChange={e => setLdapBindPassword(e.target.value)}
                        placeholder={ldap.has_bind_password ? 'Pozostaw puste, by nie zmieniać' : ''}
                        autoComplete="new-password" />
               </div>
             </div>
             <div className="form-group">
-              <label className="form-label">Baza wyszukiwania użytkowników (opcjonalnie)</label>
-              <input aria-label="Baza wyszukiwania użytkowników (opcjonalnie)" className="form-control" value={ldap.user_search_base || ''}
+              <label className="form-label" htmlFor="set-ldap-usersbase">Baza wyszukiwania użytkowników (opcjonalnie)</label>
+              <input id="set-ldap-usersbase" className="form-control" value={ldap.user_search_base || ''}
                      onChange={e => setL('user_search_base', e.target.value)}
                      placeholder="OU=Users,DC=firma,DC=local (domyślnie: Base DN)" />
             </div>
             <div className="form-group">
-              <label className="form-label">Filtr użytkownika</label>
-              <input aria-label="Filtr użytkownika" className="form-control" value={ldap.user_filter || ''}
+              <label className="form-label" htmlFor="set-ldap-filter">Filtr użytkownika</label>
+              <input id="set-ldap-filter" className="form-control" value={ldap.user_filter || ''}
                      onChange={e => setL('user_filter', e.target.value)} />
               <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
                 {'{username}'} zostanie zastąpione loginem wpisanym przez użytkownika
@@ -688,19 +688,19 @@ function FactoryResetSection() {
         {row('wipe_structure', 'Struktura organizacyjna', 'Jednostki, wydziały, zastępcy, przypisania jednostek HR')}
         {row('wipe_users', 'Użytkownicy', 'Wszystkie konta OPRÓCZ Twojego (wymaga czyszczenia wniosków)')}
         {row('wipe_software', 'Rejestr oprogramowania', 'Systemy i ich uprawnienia (wymaga czyszczenia wniosków)')}
-        {row('wipe_audit', 'Audit log i zdarzenia bezpieczeństwa', 'Historia audytowa — usuwaj tylko świadomie')}
+        {row('wipe_audit', 'Dziennik zdarzeń i zdarzenia bezpieczeństwa', 'Historia audytowa — usuwaj tylko świadomie')}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
         <div className="form-group" style={{ margin: 0 }}>
-          <label className="form-label">Twoje hasło</label>
-          <input aria-label="Twoje hasło" className="form-control" type="password" value={password}
+          <label className="form-label" htmlFor="set-reset-pass">Twoje hasło</label>
+          <input id="set-reset-pass" className="form-control" type="password" value={password}
                  autoComplete="current-password"
                  onChange={e => setPassword(e.target.value)} />
         </div>
         <div className="form-group" style={{ margin: 0 }}>
-          <label className="form-label">Wpisz: RESET</label>
-          <input aria-label="Wpisz: RESET" className="form-control" value={confirm}
+          <label className="form-label" htmlFor="set-reset-confirm">Wpisz: RESET</label>
+          <input id="set-reset-confirm" className="form-control" value={confirm}
                  onChange={e => setConfirm(e.target.value)} placeholder="RESET" />
         </div>
       </div>
@@ -719,7 +719,7 @@ function FactoryResetSection() {
         </div>
       )}
 
-      <button className="btn" style={{ background: 'var(--color-error)', color: '#fff' }}
+      <button type="button" className="btn btn--danger"
               onClick={doReset} disabled={busy}>
         {busy ? 'Czyszczenie…' : 'Przywróć ustawienia fabryczne'}
       </button>
@@ -758,6 +758,7 @@ function NotificationsSection() {
 }
 
 function TplEditor({ tpl, onSaved }) {
+  const fid = useId()   // id pól formularza (etykiety htmlFor)
   const [subject, setSubject] = useState(tpl.subject || '')
   const [body, setBody]       = useState(tpl.body || '')
   const [enabled, setEnabled] = useState(tpl.enabled !== false)
@@ -830,14 +831,14 @@ function TplEditor({ tpl, onSaved }) {
             Wysyłaj to powiadomienie
           </label>
           <div className="form-group">
-            <label className="form-label">Temat</label>
-            <input aria-label="Temat" ref={subjectRef} className="form-control" value={subject}
+            <label className="form-label" htmlFor={`${fid}-subject`}>Temat</label>
+            <input id={`${fid}-subject`} ref={subjectRef} className="form-control" value={subject}
                    onFocus={() => { activeRef.current = 'subject' }}
                    onChange={e => setSubject(e.target.value)} />
           </div>
           <div className="form-group">
-            <label className="form-label">Treść</label>
-            <textarea aria-label="Treść" ref={bodyRef} className="form-control" style={{ minHeight: 160, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+            <label className="form-label" htmlFor={`${fid}-body`}>Treść</label>
+            <textarea id={`${fid}-body`} ref={bodyRef} className="form-control" style={{ minHeight: 160, fontFamily: 'var(--font-mono)', fontSize: 12 }}
                       value={body}
                       onFocus={() => { activeRef.current = 'body' }}
                       onChange={e => setBody(e.target.value)} />

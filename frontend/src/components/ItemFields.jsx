@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { promptDialog } from './ui/feedback'
 
 /**
@@ -13,8 +13,12 @@ import { promptDialog } from './ui/feedback'
  * i nadawania od nowa. Przy pozycjach odbieranych nie ma jej wcale.
  */
 export default function PermInput({ input, name, show, values, onChange, compact = false }) {
+  const uid = useId()   // przed wczesnym return (reguła hooków)
   const type = input?.type || 'none'
   if (!show || type === 'none') return null
+  // Nazwa dostępna pola: podpowiedź (prompt), a bez niej nazwa uprawnienia.
+  const promptId = `${uid}-prompt`
+  const named = input?.prompt ? { 'aria-labelledby': promptId } : { 'aria-label': name }
   const fs = compact ? 12 : 13
   const opts = input?.options || []
   const val = values?.[name] ?? ''
@@ -28,7 +32,7 @@ export default function PermInput({ input, name, show, values, onChange, compact
     }}>
       {/* Co wpisać/wybrać — najpierw podpowiedź (prompt), potem ewentualny opis. */}
       {input?.prompt && (
-        <div style={{ fontSize: 12, color: 'var(--color-heading)', fontWeight: 600, marginBottom: 3 }}>
+        <div id={promptId} style={{ fontSize: 12, color: 'var(--color-heading)', fontWeight: 600, marginBottom: 3 }}>
           {input.prompt}
         </div>
       )}
@@ -38,31 +42,31 @@ export default function PermInput({ input, name, show, values, onChange, compact
         </div>
       )}
       {type === 'multiselect' ? (
-        <MultiSelect options={opts} value={val} onChange={set} fontSize={fs} />
+        <MultiSelect options={opts} value={val} onChange={set} fontSize={fs} named={named} />
       ) : type === 'radio' ? (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px' }}>
+        <div role="radiogroup" {...named} style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px' }}>
           {opts.map(o => (
             <label key={o} style={{
               display: 'flex', alignItems: 'center', gap: 5,
               fontSize: fs, cursor: 'pointer', userSelect: 'none',
             }}>
-              <input type="radio" checked={val === o} onChange={() => set(o)} />
+              <input type="radio" name={`${uid}-radio`} value={o} checked={val === o} onChange={() => set(o)} />
               {o}
             </label>
           ))}
         </div>
       ) : type === 'select' ? (
-        <select className="form-control" style={{ fontSize: fs }}
+        <select className="form-control" style={{ fontSize: fs }} {...named}
                 value={val} onChange={e => set(e.target.value)}>
           <option value="">— wybierz —</option>
           {opts.map(o => <option key={o} value={o}>{o}</option>)}
         </select>
       ) : type === 'textarea' ? (
-        <textarea className="form-control" style={{ fontSize: fs, minHeight: 60 }}
+        <textarea className="form-control" style={{ fontSize: fs, minHeight: 60 }} {...named}
                   placeholder={input?.prompt || ''}
                   value={val} onChange={e => set(e.target.value)} />
       ) : (
-        <input className="form-control" style={{ fontSize: fs }}
+        <input className="form-control" style={{ fontSize: fs }} {...named}
                placeholder={input?.prompt || ''}
                value={val} onChange={e => set(e.target.value)} />
       )}
@@ -120,7 +124,7 @@ export function SystemBlock({
       }}>
         {showCheckbox && (
           <input ref={box} type="checkbox" checked={checked} onChange={onToggle}
-                 style={{ width: 18, height: 18, flexShrink: 0, accentColor: 'var(--color-heading)' }} />
+                 style={{ width: 18, height: 18, flexShrink: 0, accentColor: 'var(--color-selected)' }} />
         )}
         <span style={{ color: 'var(--color-text)' }}>{name}</span>
         <span style={{ flex: 1 }} />
@@ -160,7 +164,7 @@ export function SystemBlock({
  * Wartość jest tekstem rozdzielonym przecinkami (tak samo jak w bazie), więc
  * pole zachowuje się jak każde inne z punktu widzenia formularza i walidacji.
  */
-function MultiSelect({ options, value, onChange, fontSize }) {
+function MultiSelect({ options, value, onChange, fontSize, named }) {
   const picked = String(value || '')
     .split(',').map(s => s.trim()).filter(Boolean)
 
@@ -178,7 +182,7 @@ function MultiSelect({ options, value, onChange, fontSize }) {
     </div>
   }
   return (
-    <div style={{
+    <div role="group" {...named} style={{
       display: 'flex', flexWrap: 'wrap', gap: '4px 14px',
       border: '1px solid var(--color-border)', borderRadius: 4,
       padding: '6px 8px', background: 'var(--color-card)',
@@ -381,6 +385,7 @@ export function PermGroupSection({
           {searchable && count > 12 && (
             <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
               <input className="form-control" style={{ fontSize: fs, flex: 1 }}
+                     type="search" aria-label="Szukaj w grupie"
                      placeholder="Szukaj w grupie…"
                      value={query} onChange={e => onQuery(e.target.value)} />
             </div>

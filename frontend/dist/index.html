@@ -7,13 +7,17 @@
     <script>
       // prevent flash of wrong theme
       ;(function(){
-        var t = localStorage.getItem('szup_theme')
+        var t = null
+        try { t = localStorage.getItem('szup_theme') } catch (e) {}
         if (!t) t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
         document.documentElement.setAttribute('data-theme', t)
       })()
     </script>
-    <script type="module" crossorigin src="/assets/index-6Bil3EVd.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-Cv4FupSv.css">
+    <script type="module" crossorigin src="/assets/index-Cts8ZNlT.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/react-vendor-BEYT2QPY.js">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-BOeqtr82.js">
+    <link rel="modulepreload" crossorigin href="/assets/icons-in_MqhQh.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-C19WrtzF.css">
   </head>
   <body>
     <div id="root"></div>

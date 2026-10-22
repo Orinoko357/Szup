@@ -7,9 +7,9 @@ import {
 } from '../api'
 import { fmtDate, serverTs } from '../serverTime'
 import RequestViewShell, {
-  buildWorkflowSteps, Section, WorkerCard, deptFull, KindBadge, KindPill, perspectiveLabel, waitingText,
+  buildWorkflowSteps, Section, WorkerCard, deptFull, KindPill, perspectiveLabel, waitingText,
 } from '../components/RequestView'
-import { statusLabel, statusBadge, nodeLabel, kindLabel, daysSince, waitText } from '../labels'
+import { statusLabel, statusBadge, nodeLabel, kindLabel, daysSince, waitText, MANAGER_NODES } from '../labels'
 import { toast, confirmDialog } from '../components/ui/feedback'
 import { ReviewDialog, describeKeys, diffSelection } from '../components/ChangeSummary'
 import CopyFromColleague, { buildCopiedSelection } from '../components/CopyFromColleague'
@@ -24,7 +24,6 @@ import PermInput, {
   isScopeGated, missingScopeSystems,
 } from '../components/ItemFields'
 
-const MANAGER_NODES = ['select_permissions', 'manager_approve', 'higher_manager_approve']
 
 // Postęp realizacji pozycji NADANIA — do pokazania w „Moich wnioskach".
 function grantProgressOf(r) {
@@ -326,6 +325,9 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   const [busy, setBusy]       = useState(false)
   const [err, setErr]         = useState(null)
   const [loading, setLoading] = useState(isSelect)
+  // Błąd wczytania uprawnień pracownika — blokuje wysłanie wyboru: `select`
+  // z pustą listą usunąłby pozycje wpisane przez kadry (wniosek trafiłby pusty do IT).
+  const [loadErr, setLoadErr] = useState(null)
   // Migawka zaznaczenia po załadowaniu — do ostrzeżenia o niezapisanych zmianach.
   const initialSel = useRef(null)
   const selKey = () => JSON.stringify([[...picked].sort(), fieldValues])
@@ -412,8 +414,8 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           setHeldValues(heldVals)
           setFieldValues(fv)
         }
-      } catch {
-        if (alive) setErr('Nie udało się pobrać listy uprawnień')
+      } catch (ex) {
+        if (alive) setLoadErr(errorMessage(ex, 'Nie udało się pobrać listy uprawnień'))
       } finally {
         if (alive) setLoading(false)
       }
@@ -548,12 +550,23 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   async function sendAction(action, declaration = null) {
     const body = buildActionBody(action)
     if (declaration) body.declaration = declaration
+    // Pusty wybór na wniosku z pozycjami (np. wpisanymi przez kadry) usuwa je —
+    // backend wymaga wtedy świadomego potwierdzenia (allow_empty).
+    if (body.action === 'select' && body.items.length === 0 && (r.items || []).length > 0) {
+      if (!(await confirmDialog({
+        title: 'Wysłać wniosek bez uprawnień?',
+        message: 'Nie zaznaczono żadnych uprawnień, a wniosek zawiera pozycje wpisane wcześniej. '
+          + 'Zatwierdzenie usunie je z wniosku.',
+        confirmLabel: 'Wyślij bez pozycji', danger: true,
+      }))) { setBusy(false); return }
+      body.allow_empty = true
+    }
     try {
       await workflowAction(r.id, body)
       toast(action === 'reject'
         ? `Odrzucono wniosek #${r.id}.`
         : isSelect
-          ? (twoStage ? `Wybór wysłany do akceptacji kierownika wyższego rzędu (#${r.id}).`
+          ? (twoStage ? `Wybór wysłany do akceptacji kierownika nadrzędnego (#${r.id}).`
                       : `Wybór zatwierdzony — wniosek #${r.id} trafił do realizacji przez IT.`)
           : `Zatwierdzono wniosek #${r.id}.`)
       setReviewOpen(false)
@@ -606,6 +619,10 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       await sendAction('reject')
       return
     }
+    if (isSelect && action === 'approve' && (loading || loadErr)) {
+      setErr(loadErr || 'Poczekaj na wczytanie uprawnień pracownika.')
+      return
+    }
     if (isSelect && action === 'approve' && !isRevoke) {
       const noScope = missingScopeSystems(systems, openSys, picked, permsBySys)
       if (noScope.length) {
@@ -623,6 +640,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
 
   // Ostateczne wysłanie z okna podsumowania (po potwierdzeniu uprawnień admina).
   async function confirmFromReview() {
+    if (loadErr) { setErr(loadErr); setReviewOpen(false); return }
     if (!isRevoke) {
       // Nadanie uprawnień administracyjnych wymaga twardego potwierdzenia.
       const admins = adminGrantNames([...toGrant, ...scopeChanged], systems, permsBySys)
@@ -634,11 +652,18 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
 
   // Kopiowanie uprawnień od współpracownika → nowy stan docelowy.
   function copyFrom(perms) {
-    const res = buildCopiedSelection(perms, permsBySys, picked, fieldValues)
+    // Nie cofamy zaplanowanych odebrań: odznaczonych posiadanych (`held`)
+    // ani pozycji oznaczonych we wniosku jako „revoke”.
+    const revoked = new Set(
+      (r.items || []).filter(it => (it.kind || 'grant') === 'revoke')
+        .map(it => `${it.system_id}:${it.permission_id}`)
+    )
+    const res = buildCopiedSelection(perms, permsBySys, picked, fieldValues, { held, revoked })
     setPicked(res.keys)
     setFieldValues(res.values)
     if (res.added) setPermFilter('changes')
-    return { count: res.added, skippedAdmin: res.skippedAdmin, skippedUnavailable: res.skippedUnavailable }
+    return { count: res.added, skippedAdmin: res.skippedAdmin,
+             skippedUnavailable: res.skippedUnavailable, skippedRevoke: res.skippedRevoke }
   }
 
   // Wiersze podsumowania.
@@ -700,7 +725,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
         )}
         {isSelect && (
           <button className="btn btn--success" onClick={() => submit('approve')}
-                  disabled={busy || loading || (isRevoke
+                  disabled={busy || loading || !!loadErr || (isRevoke
                     ? picked.size === 0
                     : (toGrant.length === 0 && toRevoke.length === 0 && scopeChanged.length === 0))}>
             <Check size={14} /> Sprawdź i wyślij
@@ -762,8 +787,8 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
               <div role="note" className={`alert ${twoStage ? 'alert--info' : 'alert--success'}`}
                    style={{ fontSize: 13, marginBottom: 12, border: 'none', borderRadius: 8, padding: '10px 14px' }}>
                 {twoStage
-                  ? 'Ścieżka dwustopniowa: po zatwierdzeniu wniosek trafi do akceptacji kierownika wyższego rzędu, a dopiero potem do realizacji przez IT.'
-                  : 'Ścieżka jednostopniowa: po zatwierdzeniu wniosek trafi bezpośrednio do realizacji przez IT (bez akceptacji wyższego rzędu).'}
+                  ? 'Ścieżka dwustopniowa: po zatwierdzeniu wniosek trafi do akceptacji kierownika nadrzędnego, a dopiero potem do realizacji przez IT.'
+                  : 'Ścieżka jednostopniowa: po zatwierdzeniu wniosek trafi bezpośrednio do realizacji przez IT (bez akceptacji wyższej).'}
               </div>
 
               {/* Pasek filtrów + szukajka (jak w projekcie) — tylko ścieżka nadania. */}
@@ -791,6 +816,11 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
 
               {loading ? (
                 <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie uprawnień…</div>
+              ) : loadErr ? (
+                <div className="alert alert--error" role="alert">
+                  {loadErr} Wysłanie wyboru jest zablokowane — zamknij i otwórz wniosek ponownie
+                  albo zgłoś problem administratorowi.
+                </div>
               ) : isRevoke ? (
                 revokeList.length === 0 ? (
                   <div className="alert alert--warning">
@@ -993,8 +1023,8 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           {(isSelect || isDecision) && (
             <Section n={sec()} title="Uwagi" note="opcjonalne">
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">{isSelect ? 'Informacja dla IT' : 'Komentarz · widoczny w historii'}</label>
-                <textarea className="form-control" style={{ minHeight: 70 }}
+                <label className="form-label" htmlFor="mgr-comment">{isSelect ? 'Informacja dla IT' : 'Komentarz · widoczny w historii'}</label>
+                <textarea id="mgr-comment" className="form-control" style={{ minHeight: 70 }}
                           value={comment} onChange={e => setComment(e.target.value)} />
               </div>
             </Section>
@@ -1011,7 +1041,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
         target={isRevoke
           ? 'Po wysłaniu wniosek trafi do realizacji (odebranie uprawnień).'
           : twoStage
-            ? 'Po wysłaniu wniosek trafi do akceptacji kierownika wyższego rzędu, potem do IT.'
+            ? 'Po wysłaniu wniosek trafi do akceptacji kierownika nadrzędnego, potem do IT.'
             : 'Po wysłaniu wniosek trafi bezpośrednio do realizacji przez IT.'}
         confirmLabel={twoStage && !isRevoke ? 'Wyślij do akceptacji' : 'Zatwierdź i przekaż do realizacji'}
         busy={busy}

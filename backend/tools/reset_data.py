@@ -58,11 +58,6 @@ TABLES_TO_WIPE = [
     "securityevent",
 ]
 
-# Triggery append-only na auditlog — trzeba je ściągnąć żeby móc wyczyścić
-# tabelę. Zostaną ponownie utworzone przy starcie backendu (init_db()).
-AUDITLOG_TRIGGERS = ["auditlog_no_update", "auditlog_no_delete"]
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Wyczyść bazę SZUP zachowując użytkowników i ustawienia aplikacji."
@@ -74,7 +69,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # ------------------------------------------------------------------ import
-    from database import engine, _DB_URL
+    from database import _DB_URL, drop_auditlog_triggers, engine
     from sqlalchemy import text
 
     print(f"Baza danych : {_DB_URL}")
@@ -91,10 +86,10 @@ def main() -> None:
                 counts[table] = -1  # tabela nie istnieje lub inny błąd
 
     print("Stan bazy przed operacją:")
-    print(f"  ZACHOWANE:")
+    print("  ZACHOWANE:")
     print(f"    user                = {counts.get('user', 0)}")
     print(f"    appsettings         = {counts.get('appsettings', 0)}")
-    print(f"  DO WYCZYSZCZENIA:")
+    print("  DO WYCZYSZCZENIA:")
     for t in TABLES_TO_WIPE:
         n = counts.get(t, 0)
         if n < 0:
@@ -134,12 +129,10 @@ def main() -> None:
         # FK off — pozwala czyścić tabele w dowolnej kolejności.
         conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
 
-        # 1) Zdejmij append-only triggery z auditlog.
-        for trg in AUDITLOG_TRIGGERS:
-            try:
-                conn.execute(text(f'DROP TRIGGER IF EXISTS "{trg}"'))
-            except Exception as exc:
-                print(f"[!] Nie udało się usunąć triggera {trg}: {exc}")
+        # 1) Zdejmij append-only triggery z auditlog. Zostaną ponownie
+        #    utworzone przy starcie backendu (init_db()).
+        for trg, exc in drop_auditlog_triggers(conn):
+            print(f"[!] Nie udało się usunąć triggera {trg}: {exc}")
 
         # 2) Wyczyść tabele.
         for table in TABLES_TO_WIPE:

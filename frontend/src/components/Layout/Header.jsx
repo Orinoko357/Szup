@@ -1,10 +1,10 @@
 import { LogOut, KeyRound, Menu } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { logout as apiLogout, changePassword } from '../../api'
+import { logout as apiLogout, changePassword, errorMessage } from '../../api'
 import { toast } from '../ui/feedback'
 import GlobalSearch from '../GlobalSearch'
-import { getCurrentUser, getUserRoles } from '../../roles'
+import { getCurrentUser, getUserRoles, clearSession } from '../../roles'
 import { ROLE_LABEL } from '../../labels'
 import { setNavOpen } from './Sidebar'
 
@@ -27,8 +27,7 @@ export default function Header() {
 
   async function handleLogout() {
     try { await apiLogout() } catch { /* ignore */ }
-    localStorage.removeItem('szup_token')
-    localStorage.removeItem('szup_user')
+    clearSession()
     navigate('/login')
   }
 
@@ -81,6 +80,9 @@ function ChangePasswordModal({ onClose, forced = false }) {
   const [next2, setNext2]     = useState('')
   const [err, setErr]         = useState(null)
   const [busy, setBusy]       = useState(false)
+  // Hasło wygasłe (a nie nadane przez administratora) — backend wymaga
+  // podania obecnego hasła także w trybie wymuszonym.
+  const askCurrent = !forced || !!getCurrentUser().password_expired
 
   async function submit(e) {
     e.preventDefault()
@@ -88,13 +90,14 @@ function ChangePasswordModal({ onClose, forced = false }) {
     if (next !== next2) { setErr('Hasła nie są identyczne'); return }
     setBusy(true)
     try {
-      await changePassword({ current_password: forced ? undefined : current, new_password: next })
-      localStorage.removeItem('szup_token')
-      localStorage.removeItem('szup_user')
+      await changePassword({ current_password: askCurrent ? current : undefined, new_password: next })
+      // Wyczyszczenie sesji usuwa też flagę must_change_password — po ponownym
+      // logowaniu backend zwróci jej aktualny stan.
+      clearSession()
       toast('Hasło zostało zmienione. Zaloguj się ponownie.')
       setTimeout(() => { window.location.href = '/login' }, 1500)
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się zmienić hasła')
+      setErr(errorMessage(ex, 'Nie udało się zmienić hasła'))
       setBusy(false)
     }
   }
@@ -123,7 +126,7 @@ function ChangePasswordModal({ onClose, forced = false }) {
           )}
         </div>
         <form onSubmit={submit} style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {!forced && (
+          {askCurrent && (
             <label style={fieldLabel}>
               <span>Obecne hasło {req}</span>
               <input type="password" required autoComplete="current-password" style={input}

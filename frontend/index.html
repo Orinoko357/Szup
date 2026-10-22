@@ -7,7 +7,8 @@
     <script>
       // prevent flash of wrong theme
       ;(function(){
-        var t = localStorage.getItem('szup_theme')
+        var t = null
+        try { t = localStorage.getItem('szup_theme') } catch (e) {}
         if (!t) t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
         document.documentElement.setAttribute('data-theme', t)
       })()

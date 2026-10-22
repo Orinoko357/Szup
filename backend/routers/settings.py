@@ -20,6 +20,38 @@ from services.permissions import require_admin, require_superadmin
 router = APIRouter()
 
 
+def _settings_changed(session: Session, request: Request, user: User, *, kind: str,
+                      changed: list[str], severity: SecuritySeverity,
+                      summary: str, extra: Optional[dict] = None) -> None:
+    """Zmiana ustawień integracji (LDAP / SMTP) → wpis w audit logu + zdarzenie
+    bezpieczeństwa. Zapisujemy WYŁĄCZNIE nazwy zmienionych pól i nie-tajne
+    wartości — nigdy haseł (bind/SMTP), także zaszyfrowanych."""
+    if not changed:
+        return
+    from services.audit import record_event, request_meta
+    from services.security_events import emit as emit_security_event
+    meta = request_meta(request)
+    details = {"changed": changed, **(extra or {})}
+    record_event(session, action=f"settings.{kind}.updated", user_id=user.id,
+                 username=user.username, target_type="settings", target_id=kind,
+                 ip=meta["ip"], user_agent=meta["user_agent"], details=details)
+    emit_security_event(
+        session, event_type=f"settings.{kind}", source="settings", severity=severity,
+        summary=f"{summary} przez {user.username}", details=details,
+        user_id=user.id, ip=meta["ip"],
+    )
+
+
+def _apply_fields(cfg, values: dict) -> list[str]:
+    """Przypisz pola i zwróć nazwy tych, które faktycznie się zmieniły."""
+    changed = []
+    for field, value in values.items():
+        if getattr(cfg, field, None) != value:
+            setattr(cfg, field, value)
+            changed.append(field)
+    return changed
+
+
 # Domyślna treść oświadczenia wnioskującego. Nadpisywalna w Ustawieniach
 # (AppSettings.declaration_text); zmiana NIE działa wstecz — każde złożone
 # oświadczenie zamraża własną kopię.
@@ -122,7 +154,8 @@ def get_email(
 @router.put("/email", response_model=EmailSettingsRead)
 def update_email(
     data: EmailSettingsSchema,
-    _: User = Depends(require_admin),
+    request: Request,
+    current_user: User = Depends(require_admin),
     session: Session = Depends(get_session),
 ):
     from services.crypto import encrypt
@@ -130,18 +163,21 @@ def update_email(
     if not cfg:
         cfg = EmailSettings()
 
-    cfg.enabled      = data.enabled
-    cfg.smtp_host    = data.smtp_host
-    cfg.smtp_port    = data.smtp_port
-    cfg.smtp_user    = data.smtp_user
-    cfg.from_address = data.from_address
-    cfg.to_address   = data.to_address
-    cfg.use_tls      = data.use_tls
-    cfg.sender_as_actor = data.sender_as_actor
+    changed = _apply_fields(cfg, {
+        "enabled": data.enabled, "smtp_host": data.smtp_host, "smtp_port": data.smtp_port,
+        "smtp_user": data.smtp_user, "from_address": data.from_address,
+        "to_address": data.to_address, "use_tls": data.use_tls,
+        "sender_as_actor": data.sender_as_actor,
+    })
     if data.smtp_password is not None:
         cfg.smtp_password_enc = encrypt(data.smtp_password) if data.smtp_password else ""
+        changed.append("smtp_password")
 
     session.add(cfg); session.commit(); session.refresh(cfg)
+    _settings_changed(session, request, current_user, kind="email", changed=changed,
+                      severity=SecuritySeverity.medium,
+                      summary="Zmieniono ustawienia SMTP",
+                      extra={"smtp_host": cfg.smtp_host, "enabled": cfg.enabled})
     return _email_read(cfg)
 
 
@@ -345,7 +381,10 @@ def get_ldap(
 @router.put("/ldap", response_model=LdapSettingsRead)
 def update_ldap(
     data: LdapSettingsSchema,
-    _: User = Depends(require_admin),
+    request: Request,
+    # Konfiguracja LDAP decyduje, KTO może się zalogować (serwer uwierzytelniający,
+    # konto usługowe, SSO) — zmiana wyłącznie przez superadmina.
+    current_user: User = Depends(require_superadmin),
     session: Session = Depends(get_session),
 ):
     from services.crypto import encrypt
@@ -353,20 +392,22 @@ def update_ldap(
     if not cfg:
         cfg = LdapSettings()
 
-    cfg.enabled          = data.enabled
-    cfg.host             = data.host
-    cfg.port             = data.port
-    cfg.use_ssl          = data.use_ssl
-    cfg.base_dn          = data.base_dn
-    cfg.bind_dn          = data.bind_dn
-    cfg.user_search_base = data.user_search_base
-    cfg.user_filter      = data.user_filter
-    cfg.sso_enabled      = data.sso_enabled
-    cfg.sso_auto         = data.sso_auto
+    changed = _apply_fields(cfg, {
+        "enabled": data.enabled, "host": data.host, "port": data.port,
+        "use_ssl": data.use_ssl, "base_dn": data.base_dn, "bind_dn": data.bind_dn,
+        "user_search_base": data.user_search_base, "user_filter": data.user_filter,
+        "sso_enabled": data.sso_enabled, "sso_auto": data.sso_auto,
+    })
     if data.bind_password is not None:
         cfg.bind_password_enc = encrypt(data.bind_password) if data.bind_password else None
+        changed.append("bind_password")
 
     session.add(cfg); session.commit(); session.refresh(cfg)
+    _settings_changed(session, request, current_user, kind="ldap", changed=changed,
+                      severity=SecuritySeverity.high,
+                      summary="Zmieniono ustawienia LDAP/AD",
+                      extra={"host": cfg.host, "enabled": cfg.enabled,
+                             "sso_enabled": bool(cfg.sso_enabled)})
     return _ldap_read(cfg)
 
 
@@ -658,13 +699,10 @@ def factory_reset(
         _wipe("unit")
 
     # 5) Audyt / zdarzenia bezpieczeństwa (append-only triggery trzeba zdjąć;
-    #    init_db() odtworzy je przy następnym starcie backendu).
+    #    odtwarzamy je zaraz po commicie, niżej).
     if data.wipe_audit:
-        for trg in ("auditlog_no_update", "auditlog_no_delete"):
-            try:
-                session.exec(text(f'DROP TRIGGER IF EXISTS "{trg}"'))
-            except Exception:
-                pass
+        from database import drop_auditlog_triggers
+        drop_auditlog_triggers(session)
         _wipe("auditlog")
         _wipe("securityevent")
 
@@ -719,7 +757,6 @@ def config_health(
                         parse_roles)
     from sqlalchemy import func
     from models import WorkflowStep
-    from services.permissions import effective_manager_dept
     from services.email_alerts import HELPDESK_EMAIL
 
     ldap = session.exec(select(LdapSettings)).first()
@@ -733,12 +770,44 @@ def config_health(
     ).all())
 
     active_depts = [d for d in depts if d.is_active and d.unit_id in active_unit_ids]
+    dept_by_id = {d.id: d for d in depts}
+
+    def _active_mgr(uid) -> bool:
+        # Obsadę liczymy tylko dla AKTYWNEGO kierownika — nieaktywny nikogo
+        # nie obsłuży (nie zaloguje się, nie dostaje e-maili).
+        return bool(uid) and uid not in inactive_user_ids
+
+    def _responsible_active(d):
+        """Jak `effective_manager_dept`, ale nieaktywny kierownik = brak kierownika."""
+        seen: set[int] = set()
+        cur = d
+        while cur and cur.id not in seen:
+            seen.add(cur.id)
+            if getattr(cur, "kind", None) != "standalone" and _active_mgr(cur.manager_user_id):
+                return cur
+            cur = dept_by_id.get(cur.parent_dept_id) if cur.parent_dept_id else None
+        return None
+
+    unit_mgr_ok = {u.id for u in units if _active_mgr(u.manager_user_id)}
     # Komórka bez kierownika jest problemem tylko wtedy, gdy NIKT wyżej za nią
     # nie odpowiada — inaczej obieg przejmuje najbliższy kierownik wyżej.
     # Bez BEZPOŚREDNIEGO kierownika (to pokazuje filtr /units?filter=no_manager).
     no_direct_manager = [d for d in active_depts
                          if getattr(d, "kind", "department") != "standalone" and not d.manager_user_id]
-    no_manager = [d for d in no_direct_manager if effective_manager_dept(session, d) is None]
+    no_manager = [d for d in active_depts
+                  if getattr(d, "kind", "department") != "standalone"
+                  and _responsible_active(d) is None]
+    # Samodzielne stanowiska bez nikogo odpowiedzialnego wyżej (kierownik
+    # komórki nadrzędnej) — wniosek pracownika takiego stanowiska nie ma adresata.
+    standalone_orphans = [d for d in active_depts
+                          if getattr(d, "kind", None) == "standalone"
+                          and _responsible_active(d) is None]
+    # Komórki najwyższego poziomu z akceptacją wyższego rzędu: krok „kierownik
+    # wyższego rzędu” obsłuży tylko dyrektor jednostki — gdy go brak (lub jest
+    # nieaktywny), krok nie ma adresata i wniosek utknie.
+    higher_no_addressee = [d for d in active_depts
+                           if d.requires_higher_approval and not d.parent_dept_id
+                           and d.unit_id not in unit_mgr_ok]
     inactive_mgr = [d for d in active_depts
                     if d.manager_user_id and d.manager_user_id in inactive_user_ids]
 
@@ -784,12 +853,40 @@ def config_health(
          "ok": bool(email and email.enabled and (email.smtp_host or "").strip()),
          "detail": (email.smtp_host if email and email.smtp_host else "Brak serwera SMTP lub wyłączone"),
          "link": "/settings"},
+        {"key": "standalone_posts", "label": "Samodzielne stanowiska mają przełożonego",
+         "ok": not standalone_orphans,
+         "detail": ("Każde samodzielne stanowisko ma aktywnego kierownika wyżej" if not standalone_orphans
+                    else "Bez przełożonego: " + ", ".join(d.name for d in standalone_orphans[:5])
+                    + (f" (+{len(standalone_orphans) - 5})" if len(standalone_orphans) > 5 else "")),
+         "link": "/units"},
+        {"key": "higher_approval", "label": "Akceptacja wyższego rzędu ma adresata",
+         "ok": not higher_no_addressee,
+         "detail": ("Każda komórka z akceptacją wyższego rzędu ma przełożonego" if not higher_no_addressee
+                    else "Komórki najwyższego poziomu bez dyrektora jednostki: "
+                    + ", ".join(d.name for d in higher_no_addressee[:5])
+                    + (f" (+{len(higher_no_addressee) - 5})" if len(higher_no_addressee) > 5 else "")),
+         "link": "/units"},
         {"key": "helpdesk", "label": "Adres helpdesku IT",
          "ok": bool(helpdesk or HELPDESK_EMAIL),
          "detail": (f"{helpdesk} (ustawiony)" if helpdesk
                     else f"{HELPDESK_EMAIL} (domyślny z konfiguracji)"),
          "link": "/settings"},
     ]
+
+    # SSO bez sekretu proxy — backend odrzuci każde logowanie SSO (sekret jest
+    # obowiązkowy). Pokazujemy tylko, gdy SSO jest włączone w ustawieniach.
+    if ldap and ldap.enabled and getattr(ldap, "sso_enabled", False):
+        from routers.auth import sso_proxy_secret
+        has_secret = bool(sso_proxy_secret())
+        checks.append({
+            "key": "sso_secret", "label": "SSO bez sekretu proxy" if not has_secret
+                     else "SSO: sekret proxy skonfigurowany",
+            "ok": has_secret,
+            "detail": ("Ustaw SZUP_SSO_PROXY_SECRET (deploy/enable-sso.sh) i zrestartuj usługę — "
+                       "do tego czasu logowanie SSO jest odrzucane" if not has_secret
+                       else "Nagłówek X-SSO-Proxy-Secret jest weryfikowany"),
+            "link": "/settings",
+        })
 
     # Użytkownicy bez komórki — pomijamy nieaktywnych i konta czysto administracyjne.
     admin_only = {"admin", "superadmin"}

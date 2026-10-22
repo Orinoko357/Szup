@@ -4,25 +4,12 @@ import { listSecurityEvents, securityEventsSummary, resolveSecurityEvent, errorM
 import { fmtDateTime } from '../serverTime'
 import { toast, promptDialog } from '../components/ui/feedback'
 import { SEVERITY_LABEL } from '../labels'
+import Segmented from '../components/ui/Segmented'
 
-const SEV_COLOR = {
-  low:      'var(--color-text-muted)',
-  medium:   'var(--color-info)',
-  high:     'var(--color-warning)',
-  critical: 'var(--color-error)',
-}
-// v3.0: polski opis istotności obok klucza z backendu.
-// Odznaka istotności (tło / tekst) — zgodna z paletą odznak.
-const SEV_BADGE = {
-  low:      ['var(--color-neutral-bg)', 'var(--color-neutral-text)'],
-  medium:   ['var(--color-info-bg)',    'var(--color-info-text)'],
-  high:     ['var(--color-warning-bg)', 'var(--color-warning-text)'],
-  critical: ['var(--color-error-bg)',   'var(--color-error-text)'],
-}
-const tileStyle = (top) => ({
-  background: 'var(--color-card)', border: '1px solid var(--color-border)', borderTop: `3px solid ${top}`,
-  borderRadius: 10, padding: '12px 14px',
-})
+// Kolory istotności jako klasy z theme.css (.badge--sev-*, .stat-tile--sev-*)
+// zamiast lokalnych słowników kolorów.
+const SEVERITIES = ['low', 'medium', 'high', 'critical']
+const sevKey = (sev) => (SEVERITIES.includes(sev) ? sev : 'low')
 const TILE_LBL = { display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.07em',
                    textTransform: 'uppercase', color: 'var(--color-text-muted)' }
 const TILE_VAL = { display: 'block', fontSize: 28, fontWeight: 800, color: 'var(--color-heading)', lineHeight: 1.25 }
@@ -43,7 +30,7 @@ export default function SecurityEvents() {
       setRows(a.data)
       setSum(s.data)
     } catch (ex) {
-      setErr(errorMessage(ex, 'Błąd odczytu'))
+      setErr(errorMessage(ex, 'Nie udało się wczytać zdarzeń bezpieczeństwa'))
     } finally {
       setLoading(false)
     }
@@ -58,7 +45,7 @@ export default function SecurityEvents() {
     })
     if (note === null) return   // Anuluj
     try { await resolveSecurityEvent(id, note); load(); toast('Zdarzenie oznaczone jako rozwiązane') }
-    catch (ex) { toast(errorMessage(ex, 'Błąd'), { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Nie udało się oznaczyć zdarzenia'), { tone: 'error' }) }
   }
 
   return (
@@ -74,13 +61,13 @@ export default function SecurityEvents() {
 
       {sum && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 18 }}>
-          <div style={tileStyle('var(--color-navy)')}>
+          <div className="stat-tile">
             <span style={TILE_LBL}>Otwarte</span>
             <span style={TILE_VAL}>{sum.open_total}</span>
             <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>wymagają reakcji</span>
           </div>
           {Object.entries(sum.open_by_severity || {}).map(([sev, n]) => (
-            <div key={sev} style={tileStyle(SEV_COLOR[sev])}>
+            <div key={sev} className={`stat-tile stat-tile--sev-${sevKey(sev)}`}>
               <span style={TILE_LBL}>{sev}</span>
               <span style={TILE_VAL}>{n}</span>
               <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>{SEVERITY_LABEL[sev] || ''}</span>
@@ -89,16 +76,14 @@ export default function SecurityEvents() {
         </div>
       )}
 
-      {err && <div className="alert alert--error mb-4">{err}</div>}
+      {err && <div className="alert alert--error mb-4" role="alert">{err}</div>}
 
       <section aria-label="Zdarzenia" className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, padding: '10px 18px',
                       borderBottom: '1px solid var(--color-border)' }}>
-          <label className="form-check" style={{ minHeight: 44, fontSize: 14 }}>
-            <input type="checkbox" checked={onlyOpen} onChange={e => setOnlyOpen(e.target.checked)}
-                   style={{ width: 18, height: 18 }} />
-            Tylko nierozwiązane
-          </label>
+          <Segmented ariaLabel="Filtr zdarzeń" value={onlyOpen ? 'open' : 'all'}
+                     onChange={v => setOnlyOpen(v === 'open')}
+                     options={[{ value: 'all', label: 'Wszystkie' }, { value: 'open', label: 'Nierozwiązane' }]} />
           <div style={{ flex: 1 }} />
           <button className="btn btn--ghost btn--sm" onClick={load} disabled={loading}>
             <RefreshCw size={13} /> Odśwież
@@ -108,7 +93,7 @@ export default function SecurityEvents() {
           <table className="data-table" style={{ minWidth: 1000 }}>
             <thead>
               <tr>
-                <th>Data</th><th>Typ</th><th>Istotność</th><th>Opis</th><th>IP</th><th>Status</th><th></th>
+                <th>Data</th><th>Typ</th><th>Istotność</th><th>Opis</th><th>IP</th><th>Status</th><th><span className="sr-only">Akcje</span></th>
               </tr>
             </thead>
             <tbody>
@@ -119,7 +104,6 @@ export default function SecurityEvents() {
                 <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--color-text-muted)' }}>Brak zdarzeń</td></tr>
               )}
               {rows.map(r => {
-                const sb = SEV_BADGE[r.severity] || SEV_BADGE.low
                 return (
                   <tr key={r.id}>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, whiteSpace: 'nowrap' }}>
@@ -127,7 +111,7 @@ export default function SecurityEvents() {
                     </td>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-heading)' }}>{r.event_type}</td>
                     <td>
-                      <span className="badge" style={{ background: sb[0], color: sb[1] }}>
+                      <span className={`badge badge--sev-${sevKey(r.severity)}`}>
                         {SEVERITY_LABEL[r.severity] || r.severity}
                       </span>
                     </td>

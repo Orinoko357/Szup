@@ -97,7 +97,9 @@ apachectl configtest || { rm -f "$SSO_CONF"; fail "błąd konfiguracji Apache �
 systemctl reload apache2 && ok "Apache przeładowany"
 
 echo ""
-echo "WAŻNE: SZUP_SSO_PROXY_SECRET musi trafić do usługi szup. Jeśli szup.service"
+echo "WAŻNE: SZUP_SSO_PROXY_SECRET musi trafić do usługi szup — backend ODRZUCA"
+echo "logowanie SSO, gdy sekret jest pusty albo niezgodny z nagłówkiem z Apache."
+echo "Po zmianie zrestartuj usługę: systemctl restart szup. Jeśli szup.service"
 echo "nie czyta $ENV_FILE (EnvironmentFile), dopisz sekret ręcznie:"
 echo "  systemctl edit szup"
 echo "  [Service]"

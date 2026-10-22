@@ -56,8 +56,8 @@ class AuditMiddleware(BaseHTTPMiddleware):
                     except Exception:
                         pass
 
-            xff = request.headers.get("x-forwarded-for")
-            ip = xff.split(",")[0].strip() if xff else (request.client.host if request.client else None)
+            from services.audit import client_ip
+            ip = client_ip(request)
             action = f"api.{request.method.lower()}.{path[len('/api/'):]}"
 
             from services.audit import record_event_standalone

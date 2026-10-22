@@ -142,7 +142,7 @@ function CurrentRegistry() {
           {systems.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: 44, fontSize: 14, cursor: 'pointer' }}>
-          <input type="checkbox" style={{ width: 18, height: 18, accentColor: 'var(--color-navy)' }} checked={f.only_with_declaration}
+          <input type="checkbox" style={{ width: 18, height: 18, accentColor: 'var(--color-selected)' }} checked={f.only_with_declaration}
                  onChange={e => setF(x => ({ ...x, only_with_declaration: e.target.checked }))} />
           Tylko z oświadczeniem
         </label>

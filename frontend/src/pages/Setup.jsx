@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import WodsLogo from '../components/Layout/WodsLogo'
-import { setupAdmin } from '../api'
+import { setupAdmin, errorMessage } from '../api'
 import '../styles/login.css'
 
 export default function Setup({ onSetup }) {
@@ -27,7 +27,7 @@ export default function Setup({ onSetup }) {
       }))
       onSetup()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Błąd konfiguracji')
+      setErr(errorMessage(ex, 'Nie udało się utworzyć konta administratora'))
       setBusy(false)
     }
   }

@@ -28,7 +28,8 @@ _COMMON = ["{request_id}", "{worker_name}", "{dept_name}", "{unit_name}",
 EVENTS: dict[str, dict] = {
     "selector_new_request": {
         "label": "Nowy wniosek — wybór uprawnień (kierownik komórki)",
-        "description": "Trafia do kierownika, który ma wskazać uprawnienia dla pracownika.",
+        "description": "(nieużywany — wysyłkę robi powiadomienie etapu „Wniosek wszedł w nowy etap”) "
+                       "Trafia do kierownika, który ma wskazać uprawnienia dla pracownika.",
         "macros": _COMMON + ["{created_by}"],
         "subject": "[SZUP] Nowy wniosek #{request_id} — wybór uprawnień",
         "body": (
@@ -44,7 +45,8 @@ EVENTS: dict[str, dict] = {
     },
     "manager_new_request": {
         "label": "Nowy wniosek — do akceptacji kierownika",
-        "description": "Trafia do kierownika komórki, który zatwierdza wniosek.",
+        "description": "(nieużywany — wysyłkę robi powiadomienie etapu „Wniosek wszedł w nowy etap”) "
+                       "Trafia do kierownika komórki, który zatwierdza wniosek.",
         "macros": _COMMON + ["{created_by}"],
         "subject": "[SZUP] Nowy wniosek #{request_id} do akceptacji",
         "body": (
@@ -75,7 +77,8 @@ EVENTS: dict[str, dict] = {
     },
     "it_request_approved": {
         "label": "Wniosek zatwierdzony — do realizacji przez IT",
-        "description": "Trafia do pracowników IT po zatwierdzeniu wniosku.",
+        "description": "(nieużywany — wysyłkę robi powiadomienie etapu „Wniosek wszedł w nowy etap” i zgłoszenie na helpdesk) "
+                       "Trafia do pracowników IT po zatwierdzeniu wniosku.",
         "macros": _COMMON + ["{manager_name}"],
         "subject": "[SZUP] Wniosek #{request_id} zatwierdzony — do realizacji",
         "body": (

@@ -63,9 +63,30 @@ def record_event_standalone(**kwargs) -> None:
         _log.warning("Audit standalone write failed: %s", exc)
 
 
+# Jedyne zaufane proxy: Apache na tym samym hoście (backend słucha na 127.0.0.1).
+_TRUSTED_PROXIES = {"127.0.0.1", "::1"}
+
+
+def client_ip(request) -> Optional[str]:
+    """Adres IP klienta — wspólny dla audytu, middleware i limitu logowań.
+
+    X-Forwarded-For uwzględniamy WYŁĄCZNIE, gdy połączenie przyszło od zaufanego
+    proxy (localhost). Apache DOPISUJE prawdziwy adres klienta NA KOŃCU nagłówka,
+    więc bierzemy OSTATNI element — wcześniejsze może podać sam klient
+    (podszycie pod inny adres, obejście limitu prób logowania).
+    """
+    if request is None:
+        return None
+    peer = request.client.host if getattr(request, "client", None) else None
+    if peer in _TRUSTED_PROXIES:
+        xff = request.headers.get("x-forwarded-for") or ""
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        if parts:
+            return parts[-1]
+    return peer
+
+
 def request_meta(request: Request) -> dict[str, Optional[str]]:
     if request is None:
         return {"ip": None, "user_agent": None}
-    xff = request.headers.get("x-forwarded-for")
-    ip = xff.split(",")[0].strip() if xff else (request.client.host if request.client else None)
-    return {"ip": ip, "user_agent": request.headers.get("user-agent")}
+    return {"ip": client_ip(request), "user_agent": request.headers.get("user-agent")}

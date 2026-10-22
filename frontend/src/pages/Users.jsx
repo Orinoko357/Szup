@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import {
   Plus, Trash2, KeyRound, Unlock, Ban, Building2, Check, X,
   ChevronRight, ChevronDown, FolderTree, Users as UsersIcon, UserCog,
@@ -10,14 +10,10 @@ import {
 import { LdapUsersImportModal } from './Units'
 import { serverTs, serverNow, fmtDate } from '../serverTime'
 import { toast, promptDialog, ask } from '../components/ui/feedback'
-import { ROLE_META as ROLE_DICT } from '../labels'
+import { ROLE_META, ROLE_LABEL } from '../labels'
 import { getUserRoles } from '../roles'
-
-// Okno dialogowe dostaje fokus po otwarciu (Escape i czytniki ekranu działają od razu).
-const focusDialog = el => { if (el && !el.contains(document.activeElement)) el.focus() }
-
-
-
+import Modal from '../components/ui/Modal'
+import Field from '../components/ui/Field'
 
 /**
  * Wybór komórki organizacyjnej z WYSZUKIWANIEM i DRZEWEM.
@@ -33,12 +29,18 @@ const focusDialog = el => { if (el && !el.contains(document.activeElement)) el.f
  * Wartość to `department_id` jako string ('' = nieprzypisany).
  */
 function DeptCombo({ depts = [], units = [], value, onChange, className = 'form-control',
-                     autoFocus = false, placeholder = '— brak (nieprzypisany) —' }) {
+                     autoFocus = false, placeholder = '— brak (nieprzypisany) —',
+                     id, 'aria-label': ariaLabel = 'Komórka organizacyjna' }) {
+  // Wzorzec WAI-ARIA combobox + listbox: pole z role="combobox", lista z role="listbox",
+  // podświetlona pozycja wskazywana przez aria-activedescendant (fokus zostaje w polu).
   const [open, setOpen] = useState(false)
-  const [q, setQ]       = useState('')
+  const [q, setQ]       = useState(null)   // null = nic nie wpisano (pole pokazuje wybraną wartość)
   const [hi, setHi]     = useState(0)
   const wrapRef = useRef(null)
   const listRef = useRef(null)
+  const baseId  = useId()
+  const listId  = `${baseId}-list`
+  const optId   = i => `${baseId}-opt-${i}`
 
   const deptById = new Map(depts.map(d => [d.id, d]))
   const unitById = new Map(units.map(u => [u.id, u.name]))
@@ -66,14 +68,14 @@ function DeptCombo({ depts = [], units = [], value, onChange, className = 'form-
 
   useEffect(() => {
     function onDoc(e) {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) { setOpen(false); setQ('') }
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) { setOpen(false); setQ(null) }
     }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
   }, [])
 
   const norm = s => (s || '').toString().toLowerCase()
-  const query = q.trim().toLowerCase()
+  const query = (q || '').trim().toLowerCase()
   // Dopasowanie po pełnej ścieżce (nazwa + jednostka) ORAZ po opisie z AD.
   const filtered = depts.filter(d => !query
     || norm(fullStr(d)).includes(query) || norm(d.description).includes(query))
@@ -92,21 +94,32 @@ function DeptCombo({ depts = [], units = [], value, onChange, className = 'form-
   const options = [{ _clear: true }, ...ordered]
   const idxOf = new Map()
   options.forEach((o, i) => { if (!o._clear) idxOf.set(o, i) })
+  // Na starcie podświetlona jest bieżąca wartość.
+  const selectedIdx = () => Math.max(0, options.findIndex(o => !o._clear && String(o.id) === String(value)))
+
+  function openList() { setOpen(true); setHi(selectedIdx()) }
+  function close() { setOpen(false); setQ(null) }
 
   function pick(opt) {
     onChange(opt._clear ? '' : String(opt.id))
-    setOpen(false); setQ(''); setHi(0)
+    close(); setHi(0)
   }
 
   function onKey(e) {
     if (!open) {
-      if (e.key === 'ArrowDown' || e.key === 'Enter') { setOpen(true); setHi(0) }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || (e.key === 'Enter' && !e.altKey)) {
+        e.preventDefault(); openList()
+      }
       return
     }
     if (e.key === 'ArrowDown')      { e.preventDefault(); setHi(h => Math.min(h + 1, options.length - 1)) }
     else if (e.key === 'ArrowUp')   { e.preventDefault(); setHi(h => Math.max(h - 1, 0)) }
+    else if (e.key === 'Home' && q === null) { e.preventDefault(); setHi(0) }
+    else if (e.key === 'End' && q === null)  { e.preventDefault(); setHi(options.length - 1) }
     else if (e.key === 'Enter')     { e.preventDefault(); if (options[hi]) pick(options[hi]) }
-    else if (e.key === 'Escape')    { e.preventDefault(); setOpen(false); setQ('') }
+    // Escape zamyka tylko listę — nie całe okno, w którym leży pole.
+    else if (e.key === 'Escape')    { e.preventDefault(); e.stopPropagation(); close() }
+    else if (e.key === 'Tab')       { close() }
   }
 
   // Utrzymuj podświetloną pozycję w polu widzenia.
@@ -120,28 +133,38 @@ function DeptCombo({ depts = [], units = [], value, onChange, className = 'form-
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
     background: idx === hi ? 'var(--bg-secondary)' : 'transparent',
     color: 'var(--color-text)',
+    boxShadow: idx === hi ? 'inset 3px 0 0 var(--color-selected)' : 'none',
   })
 
   return (
     <div ref={wrapRef} style={{ position: 'relative', minWidth: 240 }}>
       <input
+        id={id}
         className={className}
         style={{ fontSize: 13 }}
+        role="combobox"
+        aria-label={id ? undefined : ariaLabel}
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-activedescendant={open && options[hi] ? optId(hi) : undefined}
+        autoComplete="off"
         autoFocus={autoFocus}
-        value={open ? q : label}
-        placeholder={label || placeholder}
-        onFocus={() => { setOpen(true); setHi(0) }}
+        value={q ?? label}
+        placeholder={placeholder}
+        onFocus={e => { openList(); e.target.select() }}
+        onClick={() => { if (!open) openList() }}
         onChange={e => { setQ(e.target.value); setOpen(true); setHi(0) }}
         onKeyDown={onKey}
       />
       {open && (
-        <div ref={listRef} style={{
+        <div ref={listRef} id={listId} role="listbox" aria-label={ariaLabel} style={{
           position: 'absolute', zIndex: 40, top: '100%', left: 0, right: 0, marginTop: 2,
           minWidth: 300, maxHeight: 300, overflowY: 'auto', background: 'var(--bg-primary)',
           border: '1px solid var(--color-border)', borderRadius: 6,
           boxShadow: '0 8px 24px rgba(0,0,0,.14)',
         }}>
-          <div data-idx={0}
+          <div data-idx={0} id={optId(0)} role="option" aria-selected={!selected}
                onMouseDown={e => { e.preventDefault(); pick({ _clear: true }) }}
                onMouseEnter={() => setHi(0)}
                style={{ ...rowStyle(0), color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
@@ -149,8 +172,8 @@ function DeptCombo({ depts = [], units = [], value, onChange, className = 'form-
           </div>
 
           {groups.map(g => (
-            <div key={g.name + (g.items[0]?.id ?? '')}>
-              <div style={{
+            <div key={g.name + (g.items[0]?.id ?? '')} role="group" aria-label={g.name}>
+              <div role="presentation" style={{
                 position: 'sticky', top: 0, zIndex: 1,
                 padding: '4px 10px', fontSize: 11, fontWeight: 700,
                 letterSpacing: '.03em', textTransform: 'uppercase',
@@ -165,7 +188,8 @@ function DeptCombo({ depts = [], units = [], value, onChange, className = 'form-
                 const parents = chain.slice(0, -1)
                 const leaf = chain[chain.length - 1]
                 return (
-                  <div key={d.id} data-idx={idx}
+                  <div key={d.id} data-idx={idx} id={optId(idx)} role="option"
+                       aria-selected={selected?.id === d.id}
                        onMouseDown={e => { e.preventDefault(); pick(d) }}
                        onMouseEnter={() => setHi(idx)}
                        style={{ ...rowStyle(idx), paddingLeft: 14 + Math.max(0, parents.length) * 14 }}>
@@ -180,8 +204,8 @@ function DeptCombo({ depts = [], units = [], value, onChange, className = 'form-
           ))}
 
           {filtered.length === 0 && (
-            <div style={{ padding: '6px 10px', fontSize: 12, color: 'var(--color-text-muted)' }}>
-              Brak komórek pasujących do „{q.trim()}”.
+            <div role="presentation" style={{ padding: '6px 10px', fontSize: 12, color: 'var(--color-text-muted)' }}>
+              Brak komórek pasujących do „{(q || '').trim()}”.
             </div>
           )}
         </div>
@@ -190,14 +214,12 @@ function DeptCombo({ depts = [], units = [], value, onChange, className = 'form-
   )
 }
 
-// Etykiety i kolory ról ze wspólnego słownika (labels.js) — te same co w belce.
-const roleLbl = (r) => { const t = ROLE_DICT[r]?.label || r; return t.charAt(0).toUpperCase() + t.slice(1) }
+// Etykiety i kolory ról wprost ze wspólnego słownika (labels.js) — te same,
+// pisane tak samo jak w belce (bez lokalnej kopii ROLE_META).
 const ROLES = ['superadmin', 'admin', 'hr', 'manager', 'it_staff', 'viewer'].map(v => ({
-  value: v, label: roleLbl(v), badge: ROLE_DICT[v]?.badge || 'badge--neutral',
+  value: v, label: ROLE_LABEL[v] || v, badge: ROLE_META[v]?.badge || 'badge--neutral',
   superadminOnly: v === 'superadmin',
 }))
-
-const ROLE_META = Object.fromEntries(ROLES.map(r => [r.value, r]))
 
 const isSuperadmin = () => getUserRoles().includes('superadmin')
 
@@ -229,6 +251,7 @@ export default function Users() {
   const [collapsed, setCollapsed] = useState(() => new Set())  // zwinięte sekcje
   const [showLdapUsersImport, setShowLdapUsersImport] = useState(false)
   const [autoBusy, setAutoBusy] = useState(false)
+  const [loadErr, setLoadErr] = useState(null)
 
   // Przypisanie kierowników komórek wg stanowiska z AD (kierownik/dyrektor/naczelnik).
   // Stanowiska pobierają się przy imporcie użytkowników z AD.
@@ -320,7 +343,7 @@ export default function Users() {
   }
 
   async function load() {
-    setLoading(true)
+    setLoading(true); setLoadErr(null)
     try {
       const [rU, rD, rUn] = await Promise.all([
         listUsers(),
@@ -328,8 +351,9 @@ export default function Users() {
         listActiveUnits().catch(() => ({ data: [] })),
       ])
       setUsers(rU.data); setDepts(rD.data); setUnits(rUn.data)
-    }
-    finally { setLoading(false) }
+    } catch (ex) {
+      setLoadErr(errorMessage(ex, 'Nie udało się wczytać listy użytkowników'))
+    } finally { setLoading(false) }
   }
 
   useEffect(() => { load() }, [])
@@ -412,9 +436,11 @@ export default function Users() {
                      onAdded={() => { setShowAdd(false); load() }} onCancel={() => setShowAdd(false)} />
       )}
 
+      {loadErr && <div className="alert alert--error mb-4" role="alert">{loadErr}</div>}
+
       {loading ? (
         <div className="card"><div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div></div>
-      ) : visibleUsers.length === 0 ? (
+      ) : loadErr && users.length === 0 ? null : visibleUsers.length === 0 ? (
         <div className="card">
           <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>
             {users.length === 0
@@ -455,7 +481,7 @@ export default function Users() {
                         <tr>
                           <th>Login</th><th>Imię i nazwisko</th><th>E-mail</th><th>Rola</th>
                           <th>Komórka organizacyjna</th><th>Jednostki (kadry)</th><th>Typ</th>
-                          <th>Status</th><th>Ostatnia zmiana hasła</th><th></th>
+                          <th>Status</th><th>Ostatnia zmiana hasła</th><th><span className="sr-only">Akcje</span></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -475,21 +501,24 @@ export default function Users() {
                           return (
                             <Fragment key={`d-${g.key}-${d.key}`}>
                               <tr>
-                                <td colSpan={10} onClick={() => toggleCollapse(dKey)}
-                                    style={{
-                                      padding: '10px 18px 10px 46px', cursor: 'pointer', userSelect: 'none',
-                                      background: 'var(--bg-secondary)',
-                                    }}>
-                                  <span style={{
-                                    display: 'inline-flex', alignItems: 'center', gap: 8,
-                                    fontSize: 14, fontWeight: 700, color: 'var(--color-heading)',
-                                  }}>
-                                    {deptOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                <td colSpan={10}
+                                    style={{ padding: '4px 18px 4px 40px', background: 'var(--bg-secondary)' }}>
+                                  {/* Przycisk zamiast klikalnej komórki — działa z klawiatury. */}
+                                  <button type="button" aria-expanded={deptOpen}
+                                          onClick={() => toggleCollapse(dKey)}
+                                          style={{
+                                            display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: 36,
+                                            padding: '0 6px', border: 0, borderRadius: 6, background: 'transparent',
+                                            font: 'inherit', fontSize: 14, fontWeight: 700, color: 'var(--color-heading)',
+                                            cursor: 'pointer', textAlign: 'left',
+                                          }}>
+                                    {deptOpen ? <ChevronDown size={16} aria-hidden="true" />
+                                              : <ChevronRight size={16} aria-hidden="true" />}
                                     {d.label}
-                                    <span className="badge badge--neutral">
+                                    <span className="badge badge--neutral" aria-label={`${d.users.length} kont`}>
                                       {d.users.length}
                                     </span>
-                                  </span>
+                                  </button>
                                 </td>
                               </tr>
                               {deptOpen && d.users.map(u => (
@@ -633,7 +662,8 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
         {editDept ? (
           <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
             <DeptCombo depts={depts} units={units} value={deptId} onChange={setDeptId}
-                       className="input input--sm" autoFocus />
+                       className="input input--sm" autoFocus
+                       aria-label={`Komórka organizacyjna użytkownika ${u.username}`} />
             <button type="button" className="btn btn--primary btn--sm" onClick={saveDept} title="Zapisz"
                     aria-label="Zapisz komórkę">Zapisz</button>
             <button type="button" className="btn btn--ghost btn--sm" aria-label="Anuluj zmianę komórki"
@@ -732,6 +762,7 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
 // Modal przypisania jednostek obsługiwanych do pracownika kadr.
 function UnitsAssignModal({ user: u, units = [], initial = [], onClose, onSaved }) {
   const [ids, setIds] = useState(initial)
+  const hintId = useId()
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
 
@@ -748,49 +779,38 @@ function UnitsAssignModal({ user: u, units = [], initial = [], onClose, onSaved 
     }
   }
 
+  // Wspólne ui/Modal (pułapka fokusu, Escape, zwrot fokusu, blokada przewijania).
   return (
-    <div className="modal-overlay" role="presentation" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Jednostki obsługiwane" tabIndex={-1} ref={focusDialog}
-           onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }} style={{ maxWidth: 520 }}>
-        <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-heading)', padding: '12px 12px 12px 20px', gap: 12 }}>
-          <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
-            <Building2 size={15} style={{ marginRight: 8, verticalAlign: 'middle' }} />
-            Jednostki obsługiwane — {u.full_name || u.username}
-          </h2>
-          <button type="button" className="modal__close" aria-label="Zamknij" title="Zamknij" onClick={onClose}
-                  style={{ width: 44, height: 44, color: 'var(--color-text-muted)' }}>×</button>
-        </div>
-        <div className="modal__body">
-          <p style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 12 }}>
-            Zaznacz jednostki, które ten pracownik kadr obsługuje. W formularzach
-            „Nowy pracownik" i „Ustanie stosunku pracy" zobaczy wyłącznie te jednostki.
-            Brak zaznaczenia = nie zobaczy żadnej.
-          </p>
-          <div style={{
-            maxHeight: 300, overflowY: 'auto', border: '1px solid var(--color-border)',
-            borderRadius: 4, padding: 10, background: 'var(--bg-secondary)',
-          }}>
-            {units.length === 0 && (
-              <div style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>Brak zdefiniowanych jednostek.</div>
-            )}
-            {units.map(un => (
-              <label key={un.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', padding: '4px 0' }}>
-                <input type="checkbox" checked={ids.includes(un.id)}
-                       style={{ width: 16, height: 16 }} onChange={() => toggle(un.id)} />
-                {un.name}
-              </label>
-            ))}
-          </div>
-          {err && <div className="alert alert--error" style={{ marginTop: 10 }}>{err}</div>}
-        </div>
-        <div className="modal__footer">
-          <button className="btn btn--ghost" onClick={onClose} disabled={busy}>Anuluj</button>
-          <button className="btn btn--primary" onClick={save} disabled={busy}>
-            <Check size={14} /> {busy ? 'Zapisywanie…' : `Zapisz (${ids.length})`}
-          </button>
-        </div>
+    <Modal title={`Jednostki obsługiwane — ${u.full_name || u.username}`} onClose={onClose} width={520}
+           describedBy={hintId}
+           footer={<>
+             <button type="button" className="btn btn--ghost" onClick={onClose} disabled={busy}>Anuluj</button>
+             <button type="button" className="btn btn--primary" onClick={save} disabled={busy}>
+               <Check size={14} aria-hidden="true" /> {busy ? 'Zapisywanie…' : `Zapisz (${ids.length})`}
+             </button>
+           </>}>
+      <p id={hintId} style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 0, marginBottom: 12 }}>
+        Zaznacz jednostki, które ten pracownik kadr obsługuje. W formularzach
+        „Nowy pracownik" i „Ustanie stosunku pracy" zobaczy wyłącznie te jednostki.
+        Brak zaznaczenia = nie zobaczy żadnej.
+      </p>
+      <div role="group" aria-label="Jednostki obsługiwane" style={{
+        maxHeight: 300, overflowY: 'auto', border: '1px solid var(--color-border)',
+        borderRadius: 4, padding: 10, background: 'var(--bg-secondary)',
+      }}>
+        {units.length === 0 && (
+          <div style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>Brak zdefiniowanych jednostek.</div>
+        )}
+        {units.map(un => (
+          <label key={un.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', padding: '4px 0' }}>
+            <input type="checkbox" checked={ids.includes(un.id)}
+                   style={{ width: 16, height: 16 }} onChange={() => toggle(un.id)} />
+            {un.name}
+          </label>
+        ))}
       </div>
-    </div>
+      {err && <div className="alert alert--error" role="alert" style={{ marginTop: 10 }}>{err}</div>}
+    </Modal>
   )
 }
 
@@ -801,6 +821,7 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
   const [unitIds, setUnitIds] = useState([])
   const [err, setErr] = useState(null)
   const [busy, setBusy] = useState(false)
+  const formId = useId()
 
   const isHr = selectedRoles.includes('hr')
 
@@ -837,31 +858,25 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
     <div className="card mb-4" style={{ borderTop: '3px solid var(--color-gold)' }}>
       <form onSubmit={submit}>
         <div className="form-row">
-          <div className="form-group">
-            <label className="form-label">Login *</label>
-            <input aria-label="Login" className="form-control" required value={form.username} onChange={e => set('username', e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Imię i nazwisko</label>
-            <input aria-label="Imię i nazwisko" className="form-control" value={form.full_name} onChange={e => set('full_name', e.target.value)} />
-          </div>
+          <Field label="Login" required>
+            <input className="form-control" required value={form.username} onChange={e => set('username', e.target.value)} />
+          </Field>
+          <Field label="Imię i nazwisko">
+            <input className="form-control" value={form.full_name} onChange={e => set('full_name', e.target.value)} />
+          </Field>
         </div>
         <div className="form-row">
-          <div className="form-group" style={{ flexBasis: '100%' }}>
-            <label className="form-label">E-mail</label>
-            <input aria-label="E-mail" className="form-control" type="email" value={form.email}
+          <Field label="E-mail" style={{ flexBasis: '100%' }}
+                 hint="Adres do powiadomień. Konta z AD/LDAP zwykle mają go zaciąganego automatycznie — uzupełnij zwłaszcza dla kont lokalnych.">
+            <input className="form-control" type="email" value={form.email}
                    onChange={e => set('email', e.target.value)}
                    placeholder="np. j.kowalski@wodzislaw-slaski.pl" />
-            <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
-              Adres do powiadomień. Konta z AD/LDAP zwykle mają go zaciąganego
-              automatycznie — uzupełnij zwłaszcza dla kont lokalnych.
-            </div>
-          </div>
+          </Field>
         </div>
         <div className="form-row">
           <div className="form-group" style={{ flexBasis: '100%' }}>
-            <label className="form-label">Role</label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+            <div className="form-label" id={`${formId}-roles`}>Role</div>
+            <div role="group" aria-labelledby={`${formId}-roles`} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
               {assignableRoles().map(r => (
                 <label key={r.value} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, cursor: 'pointer' }}>
                   <input type="checkbox" checked={selectedRoles.includes(r.value)}
@@ -874,8 +889,8 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
         </div>
         <div className="form-row">
           <div className="form-group">
-            <label className="form-label">Komórka organizacyjna</label>
-            <DeptCombo depts={depts} units={units} value={form.department_id}
+            <label className="form-label" htmlFor={`${formId}-dept`}>Komórka organizacyjna</label>
+            <DeptCombo id={`${formId}-dept`} depts={depts} units={units} value={form.department_id}
                        onChange={v => set('department_id', v)}
                        placeholder="— brak (można przypisać później) —" />
           </div>
@@ -885,8 +900,8 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
         {isHr && (
           <div className="form-row">
             <div className="form-group">
-              <label className="form-label">Jednostki obsługiwane przez kadry *</label>
-              <div style={{
+              <div className="form-label" id={`${formId}-units`}>Jednostki obsługiwane przez kadry *</div>
+              <div role="group" aria-labelledby={`${formId}-units`} style={{
                 maxHeight: 160, overflowY: 'auto', border: '1px solid var(--color-border)',
                 borderRadius: 4, padding: 8, background: 'var(--bg-secondary)',
               }}>
@@ -909,22 +924,20 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
         )}
 
         <div className="form-row">
-          <div className="form-group">
-            <label className="form-label">Typ konta</label>
-            <select aria-label="Role" className="form-control" value={form.auth_type} onChange={e => set('auth_type', e.target.value)}>
+          <Field label="Typ konta">
+            <select className="form-control" value={form.auth_type} onChange={e => set('auth_type', e.target.value)}>
               <option value="local">Lokalne</option>
               <option value="ldap">AD/LDAP</option>
             </select>
-          </div>
+          </Field>
           {form.auth_type === 'local' && (
-            <div className="form-group">
-              <label className="form-label">Hasło *</label>
-              <input aria-label="Hasło" className="form-control" type="password" required value={form.password}
+            <Field label="Hasło" required>
+              <input className="form-control" type="password" required value={form.password}
                      onChange={e => set('password', e.target.value)} autoComplete="new-password" />
-            </div>
+            </Field>
           )}
         </div>
-        {err && <div className="alert alert--error mb-4">{err}</div>}
+        {err && <div className="alert alert--error mb-4" role="alert">{err}</div>}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button type="button" className="btn btn--ghost" onClick={onCancel}>Anuluj</button>
           <button type="submit" className="btn btn--primary" disabled={busy}>

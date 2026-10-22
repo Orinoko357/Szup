@@ -1,15 +1,23 @@
 """E2E: zgłoszenie na helpdesk, gdy wniosek trafia do realizacji IT."""
 from __future__ import annotations
 
+import services.after_commit as after_commit
 import services.email_alerts as mail
 
 
 def _capture(monkeypatch):
-    """Przechwyć wysyłkę maili zamiast łączyć się z SMTP."""
+    """Przechwyć wysyłkę maili zamiast łączyć się z SMTP.
+
+    Zadania po commicie (`after_commit.defer`) normalnie lecą w puli wątków —
+    tu wykonujemy je synchronicznie, żeby testy nie zależały od `sleep`."""
     sent = []
-    monkeypatch.setattr(mail, "_send",
-                        lambda to_address, subject, body: sent.append(
-                            {"to": to_address, "subject": subject, "body": body}))
+
+    def fake_send(to_address, subject, body, **kw):
+        sent.append({"to": to_address, "subject": subject, "body": body, **kw})
+
+    monkeypatch.setattr(mail, "_send", fake_send)
+    monkeypatch.setattr(after_commit, "_submit",
+                        lambda fn, kwargs: after_commit._safe_run(fn, kwargs))
     return sent
 
 
@@ -38,13 +46,10 @@ def test_helpdesk_mail_on_it_stage(api, monkeypatch):
         "items": [{"system_id": w["sid"], "permission_id": w["pid"], "kind": "grant"}]})
     assert r.status_code == 200, r.text
 
-    import time
-    time.sleep(0.4)   # wysyłka leci w wątku w tle
-
     hd = [m for m in sent if m["to"] == "helpdesk@wodzislaw-slaski.pl"]
     assert len(hd) == 1, f"oczekiwano 1 maila na helpdesk, jest {len(hd)}"
     m = hd[0]
-    assert m["subject"] == "Nowy wniosek o nadanie uprawnień"
+    assert m["subject"] == "[SZUP] Nowy wniosek o nadanie uprawnień"
     assert "Jan Kierownik wystąpił z wnioskiem o nadanie uprawnień dla Agata Młot" in m["body"]
     assert "https://szup.intranet.wods.pl" in m["body"]
 
@@ -53,8 +58,9 @@ def test_no_helpdesk_mail_before_it_stage(api, monkeypatch):
     """Sam fakt złożenia wniosku (krok kierownika) nie zgłasza helpdesku."""
     sent = _capture(monkeypatch)
     _flow(api)
-    import time
-    time.sleep(0.3)
+    # przechwytywanie działa (kierownik dostał mail o kroku wyboru) …
+    assert any(m["to"] == "kier@t.local" for m in sent), sent
+    # … ale helpdesk jeszcze nie
     assert not [m for m in sent if m["to"] == "helpdesk@wodzislaw-slaski.pl"]
 
 
@@ -78,7 +84,6 @@ def test_only_helpdesk_on_it_stage_no_individual_it_mails(api, monkeypatch):
     api.post(f"/requests/{rid}/workflow/action", token=api.login("kier"), json={
         "action": "select",
         "items": [{"system_id": sid, "permission_id": pid, "kind": "grant"}]})
-    import time; time.sleep(0.4)
 
     assert [m["to"] for m in sent] == ["helpdesk@wodzislaw-slaski.pl"], \
         f"oczekiwano wyłącznie maila na helpdesk, wysłano: {[m['to'] for m in sent]}"
@@ -97,7 +102,6 @@ def test_helpdesk_address_configurable_in_settings(api, monkeypatch):
     api.post(f"/requests/{w['rid']}/workflow/action", token=w["kier"], json={
         "action": "select",
         "items": [{"system_id": w["sid"], "permission_id": w["pid"], "kind": "grant"}]})
-    import time; time.sleep(0.4)
     assert [m["to"] for m in sent] == ["serwis@example.org"]
 
 
@@ -123,7 +127,6 @@ def test_completed_mail_goes_to_selecting_manager(api, monkeypatch):
     sent = _capture(monkeypatch)   # licz dopiero maile z etapu realizacji
     api.post(f"/requests/{rid}/workflow/action", token=api.login("it"),
              json={"action": "execute", "ad_username": "amlot"})
-    import time; time.sleep(0.4)
 
     done = [m for m in sent if "zrealizowany" in m["subject"]]
     assert len(done) == 1, f"maile: {[(m['to'], m['subject']) for m in sent]}"

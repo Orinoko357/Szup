@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
-  Plus, Trash2, Edit2, ChevronDown, ChevronRight, Building2, Download, Users,
+  Plus, Trash2, Edit2, ChevronDown, ChevronRight, Building2, Download,
   FolderTree, Layers, User as UserIcon, UserCog, Save,
 } from 'lucide-react'
 import {
@@ -15,12 +15,9 @@ import {
 import { toast, ask } from '../components/ui/feedback'
 import Modal from '../components/ui/Modal'
 
-// Okno dialogowe dostaje fokus po otwarciu (Escape i czytniki ekranu działają od razu).
-const focusDialog = el => { if (el && !el.contains(document.activeElement)) el.focus() }
-
 
 // Typy węzłów struktury organizacyjnej (zsynchronizowane z backend: models.DEPARTMENT_KINDS)
-export const DEPT_KINDS = [
+const DEPT_KINDS = [
   { value: 'department', label: 'Wydział / Dział',       icon: FolderTree, badge: 'badge--info' },
   { value: 'section',    label: 'Referat',               icon: Layers,     badge: 'badge--neutral' },
   { value: 'standalone', label: 'Samodzielne stanowisko', icon: UserIcon,  badge: 'badge--warning' },
@@ -30,8 +27,8 @@ export function kindMeta(kind) {
   return DEPT_KINDS.find(k => k.value === kind) || DEPT_KINDS[0]
 }
 
-// Render: mały badge z ikoną i etykietą typu węzła.
-export function KindBadge({ kind }) {
+// Mały badge z ikoną i etykietą rodzaju komórki (wydział / referat / stanowisko).
+export function DeptKindBadge({ kind }) {
   const meta = kindMeta(kind)
   const Icon = meta.icon
   return (
@@ -48,14 +45,17 @@ export default function Units() {
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [showLdapImport, setShowLdapImport] = useState(false)
+  const [loadErr, setLoadErr] = useState(null)
 
   async function load() {
-    setLoading(true)
+    setLoading(true); setLoadErr(null)
     try {
       const [u, d, us] = await Promise.all([listUnits(), listAllDepartments(), listUsers()])
       setUnits(u.data)
       setDepts(d.data)
       setUsers(us.data)
+    } catch (ex) {
+      setLoadErr(errorMessage(ex, 'Nie udało się wczytać struktury organizacyjnej'))
     } finally { setLoading(false) }
   }
 
@@ -101,11 +101,11 @@ export default function Units() {
           <div className="page-header__sub">Struktura organizacyjna — jednostki i podległe wydziały</div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className="btn btn--ghost" onClick={runDedupe} disabled={dedupeBusy}
+          <button type="button" className="btn btn--ghost" onClick={runDedupe} disabled={dedupeBusy}
                   title="Usuń zduplikowane komórki powstałe przy ponownym imporcie struktury">
             <Trash2 size={14} /> {dedupeBusy ? 'Czyszczenie…' : 'Usuń duplikaty'}
           </button>
-          <button className="btn btn--action" onClick={() => setShowLdapImport(true)}>
+          <button type="button" className="btn btn--action" onClick={() => setShowLdapImport(true)}>
             <Download size={14} /> Importuj strukturę z AD
           </button>
         </div>
@@ -114,6 +114,7 @@ export default function Units() {
       {showLdapImport && (
         <LdapImportModal onClose={() => { setShowLdapImport(false); load() }} />
       )}
+      {loadErr && <div className="alert alert--error mb-4" role="alert">{loadErr}</div>}
       {loading && units.length === 0 ? (
         <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
       ) : (
@@ -121,7 +122,7 @@ export default function Units() {
         // zostawiamy akordeony zamontowane — inaczej traciłyby stan rozwinięcia
         // i cała struktura by się zwijała.
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {!loading && units.length === 0 && (
+          {!loading && !loadErr && units.length === 0 && (
             <div className="card" style={{ fontSize: 14, color: 'var(--color-text-muted)' }}>
               <strong style={{ color: 'var(--color-text)' }}>Brak jednostek.</strong>{' '}
               Zaimportuj strukturę z AD przyciskiem „Importuj strukturę z AD” powyżej albo dodaj jednostkę ręcznie poniżej.
@@ -223,8 +224,8 @@ function UnitAccordion({ unit: u, depts, users, onChanged, onlyDeptIds = null })
             <form onSubmit={saveUnit} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '14px 18px',
                                                alignItems: 'flex-end', borderBottom: '1px solid var(--color-border)' }}>
               <div className="form-group" style={{ margin: 0, flex: '1 1 260px' }}>
-                <label className="form-label">Nazwa jednostki</label>
-                <input aria-label="Nazwa jednostki" className="form-control" required value={name} onChange={e => setName(e.target.value)} />
+                <label className="form-label" htmlFor={`unit-name-${u.id}`}>Nazwa jednostki</label>
+                <input id={`unit-name-${u.id}`} className="form-control" required value={name} onChange={e => setName(e.target.value)} />
               </div>
               <button type="button" className="btn btn--ghost" onClick={() => { setEditing(false); setName(u.name) }}>Anuluj</button>
               <button type="submit" className="btn btn--primary">Zapisz</button>
@@ -255,7 +256,7 @@ function UnitAccordion({ unit: u, depts, users, onChanged, onlyDeptIds = null })
 
           <div style={{ overflowX: 'auto' }}>
             <table className="data-table" style={{ minWidth: 1040 }}>
-              <thead><tr><th>Nazwa</th><th>Typ</th><th>Kierownik</th><th>Aktywny</th><th title="Wymaga zatwierdzenia kierownika wydziału nadrzędnego">Wyższa akcept.</th><th title="Komórka kadrowa — jej pracownicy mogą zgłaszać nowych pracowników i ustania">Kadry</th><th></th></tr></thead>
+              <thead><tr><th>Nazwa</th><th>Typ</th><th>Kierownik</th><th>Aktywny</th><th title="Wymaga zatwierdzenia kierownika wydziału nadrzędnego">Wyższa akcept.</th><th title="Komórka kadrowa — jej pracownicy mogą zgłaszać nowych pracowników i ustania">Kadry</th><th><span className="sr-only">Akcje</span></th></tr></thead>
               <tbody>
                 {flattenDeptTree(depts).filter(({ dept: d }) => !onlyDeptIds || onlyDeptIds.has(d.id)).map(({ dept: d, depth }) => (
                   <DeptRow key={d.id} dept={d} depth={depth} users={users}
@@ -406,8 +407,10 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
       <tr>
         <td style={{ paddingLeft: `calc(10px + ${indentPx}px)` }}>
           <input className="form-control" style={{ fontSize: 12, marginBottom: 4 }}
+                 aria-label={`Nazwa komórki ${d.name}`}
                  value={name} onChange={e => setName(e.target.value)} />
           <select className="form-control" style={{ fontSize: 11 }}
+                  aria-label={`Węzeł nadrzędny komórki ${d.name}`}
                   value={parentId} onChange={e => setParentId(e.target.value)}
                   title="Węzeł nadrzędny w strukturze">
             <option value="">— bezpośrednio pod jednostką —</option>
@@ -420,6 +423,7 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
         </td>
         <td>
           <select className="form-control" style={{ fontSize: 12 }}
+                  aria-label={`Typ komórki ${d.name}`}
                   value={kind} onChange={e => setKind(e.target.value)}>
             {DEPT_KINDS.map(k => (
               <option key={k.value} value={k.value}>{k.label}</option>
@@ -433,6 +437,7 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
             </span>
           ) : (
           <select className="form-control" style={{ fontSize: 12 }}
+                  aria-label={`Kierownik komórki ${d.name}`}
                   value={managerId} onChange={e => setManagerId(e.target.value)}
                   title="★ = stanowisko kierownicze (z AD). Najpierw osoby z tej komórki, potem z jednostki.">
             <option value="">— brak —</option>
@@ -442,19 +447,22 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
           )}
         </td>
         <td>
-          <input type="checkbox" checked={isActive} onChange={e => setIsActive(e.target.checked)} />
+          <input type="checkbox" checked={isActive} onChange={e => setIsActive(e.target.checked)}
+                 aria-label={`Komórka ${d.name} aktywna`} />
         </td>
         <td>
           <input type="checkbox" checked={higher} onChange={e => setHigher(e.target.checked)}
+                 aria-label={`Komórka ${d.name}: wymaga akceptacji kierownika nadrzędnego`}
                  title="Wnioski wymagają zatwierdzenia kierownika wydziału nadrzędnego (tryb 2-stopniowy)" />
         </td>
         <td>
           <input type="checkbox" checked={isHr} onChange={e => setIsHr(e.target.checked)}
+                 aria-label={`Komórka ${d.name}: komórka kadrowa`}
                  title="Komórka kadrowa — jej pracownicy mogą zgłaszać nowych pracowników i ustania bez przydzielania roli HR" />
         </td>
         <td style={{ whiteSpace: 'nowrap' }}>
-          <button className="btn btn--primary btn--sm" onClick={save}>Zapisz</button>
-          <button className="btn btn--ghost btn--sm" style={{ marginLeft: 4 }}
+          <button type="button" className="btn btn--primary btn--sm" onClick={save}>Zapisz</button>
+          <button type="button" className="btn btn--ghost btn--sm" style={{ marginLeft: 4 }}
                   onClick={() => {
                     setEditing(false); setName(d.name); setKind(d.kind || 'department')
                     setParentId(d.parent_dept_id || ''); setManagerId(d.manager_user_id||'')
@@ -480,7 +488,7 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
           </span>
         )}
       </td>
-      <td><KindBadge kind={d.kind || 'department'} /></td>
+      <td><DeptKindBadge kind={d.kind || 'department'} /></td>
       <td style={{ color: 'var(--color-text-muted)' }}>
         {d.kind === 'standalone'
           ? <span style={{ fontStyle: 'italic' }} title="Samodzielne stanowisko — podlega kierownikowi wyżej w strukturze">podlega wyżej</span>
@@ -502,13 +510,13 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
           : <span style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>—</span>}
       </td>
       <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
-        <button className="btn btn--ghost btn--sm" style={{ border: 0 }} onClick={() => setEditing(true)}
+        <button type="button" className="btn btn--ghost btn--sm" style={{ border: 0 }} onClick={() => setEditing(true)}
                 title="Edytuj" aria-label="Edytuj"><Edit2 size={15} /></button>
-        <button className="btn btn--ghost btn--sm" style={{ border: 0 }}
+        <button type="button" className="btn btn--ghost btn--sm" style={{ border: 0 }}
                 onClick={() => setDeputiesOpen(true)} title="Zastępcy kierownika" aria-label="Zastępcy kierownika">
           <UserCog size={15} />
         </button>
-        <button className="btn btn--ghost btn--sm" style={{ border: 0, color: 'var(--color-error-text)' }} onClick={del}
+        <button type="button" className="btn btn--ghost btn--sm" style={{ border: 0, color: 'var(--color-error-text)' }} onClick={del}
                 title="Usuń" aria-label="Usuń"><Trash2 size={15} /></button>
       </td>
       {deputiesOpen && (
@@ -547,22 +555,22 @@ function AddDeptForm({ unitId, users, unitDepts, onAdded }) {
   return (
     <form onSubmit={submit} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
       <div className="form-group" style={{ margin: 0, flex: 2, minWidth: 160 }}>
-        <label className="form-label">Nowy węzeł</label>
-        <input aria-label="Nowy węzeł" className="form-control" required value={name}
+        <label className="form-label" htmlFor={`ad-name-${unitId}`}>Nowy węzeł</label>
+        <input id={`ad-name-${unitId}`} className="form-control" required value={name}
                onChange={e => setName(e.target.value)}
                placeholder="Nazwa (np. Wydział Finansów, Referat Księgowości, Pełnomocnik ds. …)" />
       </div>
       <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 160 }}>
-        <label className="form-label">Typ</label>
-        <select aria-label="Typ" className="form-control" value={kind} onChange={e => setKind(e.target.value)}>
+        <label className="form-label" htmlFor={`ad-kind-${unitId}`}>Typ</label>
+        <select id={`ad-kind-${unitId}`} className="form-control" value={kind} onChange={e => setKind(e.target.value)}>
           {DEPT_KINDS.map(k => (
             <option key={k.value} value={k.value}>{k.label}</option>
           ))}
         </select>
       </div>
       <div className="form-group" style={{ margin: 0, flex: 2, minWidth: 180 }}>
-        <label className="form-label">Węzeł nadrzędny</label>
-        <select aria-label="Węzeł nadrzędny" className="form-control" value={parentId}
+        <label className="form-label" htmlFor={`ad-parent-${unitId}`}>Węzeł nadrzędny</label>
+        <select id={`ad-parent-${unitId}`} className="form-control" value={parentId}
                 onChange={e => setParentId(e.target.value)}>
           <option value="">— bezpośrednio pod jednostką —</option>
           {parentCandidates.map(({ dept: x, depth: xd }) => (
@@ -573,13 +581,13 @@ function AddDeptForm({ unitId, users, unitDepts, onAdded }) {
         </select>
       </div>
       <div className="form-group" style={{ margin: 0, flex: 2, minWidth: 160 }}>
-        <label className="form-label">Kierownik</label>
+        <label className="form-label" htmlFor={`ad-mgr-${unitId}`}>Kierownik</label>
         {kind === 'standalone' ? (
           <div style={{ fontSize: 11, color: 'var(--color-text-muted)', fontStyle: 'italic', paddingTop: 8 }}>
             — podlega kierownikowi wyżej —
           </div>
         ) : (
-          <select className="form-control" value={managerId} onChange={e => setManagerId(e.target.value)}>
+          <select id={`ad-mgr-${unitId}`} className="form-control" value={managerId} onChange={e => setManagerId(e.target.value)}>
             <option value="">— brak —</option>
             <ManagerOptions users={users} unitDeptIds={(unitDepts || []).map(x => x.id)}
                             currentId={managerId} />
@@ -614,7 +622,7 @@ function AddUnitCard({ onAdded }) {
         <span style={{ flex: 1, fontSize: 14, color: 'var(--color-text-muted)' }}>
           Nowa jednostka organizacyjna (poziom 1 struktury).
         </span>
-        <button className="btn btn--action" onClick={() => setShow(true)}>
+        <button type="button" className="btn btn--action" onClick={() => setShow(true)}>
           <Plus size={14} /> Dodaj jednostkę
         </button>
       </div>
@@ -625,8 +633,8 @@ function AddUnitCard({ onAdded }) {
     <div className="card" style={{ borderTop: '3px solid var(--color-gold)' }}>
       <form onSubmit={submit}>
         <div className="form-group">
-          <label className="form-label">Nazwa jednostki *</label>
-          <input aria-label="Kierownik" className="form-control" required value={name} onChange={e => setName(e.target.value)} />
+          <label className="form-label" htmlFor="unit-new-name">Nazwa jednostki *</label>
+          <input id="unit-new-name" className="form-control" required value={name} onChange={e => setName(e.target.value)} />
         </div>
         {err && <div className="alert alert--error mb-4">{err}</div>}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -654,9 +662,9 @@ function DeptTreeNode({ node, depth, selected, onToggle, deptMap, onMapDept, dep
             type="button"
             onClick={e => { e.preventDefault(); setOpen(v => !v) }}
             style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'inline-flex', color: 'var(--color-text-muted)' }}
-            aria-label={open ? 'Zwiń' : 'Rozwiń'}
+            aria-label={`${open ? 'Zwiń' : 'Rozwiń'}: ${node.name}`} aria-expanded={open}
           >
-            {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            {open ? <ChevronDown size={12} aria-hidden="true" /> : <ChevronRight size={12} aria-hidden="true" />}
           </button>
         ) : (
           <span style={{ display: 'inline-block', width: 12 }} />
@@ -665,6 +673,7 @@ function DeptTreeNode({ node, depth, selected, onToggle, deptMap, onMapDept, dep
           type="checkbox"
           checked={!!selected[node.dn] || !!mappedId}
           disabled={!!mappedId}
+          aria-label={`Importuj: ${node.name}`}
           onChange={() => onToggle(node, true)}
         />
         <span>{node.name}</span>
@@ -681,6 +690,7 @@ function DeptTreeNode({ node, depth, selected, onToggle, deptMap, onMapDept, dep
           onClick={e => e.preventDefault()}
           className="form-control"
           style={{ fontSize: 11, padding: '1px 4px', width: 'auto', maxWidth: 220, marginLeft: 'auto' }}
+          aria-label={`Mapuj „${node.name}” na istniejący wydział`}
           title="Mapuj na istniejący wydział"
         >
           <option value="">— mapuj na istniejący —</option>
@@ -853,146 +863,132 @@ function LdapImportModal({ onClose }) {
   const totalCount = preview.reduce((n, u) => n + 1 + countNodes(u.departments), 0)
 
   return (
-    <div className="modal-overlay" role="presentation" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Import struktury z Active Directory" tabIndex={-1} ref={focusDialog}
-           onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }} style={{ maxWidth: 680 }}>
+    // Wspólne ui/Modal (pułapka fokusu, Escape, zwrot fokusu, blokada przewijania).
+    <Modal title={'Import struktury z Active Directory'} onClose={onClose} width={680}>
 
-        <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-heading)', padding: '12px 12px 12px 20px', gap: 12 }}>
-          <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
-            <Download size={15} style={{ marginRight: 8, verticalAlign: 'middle' }} />
-            Import struktury z Active Directory
-          </h2>
-          <button type="button" className="modal__close" aria-label="Zamknij" title="Zamknij" onClick={onClose}
-                  style={{ width: 44, height: 44, color: 'var(--color-text-muted)' }}>×</button>
-        </div>
-
-        <div className="modal__body">
-
-          {/* Krok 1 — podaj search base */}
-          {(step === 'input' || step === 'preview') && (
-            <div style={{ marginBottom: 16 }}>
-              <div className="form-group" style={{ marginBottom: 8 }}>
-                <label className="form-label">Baza wyszukiwania (Search Base DN)</label>
-                <input aria-label="Baza wyszukiwania (Search Base DN)"
-                  className="form-control"
-                  placeholder="np. OU=Organizacja,DC=firma,DC=local"
-                  value={searchBase}
-                  onChange={e => setSearchBase(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && !busy && fetchPreview()}
-                />
-                <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
-                  Puste pole — zostanie użyte Base DN z konfiguracji LDAP.
-                  Poziom 1 OUs → jednostki, głębsze poziomy → drzewo wydziałów.
-                </div>
-              </div>
-              <button className="btn btn--primary btn--sm" onClick={fetchPreview} disabled={busy}>
-                {busy ? 'Pobieranie…' : 'Pobierz strukturę z AD'}
-              </button>
+      {/* Krok 1 — podaj search base */}
+      {(step === 'input' || step === 'preview') && (
+        <div style={{ marginBottom: 16 }}>
+          <div className="form-group" style={{ marginBottom: 8 }}>
+            <label className="form-label" htmlFor="ldap-units-base">Baza wyszukiwania (Search Base DN)</label>
+            <input id="ldap-units-base"
+              className="form-control"
+              placeholder="np. OU=Organizacja,DC=firma,DC=local"
+              value={searchBase}
+              onChange={e => setSearchBase(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && !busy && fetchPreview()}
+            />
+            <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
+              Puste pole — zostanie użyte Base DN z konfiguracji LDAP.
+              Poziom 1 OUs → jednostki, głębsze poziomy → drzewo wydziałów.
             </div>
-          )}
+          </div>
+          <button type="button" className="btn btn--primary btn--sm" onClick={fetchPreview} disabled={busy}>
+            {busy ? 'Pobieranie…' : 'Pobierz strukturę z AD'}
+          </button>
+        </div>
+      )}
 
-          {err && <div className="alert alert--error" style={{ marginBottom: 12 }}>{err}</div>}
+      {err && <div className="alert alert--error" style={{ marginBottom: 12 }}>{err}</div>}
 
-          {/* Krok 2 — podgląd */}
-          {step === 'preview' && preview.length > 0 && (
-            <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
-                  Znaleziono {totalCount} elementów ({newCount} nowych)
-                </span>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button className="btn btn--ghost btn--sm" onClick={selectAllNew}>Zaznacz wszystko</button>
-                  <button className="btn btn--ghost btn--sm" onClick={deselectAll}>Odznacz wszystkie</button>
-                </div>
-              </div>
+      {/* Krok 2 — podgląd */}
+      {step === 'preview' && preview.length > 0 && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
+              Znaleziono {totalCount} elementów ({newCount} nowych)
+            </span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button type="button" className="btn btn--ghost btn--sm" onClick={selectAllNew}>Zaznacz wszystko</button>
+              <button type="button" className="btn btn--ghost btn--sm" onClick={deselectAll}>Odznacz wszystkie</button>
+            </div>
+          </div>
 
-              <div style={{ maxHeight: 380, overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: 6, padding: '8px 12px' }}>
-                {preview.map(unit => (
-                  <div key={unit.dn} style={{ marginBottom: 10 }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
-                      <input
-                        type="checkbox"
-                        checked={!!selected[unit.dn] || !!unitMap[unit.dn]}
-                        disabled={!!unitMap[unit.dn]}
-                        onChange={() => toggleNode(unit, true)}
+          <div style={{ maxHeight: 380, overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: 6, padding: '8px 12px' }}>
+            {preview.map(unit => (
+              <div key={unit.dn} style={{ marginBottom: 10 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
+                  <input
+                    type="checkbox"
+                    checked={!!selected[unit.dn] || !!unitMap[unit.dn]}
+                    disabled={!!unitMap[unit.dn]}
+                    onChange={() => toggleNode(unit, true)}
+                  />
+                  <Building2 size={13} style={{ color: 'var(--color-heading)', flexShrink: 0 }} />
+                  <span style={{ fontWeight: 700, fontSize: 13 }}>{unit.name}</span>
+                  {unitMap[unit.dn] ? (
+                    <span className="badge badge--info" style={{ fontSize: 10 }}>mapowana</span>
+                  ) : (
+                    <span className={`badge ${unit.status === 'new' ? 'badge--success' : 'badge--neutral'}`} style={{ fontSize: 10 }}>
+                      {unit.status === 'new' ? 'nowa' : 'już istnieje'}
+                    </span>
+                  )}
+                  <select
+                    value={unitMap[unit.dn] || ''}
+                    onChange={e => mapUnit(unit.dn, e.target.value ? Number(e.target.value) : null)}
+                    onClick={e => e.preventDefault()}
+                    className="form-control"
+                    style={{ fontSize: 11, padding: '1px 4px', width: 'auto', maxWidth: 220, marginLeft: 'auto' }}
+                    title="Mapuj na istniejącą jednostkę"
+                  >
+                    <option value="">— mapuj na istniejącą —</option>
+                    {unitOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                  </select>
+                </label>
+
+                {unit.departments.length > 0 && (
+                  <div style={{ marginLeft: 20, marginTop: 4, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {unit.departments.map(dept => (
+                      <DeptTreeNode
+                        key={dept.dn}
+                        node={dept}
+                        depth={0}
+                        selected={selected}
+                        onToggle={toggleNode}
+                        deptMap={deptMap}
+                        onMapDept={mapDept}
+                        deptOptions={deptOptions}
                       />
-                      <Building2 size={13} style={{ color: 'var(--color-heading)', flexShrink: 0 }} />
-                      <span style={{ fontWeight: 700, fontSize: 13 }}>{unit.name}</span>
-                      {unitMap[unit.dn] ? (
-                        <span className="badge badge--info" style={{ fontSize: 10 }}>mapowana</span>
-                      ) : (
-                        <span className={`badge ${unit.status === 'new' ? 'badge--success' : 'badge--neutral'}`} style={{ fontSize: 10 }}>
-                          {unit.status === 'new' ? 'nowa' : 'już istnieje'}
-                        </span>
-                      )}
-                      <select
-                        value={unitMap[unit.dn] || ''}
-                        onChange={e => mapUnit(unit.dn, e.target.value ? Number(e.target.value) : null)}
-                        onClick={e => e.preventDefault()}
-                        className="form-control"
-                        style={{ fontSize: 11, padding: '1px 4px', width: 'auto', maxWidth: 220, marginLeft: 'auto' }}
-                        title="Mapuj na istniejącą jednostkę"
-                      >
-                        <option value="">— mapuj na istniejącą —</option>
-                        {unitOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
-                      </select>
-                    </label>
-
-                    {unit.departments.length > 0 && (
-                      <div style={{ marginLeft: 20, marginTop: 4, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                        {unit.departments.map(dept => (
-                          <DeptTreeNode
-                            key={dept.dn}
-                            node={dept}
-                            depth={0}
-                            selected={selected}
-                            onToggle={toggleNode}
-                            deptMap={deptMap}
-                            onMapDept={mapDept}
-                            deptOptions={deptOptions}
-                          />
-                        ))}
-                      </div>
-                    )}
+                    ))}
                   </div>
-                ))}
-              </div>
-
-              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
-                <button className="btn btn--ghost btn--sm" onClick={onClose}>Anuluj</button>
-                <button
-                  className="btn btn--primary btn--sm"
-                  onClick={doImport}
-                  disabled={busy || countSelected() === 0}
-                >
-                  Importuj zaznaczone ({countSelected()})
-                </button>
-              </div>
-            </>
-          )}
-
-          {/* Krok 3 — wynik */}
-          {step === 'done' && result && (
-            <>
-              <div className="alert alert--success" style={{ marginBottom: 14 }}>
-                Import zakończony: utworzono <strong>{result.units_created}</strong> jednostek
-                i <strong>{result.departments_created}</strong> wydziałów.
-                {(result.units_skipped + result.departments_skipped) > 0 && (
-                  <span> Pominięto {result.units_skipped + result.departments_skipped} istniejących.</span>
                 )}
               </div>
-              <div style={{ maxHeight: 260, overflowY: 'auto', fontSize: 12, fontFamily: 'var(--font-mono)', background: 'var(--bg-secondary)', borderRadius: 6, padding: '10px 14px', color: 'var(--color-text-muted)' }}>
-                {result.details.map((line, i) => <div key={i}>{line}</div>)}
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
-                <button className="btn btn--primary btn--sm" onClick={onClose}>Zamknij</button>
-              </div>
-            </>
-          )}
+            ))}
+          </div>
 
-        </div>
-      </div>
-    </div>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={onClose}>Anuluj</button>
+            <button
+              className="btn btn--primary btn--sm"
+              onClick={doImport}
+              disabled={busy || countSelected() === 0}
+            >
+              Importuj zaznaczone ({countSelected()})
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Krok 3 — wynik */}
+      {step === 'done' && result && (
+        <>
+          <div className="alert alert--success" style={{ marginBottom: 14 }}>
+            Import zakończony: utworzono <strong>{result.units_created}</strong> jednostek
+            i <strong>{result.departments_created}</strong> wydziałów.
+            {(result.units_skipped + result.departments_skipped) > 0 && (
+              <span> Pominięto {result.units_skipped + result.departments_skipped} istniejących.</span>
+            )}
+          </div>
+          <div style={{ maxHeight: 260, overflowY: 'auto', fontSize: 12, fontFamily: 'var(--font-mono)', background: 'var(--bg-secondary)', borderRadius: 6, padding: '10px 14px', color: 'var(--color-text-muted)' }}>
+            {result.details.map((line, i) => <div key={i}>{line}</div>)}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+            <button type="button" className="btn btn--primary btn--sm" onClick={onClose}>Zamknij</button>
+          </div>
+        </>
+      )}
+
+    </Modal>
   )
 }
 
@@ -1137,215 +1133,201 @@ export function LdapUsersImportModal({ onClose }) {
   const duplicateCnt  = inStructure.filter(u => u.duplicate).length
 
   return (
-    <div className="modal-overlay" role="presentation" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Import użytkowników z Active Directory" tabIndex={-1} ref={focusDialog}
-           onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }} style={{ maxWidth: 820 }}>
+    // Wspólne ui/Modal (pułapka fokusu, Escape, zwrot fokusu, blokada przewijania).
+    <Modal title={'Import użytkowników z Active Directory'} onClose={onClose} width={820}>
 
-        <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-heading)', padding: '12px 12px 12px 20px', gap: 12 }}>
-          <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
-            <Users size={15} style={{ marginRight: 8, verticalAlign: 'middle' }} />
-            Import użytkowników z Active Directory
-          </h2>
-          <button type="button" className="modal__close" aria-label="Zamknij" title="Zamknij" onClick={onClose}
-                  style={{ width: 44, height: 44, color: 'var(--color-text-muted)' }}>×</button>
+      {(step === 'input' || step === 'preview') && (
+        <div style={{ marginBottom: 16 }}>
+          <div className="form-group" style={{ marginBottom: 8 }}>
+            <label className="form-label" htmlFor="ldap-users-base">Baza wyszukiwania (Search Base DN)</label>
+            <input id="ldap-users-base"
+              className="form-control"
+              placeholder="np. OU=Organizacja,DC=firma,DC=local"
+              value={searchBase}
+              onChange={e => setSearchBase(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && !busy && fetchPreview()}
+            />
+            <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
+              <strong>Najpierw zaimportuj strukturę</strong> (jednostki organizacyjne) z AD.
+              Importujemy wyłącznie osoby z powiązanych jednostek — reszta jest pomijana.
+              Bez pobranej struktury import użytkowników jest zablokowany.
+            </div>
+          </div>
+          <button type="button" className="btn btn--primary btn--sm" onClick={fetchPreview} disabled={busy}>
+            {busy ? 'Pobieranie…' : 'Pobierz użytkowników z AD'}
+          </button>
         </div>
+      )}
 
-        <div className="modal__body">
+      {err && <div className="alert alert--error" style={{ marginBottom: 12 }}>{err}</div>}
 
-          {(step === 'input' || step === 'preview') && (
-            <div style={{ marginBottom: 16 }}>
-              <div className="form-group" style={{ marginBottom: 8 }}>
-                <label className="form-label">Baza wyszukiwania (Search Base DN)</label>
-                <input aria-label="Baza wyszukiwania (Search Base DN)"
-                  className="form-control"
-                  placeholder="np. OU=Organizacja,DC=firma,DC=local"
-                  value={searchBase}
-                  onChange={e => setSearchBase(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && !busy && fetchPreview()}
-                />
-                <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
-                  <strong>Najpierw zaimportuj strukturę</strong> (jednostki organizacyjne) z AD.
-                  Importujemy wyłącznie osoby z powiązanych jednostek — reszta jest pomijana.
-                  Bez pobranej struktury import użytkowników jest zablokowany.
-                </div>
+      {step === 'preview' && users.length > 0 && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+            <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+              W powiązanych jednostkach: {inStructure.length}
+              {query && <> · pokazano {visibleUsers.length}</>}
+              {outOfStruct > 0 && <> · <strong>{outOfStruct}</strong> poza powiązaną strukturą (ukryte, nie do importu)</>}
+              {conflicts > 0 && <> · <span style={{ color: 'var(--color-danger)' }}>{conflicts} konflikt(ów) z kontami lokalnymi</span></>}
+              {noDept > 0  && <> · {noDept} bez konkretnego wydziału</>}
+              {disabledCnt > 0 && <> · {disabledCnt} wyłączonych w AD (pomijane)</>}
+              {duplicateCnt > 0 && <> · {duplicateCnt} duplikat(ów) loginu (pomijane)</>}
+            </span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button type="button" className="btn btn--ghost btn--sm" onClick={selectAllMapped}>Zaznacz zmapowanych</button>
+              <button type="button" className="btn btn--ghost btn--sm" onClick={deselectAll}>Odznacz wszystkich</button>
+            </div>
+          </div>
+
+          {unitChoices.length > 0 && (
+            <div style={{ border: '1px solid var(--border-color)', borderRadius: 6,
+                          padding: '8px 10px', marginBottom: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                <strong style={{ fontSize: 12 }}>Jednostki najwyższego rzędu do pobrania:</strong>
+                <button type="button" className="btn btn--ghost btn--sm" style={{ fontSize: 11 }}
+                        onClick={() => setSelectedUnits(new Set(unitChoices.map(c => c.key)))}>
+                  wszystkie
+                </button>
+                <button type="button" className="btn btn--ghost btn--sm" style={{ fontSize: 11 }}
+                        onClick={() => setSelectedUnits(new Set())}>
+                  żadne
+                </button>
               </div>
-              <button className="btn btn--primary btn--sm" onClick={fetchPreview} disabled={busy}>
-                {busy ? 'Pobieranie…' : 'Pobierz użytkowników z AD'}
-              </button>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px' }}>
+                {unitChoices.map(c => (
+                  <label key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 6,
+                                               fontSize: 12, cursor: 'pointer' }}>
+                    <input type="checkbox"
+                           checked={!selectedUnits || selectedUnits.has(c.key)}
+                           onChange={() => toggleUnit(c.key)} />
+                    {c.label}
+                    <span className="badge badge--neutral" style={{ fontSize: 9 }}>{c.count}</span>
+                  </label>
+                ))}
+              </div>
             </div>
           )}
 
-          {err && <div className="alert alert--error" style={{ marginBottom: 12 }}>{err}</div>}
+          <div style={{ marginBottom: 8 }}>
+            <input
+              className="form-control"
+              style={{ fontSize: 12 }}
+              placeholder="Szukaj po nazwisku, loginie, e-mailu lub wydziale…"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+            />
+          </div>
 
-          {step === 'preview' && users.length > 0 && (
-            <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
-                <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
-                  W powiązanych jednostkach: {inStructure.length}
-                  {query && <> · pokazano {visibleUsers.length}</>}
-                  {outOfStruct > 0 && <> · <strong>{outOfStruct}</strong> poza powiązaną strukturą (ukryte, nie do importu)</>}
-                  {conflicts > 0 && <> · <span style={{ color: 'var(--color-danger)' }}>{conflicts} konflikt(ów) z kontami lokalnymi</span></>}
-                  {noDept > 0  && <> · {noDept} bez konkretnego wydziału</>}
-                  {disabledCnt > 0 && <> · {disabledCnt} wyłączonych w AD (pomijane)</>}
-                  {duplicateCnt > 0 && <> · {duplicateCnt} duplikat(ów) loginu (pomijane)</>}
-                </span>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button className="btn btn--ghost btn--sm" onClick={selectAllMapped}>Zaznacz zmapowanych</button>
-                  <button className="btn btn--ghost btn--sm" onClick={deselectAll}>Odznacz wszystkich</button>
-                </div>
-              </div>
+          <div style={{ maxHeight: 420, overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: 6 }}>
+            <table className="data-table" style={{ fontSize: 12, margin: 0 }}>
+              <thead>
+                <tr>
+                  <th style={{ width: 30 }}></th>
+                  <th>Użytkownik</th>
+                  <th>Email</th>
+                  <th>Wydział (z AD)</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(() => {
+                  const rows = []
+                  let lastKey = null
+                  for (const u of visibleUsers) {
+                    const key = ouKey(u)
+                    if (key !== lastKey) {
+                      const label = u.department_name
+                        ? `${u.unit_name ? u.unit_name + ' › ' : ''}${u.department_name}`
+                        : (u.unit_name ? `${u.unit_name} (bez wydziału)` : '— bez przypisania —')
+                      rows.push(
+                        <tr key={`grp-${key}`} style={{ background: 'var(--bg-secondary)' }}>
+                          <td colSpan={5} style={{ fontWeight: 700, color: 'var(--color-heading)', padding: '4px 10px' }}>
+                            {label}
+                          </td>
+                        </tr>
+                      )
+                      lastKey = key
+                    }
+                    const disabled = u.status === 'conflict' || !u.is_enabled_in_ad || u.duplicate
+                    rows.push(
+                      <tr key={u.username} style={disabled ? { opacity: 0.55 } : undefined}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={!!selected[u.username]}
+                            disabled={disabled}
+                            onChange={() => toggle(u.username)}
+                          />
+                        </td>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>{u.full_name || u.username}</div>
+                          <div style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>{u.username}</div>
+                        </td>
+                        <td style={{ color: 'var(--color-text-muted)' }}>{u.email || '—'}</td>
+                        <td>
+                          {u.department_name
+                            ? <>
+                                {u.unit_name && <span style={{ color: 'var(--color-text-muted)' }}>{u.unit_name} › </span>}
+                                {u.department_name}
+                              </>
+                            : u.unit_name
+                              ? <span style={{ color: 'var(--color-text-muted)' }}>{u.unit_name} (bez wydziału)</span>
+                              : <span style={{ color: 'var(--color-text-muted)' }}>— brak —</span>}
+                        </td>
+                        <td>
+                          {u.status === 'new' && <span className="badge badge--success" style={{ fontSize: 10 }}>nowy</span>}
+                          {u.status === 'exists_ldap' && <span className="badge badge--neutral" style={{ fontSize: 10 }}>aktualizacja</span>}
+                          {u.status === 'conflict' && <span className="badge badge--error" style={{ fontSize: 10 }}>konflikt lokalny</span>}
+                          {!u.is_enabled_in_ad && <span className="badge badge--neutral" style={{ fontSize: 10, marginLeft: 4 }}>wyłączony w AD</span>}
+                          {u.duplicate && <span className="badge badge--warning" style={{ fontSize: 10, marginLeft: 4 }}>duplikat loginu</span>}
+                        </td>
+                      </tr>
+                    )
+                  }
+                  if (rows.length === 0) {
+                    rows.push(
+                      <tr key="empty"><td colSpan={5} style={{ color: 'var(--color-text-muted)', padding: '10px 12px' }}>
+                        Brak pasujących użytkowników.
+                      </td></tr>
+                    )
+                  }
+                  return rows
+                })()}
+              </tbody>
+            </table>
+          </div>
 
-              {unitChoices.length > 0 && (
-                <div style={{ border: '1px solid var(--border-color)', borderRadius: 6,
-                              padding: '8px 10px', marginBottom: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
-                    <strong style={{ fontSize: 12 }}>Jednostki najwyższego rzędu do pobrania:</strong>
-                    <button type="button" className="btn btn--ghost btn--sm" style={{ fontSize: 11 }}
-                            onClick={() => setSelectedUnits(new Set(unitChoices.map(c => c.key)))}>
-                      wszystkie
-                    </button>
-                    <button type="button" className="btn btn--ghost btn--sm" style={{ fontSize: 11 }}
-                            onClick={() => setSelectedUnits(new Set())}>
-                      żadne
-                    </button>
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px' }}>
-                    {unitChoices.map(c => (
-                      <label key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 6,
-                                                   fontSize: 12, cursor: 'pointer' }}>
-                        <input type="checkbox"
-                               checked={!selectedUnits || selectedUnits.has(c.key)}
-                               onChange={() => toggleUnit(c.key)} />
-                        {c.label}
-                        <span className="badge badge--neutral" style={{ fontSize: 9 }}>{c.count}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={onClose}>Anuluj</button>
+            <button
+              className="btn btn--primary btn--sm"
+              onClick={doImport}
+              disabled={busy || selectedCount === 0}
+            >
+              Importuj zaznaczonych ({selectedCount})
+            </button>
+          </div>
+        </>
+      )}
 
-              <div style={{ marginBottom: 8 }}>
-                <input
-                  className="form-control"
-                  style={{ fontSize: 12 }}
-                  placeholder="Szukaj po nazwisku, loginie, e-mailu lub wydziale…"
-                  value={query}
-                  onChange={e => setQuery(e.target.value)}
-                />
-              </div>
+      {step === 'done' && result && (
+        <>
+          <div className="alert alert--success" style={{ marginBottom: 14 }}>
+            Import zakończony: utworzono <strong>{result.created}</strong>,
+            zaktualizowano <strong>{result.updated}</strong>.
+            {result.conflicts > 0 && <> Konfliktów: {result.conflicts}.</>}
+            {result.skipped > 0 && <> Pominięto: {result.skipped}.</>}
+          </div>
+          <div style={{ maxHeight: 260, overflowY: 'auto', fontSize: 12, fontFamily: 'var(--font-mono)', background: 'var(--bg-secondary)', borderRadius: 6, padding: '10px 14px', color: 'var(--color-text-muted)' }}>
+            {result.details.map((line, i) => <div key={i}>{line}</div>)}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+            <button type="button" className="btn btn--primary btn--sm" onClick={onClose}>Zamknij</button>
+          </div>
+        </>
+      )}
 
-              <div style={{ maxHeight: 420, overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: 6 }}>
-                <table className="data-table" style={{ fontSize: 12, margin: 0 }}>
-                  <thead>
-                    <tr>
-                      <th style={{ width: 30 }}></th>
-                      <th>Użytkownik</th>
-                      <th>Email</th>
-                      <th>Wydział (z AD)</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(() => {
-                      const rows = []
-                      let lastKey = null
-                      for (const u of visibleUsers) {
-                        const key = ouKey(u)
-                        if (key !== lastKey) {
-                          const label = u.department_name
-                            ? `${u.unit_name ? u.unit_name + ' › ' : ''}${u.department_name}`
-                            : (u.unit_name ? `${u.unit_name} (bez wydziału)` : '— bez przypisania —')
-                          rows.push(
-                            <tr key={`grp-${key}`} style={{ background: 'var(--bg-secondary)' }}>
-                              <td colSpan={5} style={{ fontWeight: 700, color: 'var(--color-heading)', padding: '4px 10px' }}>
-                                {label}
-                              </td>
-                            </tr>
-                          )
-                          lastKey = key
-                        }
-                        const disabled = u.status === 'conflict' || !u.is_enabled_in_ad || u.duplicate
-                        rows.push(
-                          <tr key={u.username} style={disabled ? { opacity: 0.55 } : undefined}>
-                            <td>
-                              <input
-                                type="checkbox"
-                                checked={!!selected[u.username]}
-                                disabled={disabled}
-                                onChange={() => toggle(u.username)}
-                              />
-                            </td>
-                            <td>
-                              <div style={{ fontWeight: 600 }}>{u.full_name || u.username}</div>
-                              <div style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>{u.username}</div>
-                            </td>
-                            <td style={{ color: 'var(--color-text-muted)' }}>{u.email || '—'}</td>
-                            <td>
-                              {u.department_name
-                                ? <>
-                                    {u.unit_name && <span style={{ color: 'var(--color-text-muted)' }}>{u.unit_name} › </span>}
-                                    {u.department_name}
-                                  </>
-                                : u.unit_name
-                                  ? <span style={{ color: 'var(--color-text-muted)' }}>{u.unit_name} (bez wydziału)</span>
-                                  : <span style={{ color: 'var(--color-text-muted)' }}>— brak —</span>}
-                            </td>
-                            <td>
-                              {u.status === 'new' && <span className="badge badge--success" style={{ fontSize: 10 }}>nowy</span>}
-                              {u.status === 'exists_ldap' && <span className="badge badge--neutral" style={{ fontSize: 10 }}>aktualizacja</span>}
-                              {u.status === 'conflict' && <span className="badge badge--error" style={{ fontSize: 10 }}>konflikt lokalny</span>}
-                              {!u.is_enabled_in_ad && <span className="badge badge--neutral" style={{ fontSize: 10, marginLeft: 4 }}>wyłączony w AD</span>}
-                              {u.duplicate && <span className="badge badge--warning" style={{ fontSize: 10, marginLeft: 4 }}>duplikat loginu</span>}
-                            </td>
-                          </tr>
-                        )
-                      }
-                      if (rows.length === 0) {
-                        rows.push(
-                          <tr key="empty"><td colSpan={5} style={{ color: 'var(--color-text-muted)', padding: '10px 12px' }}>
-                            Brak pasujących użytkowników.
-                          </td></tr>
-                        )
-                      }
-                      return rows
-                    })()}
-                  </tbody>
-                </table>
-              </div>
-
-              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
-                <button className="btn btn--ghost btn--sm" onClick={onClose}>Anuluj</button>
-                <button
-                  className="btn btn--primary btn--sm"
-                  onClick={doImport}
-                  disabled={busy || selectedCount === 0}
-                >
-                  Importuj zaznaczonych ({selectedCount})
-                </button>
-              </div>
-            </>
-          )}
-
-          {step === 'done' && result && (
-            <>
-              <div className="alert alert--success" style={{ marginBottom: 14 }}>
-                Import zakończony: utworzono <strong>{result.created}</strong>,
-                zaktualizowano <strong>{result.updated}</strong>.
-                {result.conflicts > 0 && <> Konfliktów: {result.conflicts}.</>}
-                {result.skipped > 0 && <> Pominięto: {result.skipped}.</>}
-              </div>
-              <div style={{ maxHeight: 260, overflowY: 'auto', fontSize: 12, fontFamily: 'var(--font-mono)', background: 'var(--bg-secondary)', borderRadius: 6, padding: '10px 14px', color: 'var(--color-text-muted)' }}>
-                {result.details.map((line, i) => <div key={i}>{line}</div>)}
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
-                <button className="btn btn--primary btn--sm" onClick={onClose}>Zamknij</button>
-              </div>
-            </>
-          )}
-
-        </div>
-      </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -1366,7 +1348,7 @@ function DeputiesModal({ dept, users, unitDepts = [], onClose, onChanged }) {
       const r = await listDeputies(dept.id)
       setRows(r.data)
     } catch (ex) {
-      setErr(errorMessage(ex, 'Nie udalo sie zaladowac listy zastepcow'))
+      setErr(errorMessage(ex, 'Nie udało się załadować listy zastępców'))
     } finally {
       setLoading(false)
     }
@@ -1386,7 +1368,7 @@ function DeputiesModal({ dept, users, unitDepts = [], onClose, onChanged }) {
       setAddUserId(''); setAddLabel('')
       await load(); onChanged?.()
     } catch (ex) {
-      setErr(errorMessage(ex, 'Nie udalo sie dodac zastepcy'))
+      setErr(errorMessage(ex, 'Nie udało się dodać zastępcy'))
     } finally { setBusy(false) }
   }
 
@@ -1394,7 +1376,7 @@ function DeputiesModal({ dept, users, unitDepts = [], onClose, onChanged }) {
     try {
       await updateDeputy(row.id, { user_id: row.user_id, role_label: newLabel })
       await load(); onChanged?.()
-    } catch (ex) { toast(errorMessage(ex, 'Blad'), { tone: 'error' }) }
+    } catch (ex) { toast(errorMessage(ex, 'Nie udało się zapisać zmiany'), { tone: 'error' }) }
   }
 
   async function onDelete(row) {
@@ -1403,7 +1385,7 @@ function DeputiesModal({ dept, users, unitDepts = [], onClose, onChanged }) {
       await deleteDeputy(row.id)
       await load(); onChanged?.()
       toast(`Odebrano uprawnienia zastępcy: ${row.user_name}`)
-    } catch (ex) { toast(errorMessage(ex, 'Blad'), { tone: 'error' }) }
+    } catch (ex) { toast(errorMessage(ex, 'Nie udało się zapisać zmiany'), { tone: 'error' }) }
   }
 
   return (
@@ -1414,7 +1396,7 @@ function DeputiesModal({ dept, users, unitDepts = [], onClose, onChanged }) {
             Mogą akceptować wnioski, wybierać uprawnienia i widzieć pracowników.
           </div>
 
-          {err && <div className="alert alert--error mb-4">{err}</div>}
+          {err && <div className="alert alert--error mb-4" role="alert">{err}</div>}
 
           <div style={{ margin: '12px 0', padding: 10,
                         background: 'var(--bg-secondary)', borderRadius: 6 }}>
@@ -1431,7 +1413,7 @@ function DeputiesModal({ dept, users, unitDepts = [], onClose, onChanged }) {
               <input className="input input--sm" value={addLabel} aria-label="Funkcja"
                      onChange={e => setAddLabel(e.target.value)}
                      placeholder="Funkcja (np. Zastępca, Koordynator IT)" />
-              <button className="btn btn--action btn--sm" onClick={onAdd} disabled={busy || !addUserId}>
+              <button type="button" className="btn btn--action btn--sm" onClick={onAdd} disabled={busy || !addUserId}>
                 <Plus size={12} /> Dodaj
               </button>
             </div>
@@ -1440,7 +1422,7 @@ function DeputiesModal({ dept, users, unitDepts = [], onClose, onChanged }) {
           <div style={{ overflowX: 'auto' }}>
           <table className="table" style={{ minWidth: 440 }}>
             <thead>
-              <tr><th>Osoba</th><th>Funkcja</th><th></th></tr>
+              <tr><th>Osoba</th><th>Funkcja</th><th><span className="sr-only">Akcje</span></th></tr>
             </thead>
             <tbody>
               {loading && <tr><td colSpan={3} style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</td></tr>}
@@ -1477,20 +1459,23 @@ function DeputyRow({ row, onEditLabel, onDelete }) {
       </td>
       <td>
         <input className="input input--sm"
+               aria-label={`Funkcja zastępcy ${row.user_name}`}
                value={label}
                onChange={e => { setLabel(e.target.value); setDirty(true) }}
                placeholder="—" />
       </td>
       <td style={{ whiteSpace: 'nowrap' }}>
         {dirty && (
-          <button className="btn btn--action btn--sm"
+          <button type="button" className="btn btn--action btn--sm"
+                  aria-label={`Zapisz funkcję zastępcy ${row.user_name}`} title="Zapisz etykietę"
                   onClick={() => { onEditLabel(row, label.trim() || null); setDirty(false) }}>
-            <Save size={12} />
+            <Save size={12} aria-hidden="true" />
           </button>
         )}
-        <button className="btn btn--danger btn--sm" style={{ marginLeft: 4 }}
+        <button type="button" className="btn btn--danger btn--sm" style={{ marginLeft: 4 }}
+                aria-label={`Odbierz uprawnienia zastępcy ${row.user_name}`} title="Odbierz uprawnienia zastępcy"
                 onClick={() => onDelete(row)}>
-          <Trash2 size={12} />
+          <Trash2 size={12} aria-hidden="true" />
         </button>
       </td>
     </tr>

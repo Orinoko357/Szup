@@ -18,7 +18,7 @@ function actorTitle(name, iso) {
   return name || dt || undefined
 }
 
-export function splitItems(items = []) {
+function splitItems(items = []) {
   const grants  = items.filter(it => (it.kind || 'grant') !== 'revoke')
   const revokes = items.filter(it => (it.kind || 'grant') === 'revoke')
   return { grants, revokes }

@@ -201,6 +201,10 @@ def test_registry_lists_grant_with_declaration(api):
     items = [{"system_id": b["sid"], "permission_id": b["pid"], "kind": "grant"}]
     api.post(f"/requests/{rid}/workflow/action", token=b["kier"],
              json={"action": "select", "items": items, "declaration": DECL})
+    # rejestr pokazuje tylko pozycje zrealizowane — IT wykonuje wniosek
+    r = api.post(f"/requests/{rid}/workflow/action", token=b["it"],
+                 json={"action": "execute", "ad_username": "nowy"})
+    assert r.status_code == 200, r.text
 
     reg = api.get("/registry/granted", token=b["it"]).json()
     assert reg["total"] >= 1

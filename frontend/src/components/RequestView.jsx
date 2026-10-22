@@ -14,7 +14,7 @@ import { Check } from 'lucide-react'
 import { getRequestWorkflow } from '../api'
 import { getUserRoles } from '../roles'
 import { serverTs, fmtDateTimeShort } from '../serverTime'
-import { daysSince, waitText, kindLabel as kindLabelOf, nodeLabel, statusLabel } from '../labels'
+import { daysSince, waitText, kindLabel as kindLabelOf, nodeLabel, statusLabel, NODE_WHO } from '../labels'
 
 /** v3.1 — perspektywa dla osób z kilkoma rolami: „jako kierownik” / „jako IT”…
  *  Zwraca null, gdy użytkownik pełni tylko jedną funkcję operacyjną. */
@@ -41,10 +41,6 @@ const ACTION_VERB = {
   approve: 'zatwierdził(a)',
   execute: 'zrealizował(a)',
   reject:  'odrzucił(a)',
-}
-const NODE_WHO = {
-  select_permissions: 'Kierownik', manager_approve: 'Kierownik',
-  higher_manager_approve: 'Kierownik nadrzędny', it_execute: 'IT',
 }
 
 // Kolory odznaki rodzaju — tokeny motywu (działają w trybie ciemnym).
@@ -166,7 +162,7 @@ function StepItem({ step }) {
   )
 }
 
-export function RequestStepper({ steps = [] }) {
+function RequestStepper({ steps = [] }) {
   if (!steps.length) return null
   return (
     <ol aria-label="Etapy obiegu" style={{

@@ -44,7 +44,7 @@ Kierownik może zatwierdzić tylko wnioski dotyczące wydziałów, gdzie jest pr
 - Lokalne: login + hasło (bcrypt)
 - LDAP/AD (opcjonalne): konto domenowe, rola ustalana w SZUP
 - JWT HS256, ważność 8 godzin
-- Revocation: blacklista jti + tokens_valid_from (logout-all)
+- Revocation: blacklista jti (wylogowanie) + `tokens_valid_from` (zmiana / reset hasła)
 
 ## Podstawa prawna
 

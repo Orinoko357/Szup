@@ -101,6 +101,10 @@ a2ensite szup && systemctl reload apache2
 cd /root/szup && ./deploy/deploy.sh
 ```
 
+`deploy.sh` przed aktualizacją robi kopię bazy do `/opt/szup/backups/`
+(`sqlite3 .backup`, a bez `sqlite3` — `cp`; zostaje 10 najnowszych). Nieudana
+kopia przerywa wdrożenie.
+
 Nowe tabele tworzą się przy starcie (`create_all`); nowe kolumny dokładane są
 idempotentnie w `database.py` (migracje ręczne, bez Alembica). Po wdrożeniu z
 migracją **wymagany restart** usługi (`systemctl restart szup`).
@@ -122,12 +126,11 @@ produkcyjne **nigdy** w repo).
 |---|---|
 | `SZUP_SECRET_KEY` | Klucz Fernet do szyfrowania sekretów w bazie (SMTP/LDAP). **Wymagany.** |
 | `SZUP_SECRET_KEY_OLD` | Poprzedni klucz Fernet na czas rotacji (`python -m tools.rotate_fernet`). |
-| `SZUP_JWT_SECRET` | Klucz podpisywania JWT (gdy brak — plik `data/jwt_secret.key`). |
-| `SZUP_DATA_DIR` | Katalog danych (domyślnie `/opt/szup/data`); tu leży `szup.db`. |
+| `SZUP_DATA_DIR` | Katalog danych (domyślnie `/opt/szup/data`); tu leży `szup.db` i klucz JWT `jwt_secret.key` (generowany przy pierwszym starcie). |
 | `SZUP_DB_URL` | Opcjonalne nadpisanie URL bazy. |
 | `SZUP_CORS_ORIGINS` | Dozwolone originy CORS (dev). |
 | `SZUP_ALLOW_TEST_MODE` | `1` dopuszcza tryb testowy (logowanie bez hasła) — tylko dev/staging. |
-| `SZUP_SSO_PROXY_SECRET` | Sekret współdzielony Apache ↔ backend dla SSO. |
+| `SZUP_SSO_PROXY_SECRET` | Sekret współdzielony Apache ↔ backend dla SSO — **wymagany** przy włączonym SSO (bez niego backend odrzuca logowanie SSO). |
 | `SZUP_HELPDESK_EMAIL`, `SZUP_APP_URL` | Adres helpdesku i URL aplikacji w powiadomieniach. |
 | `SZUP_SNAPSHOTS` | `0` wyłącza wbudowany harmonogram nocnych migawek. |
 

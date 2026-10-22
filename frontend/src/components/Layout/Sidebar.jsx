@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, FolderOpen, CheckSquare,
@@ -7,10 +7,11 @@ import {
 } from 'lucide-react'
 import WodsLogo from './WodsLogo'
 import { getUserRoles } from '../../roles'
+import { focusableIn, lockScroll } from '../ui/useDialog'
 
 // v3.0 — pasek boczny służy WYŁĄCZNIE nawigacji (bez liczników — sprawy
 // czekające pokazuje pulpit). Grupy: PRACA, REJESTRY, ADMINISTRACJA (zwijana),
-// MOJE. „Do realizacji” jest zakładką strony Wnioski, „Moja struktura” —
+// MOJE. „Do realizacji” jest zakładką strony Wnioski, struktura komórek —
 // zakładką „Moich pracowników”.
 const navSections = [
   {
@@ -38,7 +39,7 @@ const navSections = [
       { to: '/users',              icon: Users,         label: 'Użytkownicy',     roles: ['superadmin','admin'] },
       { to: '/workflow-templates', icon: GitBranch,     label: 'Szablony obiegu', roles: ['superadmin','admin'] },
       { to: '/request-types',      icon: ListFilter,    label: 'Typy wniosków',   roles: ['superadmin','admin'] },
-      { to: '/audit',              icon: ScrollText,    label: 'Audit log',       roles: ['superadmin','admin'] },
+      { to: '/audit',              icon: ScrollText,    label: 'Dziennik zdarzeń',     roles: ['superadmin','admin'] },
       { to: '/security',           icon: AlertTriangle, label: 'Bezpieczeństwo',  roles: ['superadmin','admin'] },
       { to: '/settings',           icon: Settings,      label: 'Ustawienia',      roles: ['superadmin','admin'] },
     ],
@@ -62,6 +63,7 @@ export default function Sidebar() {
   const userRoles = getUserRoles()
   const { pathname } = useLocation()
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const asideRef = useRef(null)
   useEffect(() => {
     const onNav = (e) => setDrawerOpen(!!e.detail?.open)
     window.addEventListener('szup:nav', onNav)
@@ -71,9 +73,44 @@ export default function Sidebar() {
   useEffect(() => { if (drawerOpen) setNavOpen(false) }, [pathname])
   useEffect(() => {
     if (!drawerOpen) return
-    const onKey = (e) => { if (e.key === 'Escape') setNavOpen(false) }
+    const onKey = (e) => {
+      if (e.key === 'Escape') { setNavOpen(false); return }
+      // Pułapka fokusu w otwartej szufladzie (treść pod nakładką jest niedostępna).
+      if (e.key !== 'Tab' || !window.matchMedia('(max-width: 900px)').matches) return
+      const items = focusableIn(asideRef.current)
+      if (!items.length) return
+      const first = items[0], last = items[items.length - 1]
+      const inside = asideRef.current.contains(document.activeElement)
+      if (e.shiftKey && (document.activeElement === first || !inside)) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && (document.activeElement === last || !inside)) { e.preventDefault(); first.focus() }
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
+  }, [drawerOpen])
+  // Fokus i przewijanie szuflady (tylko wąski ekran, gdy jest szufladą):
+  // po otwarciu fokus na pierwszy link, po zamknięciu powrót na przycisk
+  // „Menu” w belce; dokument pod szufladą się nie przewija.
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    const narrow = window.matchMedia('(max-width: 900px)').matches
+    if (drawerOpen) {
+      wasOpen.current = true
+      if (!narrow) return
+      const unlock = lockScroll()
+      // visibility zmienia się w tej samej klatce — fokus po odmalowaniu.
+      const t = requestAnimationFrame(() => {
+        const nav = asideRef.current?.querySelector('.sidebar-nav')
+        ;(nav?.querySelector('a') || nav?.querySelector('button'))?.focus()
+      })
+      return () => { cancelAnimationFrame(t); unlock() }
+    }
+    if (wasOpen.current) {
+      wasOpen.current = false
+      const inside = asideRef.current?.contains(document.activeElement)
+      if (narrow && (inside || document.activeElement === document.body)) {
+        document.querySelector('.app-header__menu')?.focus()
+      }
+    }
   }, [drawerOpen])
   // Zwijana grupa: domyślnie zwinięta, rozwinięta gdy jesteśmy na jej ekranie.
   const [openOverride, setOpenOverride] = useState({})
@@ -85,7 +122,7 @@ export default function Sidebar() {
     <>
     <div className={`sidebar-overlay${drawerOpen ? ' is-open' : ''}`} aria-hidden="true"
          onClick={() => setNavOpen(false)} />
-    <aside id="app-sidebar" className={`app-sidebar${drawerOpen ? ' is-open' : ''}`}>
+    <aside id="app-sidebar" ref={asideRef} className={`app-sidebar${drawerOpen ? ' is-open' : ''}`}>
       <NavLink to="/" className="sidebar-brand">
         <WodsLogo size={32} onNavy />
         <div className="sidebar-brand__text">
@@ -129,7 +166,7 @@ export default function Sidebar() {
         })}
       </nav>
 
-      <div className="sidebar-footer">v3.2 · NIS2/KSC</div>
+      <div className="sidebar-footer">v3.3 · NIS2/KSC</div>
     </aside>
     </>
   )

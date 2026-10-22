@@ -14,21 +14,26 @@ import { toast } from './ui/feedback'
  *  Wynik = bieżące zaznaczenie ∪ uprawnienia kolegi — NIC nie jest odbierane
  *  (także własne uprawnienia administracyjne i spoza jednostki pracownika
  *  zostają). Pomijamy: pozycje niedostępne w tej jednostce, wycofane
- *  (is_active === false) oraz uprawnienia administracyjne (świadoma decyzja). */
-export function buildCopiedSelection(colleaguePerms, permsBySys, basePicked = new Set(), baseValues = {}) {
+ *  (is_active === false), uprawnienia administracyjne (świadoma decyzja)
+ *  oraz ZAPLANOWANE ODEBRANIA — posiadane, które użytkownik odznaczył
+ *  (`held` bez `basePicked`), i pozycje „revoke” z wniosku (`revoked`).
+ *  Kopiowanie nie może po cichu cofnąć decyzji o odebraniu. */
+export function buildCopiedSelection(colleaguePerms, permsBySys, basePicked = new Set(), baseValues = {},
+                                     { held = new Set(), revoked = new Set() } = {}) {
   const keys = new Set(basePicked)
   const values = { ...baseValues }
-  let added = 0, skippedAdmin = 0, skippedUnavailable = 0
+  let added = 0, skippedAdmin = 0, skippedUnavailable = 0, skippedRevoke = 0
   for (const p of colleaguePerms || []) {
     const k = `${p.system_id}:${p.permission_id}`
     const def = (permsBySys?.[p.system_id] || []).find(x => x.id === p.permission_id)
     if (!def || def.is_active === false) { skippedUnavailable++; continue }
     if (def.is_admin_option) { skippedAdmin++; continue }
     if (keys.has(k)) continue      // już zaznaczone — zostawiamy jego wartości
+    if (held.has(k) || revoked.has(k)) { skippedRevoke++; continue }   // zaplanowane odebranie
     keys.add(k); added++
     if (p.custom_values && Object.keys(p.custom_values).length) values[k] = { ...p.custom_values }
   }
-  return { keys, values, added, skippedAdmin, skippedUnavailable }
+  return { keys, values, added, skippedAdmin, skippedUnavailable, skippedRevoke }
 }
 
 export default function CopyFromColleague({ excludeUserId, onCopy, disabled }) {
@@ -41,7 +46,8 @@ export default function CopyFromColleague({ excludeUserId, onCopy, disabled }) {
 
   useEffect(() => {
     if (!open || workers) return
-    listMyWorkers().then(r => setWorkers(r.data || [])).catch(() => { setWorkers([]); setErr('Nie udało się pobrać listy pracowników') })
+    listMyWorkers().then(r => setWorkers(r.data || []))
+      .catch(ex => { setWorkers([]); setErr(errorMessage(ex, 'Nie udało się pobrać listy pracowników')) })
   }, [open, workers])
   useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 30) }, [open])
 
@@ -64,6 +70,7 @@ export default function CopyFromColleague({ excludeUserId, onCopy, disabled }) {
       const extra = []
       if (res?.skippedAdmin) extra.push(`pominięto uprawnienia administracyjne: ${res.skippedAdmin}`)
       if (res?.skippedUnavailable) extra.push(`niedostępne lub wycofane: ${res.skippedUnavailable}`)
+      if (res?.skippedRevoke) extra.push(`pominięto pozycje zaplanowane do odebrania: ${res.skippedRevoke}`)
       const who = w.full_name || w.username
       toast((res?.count
               ? `Dodano ${res.count} uprawnień od ${who}. Obecne uprawnienia pracownika pozostają bez zmian — sprawdź przed wysłaniem.`
@@ -96,7 +103,8 @@ export default function CopyFromColleague({ excludeUserId, onCopy, disabled }) {
                   Skopiuj uprawnienia od współpracownika
                 </h2>
                 <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--color-text-muted)' }}>
-                  Do zaznaczenia zostaną dodane obecne uprawnienia wybranej osoby — nic nie zostanie odebrane.
+                  Do zaznaczenia zostaną dodane obecne uprawnienia wybranej osoby — nic nie zostanie odebrane,
+                  a pozycje zaplanowane do odebrania pozostaną odznaczone.
                   Przed wysłaniem możesz je zmienić. Uprawnienia administracyjne nie są kopiowane.
                 </p>
               </div>

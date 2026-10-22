@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -152,7 +152,31 @@ def _jti_is_revoked(jti: str) -> bool:
         return False
 
 
-def get_current_user(token: str = Depends(oauth2_scheme)):
+# Wymuszona zmiana hasła (must_change_password / hasło wygasłe) — egzekwowana
+# w backendzie, nie tylko we froncie. Do czasu zmiany hasła konto lokalne ma
+# dostęp WYŁĄCZNIE do poniższych ścieżek (ekran wymuszonej zmiany hasła).
+PASSWORD_CHANGE_ALLOWED_PATHS = frozenset({
+    "/api/auth/change-password",
+    "/api/auth/me",
+    "/api/auth/logout",
+})
+
+PASSWORD_CHANGE_REQUIRED_DETAIL = {
+    "code": "PASSWORD_CHANGE_REQUIRED",
+    "message": "Wymagana zmiana hasła przed dalszym korzystaniem z systemu",
+}
+
+
+def password_change_required(user) -> bool:
+    """Czy konto musi zmienić hasło przed dalszą pracą. Tylko konta lokalne —
+    konta AD zmieniają hasło w domenie (tam obowiązuje polityka domeny)."""
+    from models import AuthType
+    if user.auth_type != AuthType.local:
+        return False
+    return bool(user.must_change_password) or is_password_expired(user)
+
+
+def get_current_user(request: Request, token: str = Depends(oauth2_scheme)):
     from database import engine as db_engine
     from sqlmodel import Session, select
     from models import User
@@ -182,9 +206,14 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
         if user.tokens_valid_from and iat is not None:
             if datetime.utcfromtimestamp(iat) < user.tokens_valid_from:
                 raise exc
-        if user.locked_until and user.locked_until > datetime.utcnow():
-            raise HTTPException(status_code=status.HTTP_423_LOCKED,
-                                detail="Konto tymczasowo zablokowane")
+        # Blokada konta (locked_until) po błędnych hasłach blokuje WYŁĄCZNIE nowe
+        # logowania hasłem — nie unieważnia ważnych sesji. Inaczej każdy mógłby
+        # wylogować np. superadmina, wpisując kilka razy złe hasło (DoS).
+        if password_change_required(user):
+            path = (request.url.path or "").rstrip("/") if request is not None else ""
+            if path not in PASSWORD_CHANGE_ALLOWED_PATHS:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                    detail=dict(PASSWORD_CHANGE_REQUIRED_DETAIL))
         return user
 
 

@@ -14,7 +14,6 @@ from sqlmodel import Session, select, col
 
 from database import get_session
 from models import AuditLog, User
-from services.auth_service import get_current_user
 from services.permissions import require_admin
 
 router = APIRouter()

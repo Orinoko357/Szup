@@ -235,6 +235,27 @@ def _seed_default_workflow():
         log.warning("Seeding default workflow failed: %s", exc)
 
 
+# Triggery wymuszające append-only na tabeli auditlog.
+AUDITLOG_TRIGGERS = ("auditlog_no_update", "auditlog_no_delete")
+
+
+def drop_auditlog_triggers(conn) -> list[tuple[str, Exception]]:
+    """Zdejmij triggery append-only z auditlog (przed czyszczeniem tabeli).
+
+    `conn` to sesja albo połączenie SQLAlchemy — zdejmowanie dzieje się w jego
+    transakcji. Zwraca listę (trigger, wyjątek) dla tych, których nie udało się
+    usunąć. Triggery odtwarza `_install_auditlog_triggers()` (także przy starcie).
+    """
+    from sqlalchemy import text
+    failed: list[tuple[str, Exception]] = []
+    for trg in AUDITLOG_TRIGGERS:
+        try:
+            conn.execute(text(f'DROP TRIGGER IF EXISTS "{trg}"'))
+        except Exception as exc:
+            failed.append((trg, exc))
+    return failed
+
+
 def _install_auditlog_triggers():
     from sqlalchemy import text
     triggers = [
@@ -330,7 +351,7 @@ def _run_migrations():
         ("department",       "kind",          "VARCHAR DEFAULT 'department'"),
         # Workflow engine — konfigurowalny obieg wniosków
         ("accessrequest",    "request_type_id", "INTEGER"),
-        # PDF/EZD tracking dla bieżącego węzła instancji obiegu
+        # Obieg papierowy PDF/EZD (usunięty) — kolumny zostają dla starszych baz
         ("workflowinstance", "pending_pdf_at",         "DATETIME"),
         ("workflowinstance", "pending_ezd_confirmed",  "BOOLEAN DEFAULT 0"),
         ("workflowinstance", "pending_pdf_by_user_id", "INTEGER"),

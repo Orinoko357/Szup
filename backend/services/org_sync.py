@@ -4,7 +4,7 @@ Synchronizacja struktury organizacyjnej z rolą „kierownik" (manager).
 Problem: kierownictwo komórki było trzymane w DWÓCH miejscach, które trzeba
 było ustawiać ręcznie osobno:
   1. `Department.manager_user_id` (kto kieruje komórką) — plus `DepartmentDeputy`,
-  2. rola `manager` w `User.roles` (czy user w ogóle widzi panel kierownika).
+  2. rola `manager` w `User.roles` (czy user w ogóle widzi widoki kierownika).
 
 Ten moduł spina je w jedną spójną całość — w obie strony:
 

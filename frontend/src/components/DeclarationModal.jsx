@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { X, ShieldAlert } from 'lucide-react'
+import { ShieldAlert } from 'lucide-react'
 import { getDeclarationText } from '../api'
 import { getCurrentUser } from '../roles'
+import Modal from './ui/Modal'
 
 /**
  * Oświadczenie wnioskującego — pokazywane w chwili, gdy akcja kieruje wniosek
@@ -59,71 +60,58 @@ export default function DeclarationModal({
                 letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--color-text-muted)' }
   const btn = { minHeight: 44, fontSize: 14, padding: '0 16px', borderRadius: 8 }
 
+  const title = (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <span aria-hidden="true" style={{ width: 38, height: 38, flex: 'none', borderRadius: 10, background: 'var(--color-warning-bg)',
+                                        color: 'var(--color-gold-dark)', display: 'grid', placeItems: 'center' }}>
+        <ShieldAlert size={20} />
+      </span>
+      Oświadczenie wnioskującego
+    </span>
+  )
+
+  // Wspólne ui/Modal (pułapka fokusu, Escape, zwrot fokusu, blokada przewijania).
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-labelledby="decl-title" style={{
-        width: '92vw', maxWidth: 640, background: 'var(--color-card)', borderRadius: 12,
-        overflow: 'hidden', boxShadow: '0 20px 50px rgba(0, 0, 0, 0.25)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '18px 22px',
-                      borderBottom: '1px solid var(--color-border)' }}>
-          <span aria-hidden="true" style={{ width: 38, height: 38, borderRadius: 10, background: 'var(--color-warning-bg)',
-                                            color: 'var(--color-gold-dark)', display: 'grid', placeItems: 'center' }}>
-            <ShieldAlert size={20} />
-          </span>
-          <h2 id="decl-title" style={{ margin: 0, flex: 1, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
-            Oświadczenie wnioskującego
-          </h2>
-          <button type="button" aria-label="Zamknij" onClick={onClose} disabled={busy}
-                  style={{ width: 44, height: 44, display: 'grid', placeItems: 'center', border: 0,
-                           borderRadius: 8, background: 'transparent', color: 'var(--color-text-muted)', cursor: 'pointer' }}>
-            <X size={18} aria-hidden="true" />
-          </button>
+    <Modal title={title} onClose={onClose} closable={!busy} width={640} describedBy="decl-text"
+           footer={<>
+             <button type="button" className="btn btn--ghost" style={btn} onClick={onClose} disabled={busy}>
+               Anuluj
+             </button>
+             <button type="button" className="btn btn--success" style={btn} disabled={!ready || busy}
+                     onClick={() => onConfirm({
+                       declared_by_name: name.trim(), declared_date: date.trim(),
+                     })}>
+               {busy ? 'Wysyłanie…' : 'Oświadczam i wysyłam'}
+             </button>
+           </>}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div id="decl-text" tabIndex={0} aria-label="Treść oświadczenia" style={{
+          maxHeight: 240, overflowY: 'auto', fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap',
+          border: '1px solid var(--color-border)', borderRadius: 8,
+          padding: '14px 16px', background: 'var(--bg-secondary)', color: 'var(--color-text)',
+        }}>
+          {loading ? 'Ładowanie treści…' : text}
         </div>
 
-        <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 14,
-                      maxHeight: '70vh', overflowY: 'auto' }}>
-          <div tabIndex={0} style={{
-            maxHeight: 240, overflowY: 'auto', fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap',
-            border: '1px solid var(--color-border)', borderRadius: 8,
-            padding: '14px 16px', background: 'var(--bg-secondary)', color: 'var(--color-text)',
-          }}>
-            {loading ? 'Ładowanie treści…' : text}
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-            <label style={lbl}>
-              Imię i nazwisko *
-              <input style={field} value={name} autoFocus required
-                     onChange={e => setName(e.target.value)}
-                     placeholder="np. Jan Kowalski" />
-            </label>
-            <label style={lbl}>
-              Data *
-              <input style={field} type="date" required
-                     value={date} onChange={e => setDate(e.target.value)} />
-            </label>
-          </div>
-          <p style={{ margin: 0, fontSize: 12, color: 'var(--color-text-muted)' }}>
-            Wpisanie danych i zatwierdzenie jest równoznaczne ze złożeniem
-            powyższego oświadczenia. Zostanie ono trwale zapisane i powiązane
-            z wnioskiem oraz pracownikiem.
-          </p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+          <label style={lbl}>
+            Imię i nazwisko *
+            <input style={field} value={name} autoFocus required
+                   onChange={e => setName(e.target.value)}
+                   placeholder="np. Jan Kowalski" />
+          </label>
+          <label style={lbl}>
+            Data *
+            <input style={field} type="date" required
+                   value={date} onChange={e => setDate(e.target.value)} />
+          </label>
         </div>
-
-        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 10, padding: '14px 22px',
-                      borderTop: '1px solid var(--color-border)', background: 'var(--bg-secondary)' }}>
-          <button type="button" className="btn btn--ghost" style={btn} onClick={onClose} disabled={busy}>
-            Anuluj
-          </button>
-          <button type="button" className="btn btn--success" style={btn} disabled={!ready || busy}
-                  onClick={() => onConfirm({
-                    declared_by_name: name.trim(), declared_date: date.trim(),
-                  })}>
-            {busy ? 'Wysyłanie…' : 'Oświadczam i wysyłam'}
-          </button>
-        </div>
+        <p style={{ margin: 0, fontSize: 12, color: 'var(--color-text-muted)' }}>
+          Wpisanie danych i zatwierdzenie jest równoznaczne ze złożeniem
+          powyższego oświadczenia. Zostanie ono trwale zapisane i powiązane
+          z wnioskiem oraz pracownikiem.
+        </p>
       </div>
-    </div>
+    </Modal>
   )
 }

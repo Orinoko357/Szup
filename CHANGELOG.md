@@ -6,6 +6,52 @@ Wersjonowanie: [Semantic Versioning](https://semver.org/lang/pl/).
 
 ## [Unreleased]
 
+## [3.3.0] — 2026-10-22
+
+Poprawki po audycie 3.2: bezpieczeństwo logowania, logika obiegu, dostępność
+interfejsu i porządki w kodzie.
+
+### Usunięto
+- Usuwanie wpisów audit logu i zdarzeń bezpieczeństwa (dodane w 3.2) — dziennik
+  znów jest wyłącznie do odczytu (append-only, triggery w bazie).
+- Martwy kod: wyłączony obieg papierowy PDF/EZD (bramka podpisu, endpointy
+  `workflow/pdf` i `workflow/ezd-confirm`, generator PDF), pole `ribbon`, nieużywane
+  endpointy (`/requests/my-scope`, `/requests/stats/summary`, `/requests/{id}/pdf`,
+  `/units/{id}/departments`, `/systems/active`, `/workflow-templates/node-types`,
+  `/auth/logout-all`), `require_hr`, nieużywane importy i eksporty. Kolumny w bazie
+  zostają (bez migracji destrukcyjnych).
+
+### Bezpieczeństwo
+- Logowanie AD i SSO tylko dla kont domenowych (konto lokalne, także superadmin,
+  nie dostanie tokenu przez `/login/ldap` ani SSO).
+- SSO: obowiązkowy sekret proxy (`SZUP_SSO_PROXY_SECRET`) i sprawdzenie realmu.
+- Normalizacja loginu (bez rozróżniania wielkości liter); konta wyłączone w AD
+  są dezaktywowane.
+- Adres klienta z ostatniego przeskoku `X-Forwarded-For` (lokalne proxy).
+- Blokada konta po nieudanych próbach nie zrywa już trwających sesji.
+- Wymuszona zmiana hasła (pierwsze logowanie / hasło wygasłe) egzekwowana w backendzie.
+- Administrator nie nada sobie wyższych uprawnień; ustawienia LDAP tylko dla
+  superadmina; zmiany ustawień zapisywane w audycie.
+
+### Naprawiono
+- Realizacja IT najpierw waliduje, potem zapisuje (bez częściowych zmian przy błędzie).
+- Typ wniosku jest wymagany; jedna reguła zakresu przełożonego w całym systemie.
+- Role w interfejsie odświeżane z `/auth/me`.
+- Akceptacja wyższa bez adresata w strukturze trafia do dyrektora jednostki;
+  powiadomienia także do zastępców.
+- Bez zbędnego e-maila o wyborze uprawnień, gdy składający od razu je wybrał;
+  pusty wybór uprawnień nie czyści pozycji wniosku.
+- E-maile wysyłane po zapisie zmian przez ograniczoną pulę wątków (błędy w logach).
+
+### Zmieniono
+- Edytor szablonów obiegu bezpiecznie wczytuje uszkodzony graf.
+- Tryb ciemny: przyciski i kolor stanu „wybrany” (`--color-selected`).
+- Szuflada menu i okna dialogowe: pułapka i zwrot fokusu; etykiety pól i obsługa
+  klawiatury; czytelne błędy logowania; nazwa „Dziennik zdarzeń”.
+- Strony ładowane leniwie — pakiet startowy mniejszy o ok. 50%.
+- Porządki: nowe i naprawione testy, wspólne zdejmowanie triggerów audytu,
+  przypięte zakresy zależności, kopia bazy w `deploy/deploy.sh` przed wdrożeniem.
+
 ## [3.2.0] — 2026-10-22
 
 Porządki po audycie 3.1 (spójność, logika, czystość) + nowe funkcje administratora.

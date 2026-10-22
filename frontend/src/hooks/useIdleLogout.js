@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { clearSession } from '../roles'
 
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minut
 
@@ -11,8 +12,7 @@ export default function useIdleLogout(isLoggedIn) {
     const reset = () => {
       clearTimeout(timerRef.current)
       timerRef.current = setTimeout(() => {
-        localStorage.removeItem('szup_token')
-        localStorage.removeItem('szup_user')
+        clearSession()
         window.location.href = '/login?reason=idle'
       }, IDLE_TIMEOUT_MS)
     }

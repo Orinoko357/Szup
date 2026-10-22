@@ -4,7 +4,7 @@ import { serverNow } from './serverTime'
 // istotność, role). Wcześniej ten sam status miał różne nazwy na różnych
 // ekranach („Oczekuje na IT” / „Realizacja IT” / „Do realizacji”).
 
-export const REQUEST_STATUS = {
+const REQUEST_STATUS = {
   pending_selection: { label: 'Wybór uprawnień',       badge: 'badge--warning' },
   pending_manager:   { label: 'Akceptacja kierownika', badge: 'badge--warning' },
   pending_it:        { label: 'Realizacja IT',         badge: 'badge--info' },
@@ -22,7 +22,20 @@ export const NODE_LABEL = {
 }
 export const nodeLabel = (n, fallback) => NODE_LABEL[n] || fallback || n || '—'
 
-export const KIND_LABEL = { grant: 'Zatrudnienie', revoke: 'Odejście', change: 'Zmiana' }
+// Kto wykonuje dany krok obiegu (historia wniosku, „krok pominięty”).
+// Jedna nazwa wyższego stopnia: krok „Akceptacja wyższa”, wykonawca
+// „kierownik nadrzędny” (nie „kierownik wyższego rzędu”).
+export const NODE_WHO = {
+  select_permissions:     'Kierownik',
+  manager_approve:        'Kierownik',
+  higher_manager_approve: 'Kierownik nadrzędny',
+  it_execute:             'IT',
+}
+
+// Kroki obiegu wykonywane przez kierownika (wybór uprawnień / akceptacje).
+export const MANAGER_NODES = ['select_permissions', 'manager_approve', 'higher_manager_approve']
+
+const KIND_LABEL = { grant: 'Zatrudnienie', revoke: 'Odejście', change: 'Zmiana' }
 export const kindLabel = (k) => KIND_LABEL[k || 'grant'] || k
 
 export const NAME_CHANGE_STATUS = {

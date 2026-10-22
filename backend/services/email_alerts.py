@@ -7,7 +7,6 @@ import logging
 import os
 import smtplib
 import ssl
-from datetime import datetime
 from email.mime.text import MIMEText
 from email.utils import formataddr
 
@@ -23,6 +22,11 @@ APP_URL = os.getenv("SZUP_APP_URL", "https://szup.intranet.wods.pl")
 def request_url(request_id: int, tab: str = "handle") -> str:
     """Link prosto do wniosku w aplikacji (v3.1) — /requests?tab=…&open=<id>."""
     return f"{APP_URL.rstrip('/')}/requests?tab={tab}&open={request_id}"
+
+
+def names_queue_url() -> str:
+    """Kolejka IT wniosków o zmianę nazwiska — /requests?tab=names."""
+    return f"{APP_URL.rstrip('/')}/requests?tab=names"
 
 
 def requester_url(request_id: int, requester_is_manager: bool | None,
@@ -134,38 +138,21 @@ def _send_event(event_key: str, to_address: str, ctx: dict, *,
           from_name=from_name, from_email=from_email, raise_errors=raise_errors)
 
 
-def notify_manager_new_request(manager_email: str, request_id: int, worker_name: str,
-                                dept_name: str, created_by: str,
-                                from_name: str | None = None,
-                                from_email: str | None = None) -> None:
-    _send_event("manager_new_request", manager_email, {
-        "request_id": request_id, "worker_name": worker_name,
-        "dept_name": dept_name, "created_by": created_by,
-        "request_url": request_url(request_id, "handle"),
-    }, from_name=from_name, from_email=from_email)
+# Szablony `manager_new_request`, `selector_new_request` i `it_request_approved`
+# obsługiwała wyłącznie dawna ścieżka tworzenia wniosku bez typu (usunięta).
+# Definicje zostają w services.notifications.EVENTS (edycja w Ustawieniach),
+# ale nic ich już nie wysyła — obieg używa `workflow_stage` i `helpdesk_new_request`.
 
 
-def notify_selector_new_request(manager_email: str, request_id: int, worker_name: str,
-                                 dept_name: str, created_by: str,
+def notify_name_change_requested(full_name: str, new_name: str,
                                  from_name: str | None = None,
                                  from_email: str | None = None) -> None:
-    _send_event("selector_new_request", manager_email, {
-        "request_id": request_id, "worker_name": worker_name,
-        "dept_name": dept_name, "created_by": created_by,
-        "request_url": request_url(request_id, "handle"),
-    }, from_name=from_name, from_email=from_email)
-
-
-def notify_it_request_approved(it_emails: list[str], request_id: int, worker_name: str,
-                                 dept_name: str, manager_name: str,
-                                 from_name: str | None = None,
-                                 from_email: str | None = None) -> None:
-    for email in it_emails:
-        _send_event("it_request_approved", email, {
-            "request_id": request_id, "worker_name": worker_name,
-            "dept_name": dept_name, "manager_name": manager_name,
-            "request_url": request_url(request_id, "it"),
-        }, from_name=from_name, from_email=from_email)
+    """Nowy wniosek o zmianę nazwiska → skrzynka helpdesku z linkiem do kolejki IT."""
+    _send(resolve_helpdesk_email(),
+          "Nowy wniosek o zmianę nazwiska",
+          f"{full_name} zgłosił(a) zmianę nazwiska na: {new_name}.\n\n"
+          f"Rozpatrz wniosek w SZUP (Wnioski → Zmiany nazwisk): {names_queue_url()}",
+          from_name=from_name, from_email=from_email)
 
 
 def notify_helpdesk_new_request(request_id: int, worker_name: str,

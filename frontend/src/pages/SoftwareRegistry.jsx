@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useId, useState } from 'react'
 import {
   Package, Plus, Trash2, RefreshCw, Edit2, Save, X,
   Building2, ShieldCheck, KeyRound, Copy, Truck, FileSpreadsheet, ListPlus,
@@ -76,11 +76,12 @@ function splitOptions(text) {
  */
 function PermControlFields({ type, setType, options, setOptions, required, setRequired,
                              prompt = '', setPrompt }) {
+  const fid = useId()   // id pól formularza (etykiety htmlFor)
   return (
     <>
       <div className="form-group" style={{ margin: 0, minWidth: 190 }}>
-        <label className="form-label">Sposób wyboru</label>
-        <select aria-label="Sposób wyboru" className="form-control" value={type} onChange={e => setType(e.target.value)}>
+        <label className="form-label" htmlFor={`${fid}-type`}>Sposób wyboru</label>
+        <select id={`${fid}-type`} className="form-control" value={type} onChange={e => setType(e.target.value)}>
           {INPUT_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
       </div>
@@ -89,8 +90,8 @@ function PermControlFields({ type, setType, options, setOptions, required, setRe
                       flexWrap: 'wrap', width: '100%' }}>
           {INPUT_OPTION_TYPES.includes(type) && (
             <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 240 }}>
-              <label className="form-label">Opcje do wyboru (jedna w wierszu)</label>
-              <textarea aria-label="Opcje do wyboru (jedna w wierszu)" className="form-control" style={{ minHeight: 60, fontSize: 13 }}
+              <label className="form-label" htmlFor={`${fid}-opts`}>Opcje do wyboru (jedna w wierszu)</label>
+              <textarea id={`${fid}-opts`} className="form-control" style={{ minHeight: 60, fontSize: 13 }}
                         value={options} onChange={e => setOptions(e.target.value)}
                         placeholder={['Odczyt', 'Zapis', 'Administracja'].join('\n')} />
             </div>
@@ -98,8 +99,8 @@ function PermControlFields({ type, setType, options, setOptions, required, setRe
           {/* Podpowiedź pokazywana wnioskującemu po zaznaczeniu uprawnienia. */}
           {setPrompt && (
             <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 220 }}>
-              <label className="form-label">Podpowiedź (co wpisać/wybrać)</label>
-              <input aria-label="Podpowiedź (co wpisać/wybrać)" className="form-control" style={{ fontSize: 13 }}
+              <label className="form-label" htmlFor={`${fid}-prompt`}>Podpowiedź (co wpisać/wybrać)</label>
+              <input id={`${fid}-prompt`} className="form-control" style={{ fontSize: 13 }}
                      value={prompt} onChange={e => setPrompt(e.target.value)}
                      placeholder={type === 'text' ? 'np. Podaj login AD (jan.kowalski)'
                        : type === 'textarea' ? 'np. Wpisz rejestry/moduły do udostępnienia'
@@ -121,6 +122,7 @@ function PermControlFields({ type, setType, options, setOptions, required, setRe
 
 /** Wiersz uprawnienia: podgląd + edycja w miejscu (nazwa, opis, grupa, kontrolka). */
 function PermRow({ p, onChanged, selected = false, onToggleSel }) {
+  const fid = useId()   // id pól formularza (etykiety htmlFor)
   const [editing, setEditing]   = useState(false)
   const [name, setName]         = useState(p.permission_name)
   const [desc, setDesc]         = useState(p.description || '')
@@ -173,23 +175,23 @@ function PermRow({ p, onChanged, selected = false, onToggleSel }) {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap',
                         alignItems: 'flex-end', padding: '6px 2px' }}>
             <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 170 }}>
-              <label className="form-label">Nazwa uprawnienia</label>
-              <input aria-label="Nazwa uprawnienia" className="form-control" value={name} autoFocus
+              <label className="form-label" htmlFor={`${fid}-name`}>Nazwa uprawnienia</label>
+              <input id={`${fid}-name`} className="form-control" value={name} autoFocus
                      onChange={e => setName(e.target.value)} />
             </div>
             <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 150 }}>
-              <label className="form-label">Opis</label>
-              <input aria-label="Opis" className="form-control" value={desc}
+              <label className="form-label" htmlFor={`${fid}-desc`}>Opis</label>
+              <input id={`${fid}-desc`} className="form-control" value={desc}
                      onChange={e => setDesc(e.target.value)} />
             </div>
             <div className="form-group" style={{ margin: 0, minWidth: 160 }}>
-              <label className="form-label">Grupa</label>
-              <input aria-label="Grupa" className="form-control" list="szup-perm-groups" value={group}
+              <label className="form-label" htmlFor={`${fid}-group`}>Grupa</label>
+              <input id={`${fid}-group`} className="form-control" list="szup-perm-groups" value={group}
                      onChange={e => setGroup(e.target.value)} placeholder="bez grupy" />
             </div>
             <div className="form-group" style={{ margin: 0, minWidth: 160 }}>
-              <label className="form-label">Podgrupa</label>
-              <input aria-label="Podgrupa" className="form-control" list="szup-perm-subgroups" value={subgroup}
+              <label className="form-label" htmlFor={`${fid}-sub`}>Podgrupa</label>
+              <input id={`${fid}-sub`} className="form-control" list="szup-perm-subgroups" value={subgroup}
                      onChange={e => setSubgroup(e.target.value)} placeholder="bez podgrupy" />
             </div>
             <PermControlFields type={type} setType={setType} options={opts} setOptions={setOpts}
@@ -215,7 +217,7 @@ function PermRow({ p, onChanged, selected = false, onToggleSel }) {
       <td style={{ fontWeight: 600 }}>
         {onToggleSel && !p.is_admin_option && (
           <input type="checkbox" checked={selected} onChange={onToggleSel}
-                 style={{ width: 17, height: 17, marginRight: 10, verticalAlign: 'middle', accentColor: 'var(--color-navy)' }}
+                 style={{ width: 17, height: 17, marginRight: 10, verticalAlign: 'middle', accentColor: 'var(--color-selected)' }}
                  aria-label="Zaznacz pozycję" title="Zaznacz do operacji masowej" />
         )}
         <span style={{ fontWeight: 600 }}>{p.permission_name}</span>
@@ -254,6 +256,7 @@ function PermRow({ p, onChanged, selected = false, onToggleSel }) {
  *  do podgrupy. `subgroup` prefilluje pole podgrupy (przy „dodaj do podgrupy"),
  *  `label` nadpisuje tekst przycisku. */
 function GroupAddPerm({ systemId, group, subgroup = '', label, onAdded }) {
+  const fid = useId()   // id pól formularza (etykiety htmlFor)
   const [open, setOpen]         = useState(false)
   const [name, setName]         = useState('')
   const [desc, setDesc]         = useState('')
@@ -305,20 +308,20 @@ function GroupAddPerm({ systemId, group, subgroup = '', label, onAdded }) {
     }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 180 }}>
-          <label className="form-label">
+          <label className="form-label" htmlFor={`${fid}-name`}>
             Nowe uprawnienie{group ? ` w grupie „${group}"` : ' (bez grupy)'}
           </label>
-          <input aria-label="Nowe uprawnienie" className="form-control" value={name} autoFocus
+          <input id={`${fid}-name`} className="form-control" value={name} autoFocus
                  onChange={e => setName(e.target.value)}
                  placeholder="np. Odczyt, 008 Krakowiaczek…" />
         </div>
         <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 150 }}>
-          <label className="form-label">Opis</label>
-          <input aria-label="Opis" className="form-control" value={desc} onChange={e => setDesc(e.target.value)} />
+          <label className="form-label" htmlFor={`${fid}-desc`}>Opis</label>
+          <input id={`${fid}-desc`} className="form-control" value={desc} onChange={e => setDesc(e.target.value)} />
         </div>
         <div className="form-group" style={{ margin: 0, minWidth: 150 }}>
-          <label className="form-label">Podgrupa (opcjonalnie)</label>
-          <input aria-label="Podgrupa (opcjonalnie)" className="form-control" list="szup-perm-subgroups" value={sub}
+          <label className="form-label" htmlFor={`${fid}-sub`}>Podgrupa (opcjonalnie)</label>
+          <input id={`${fid}-sub`} className="form-control" list="szup-perm-subgroups" value={sub}
                  onChange={e => setSub(e.target.value)} placeholder="bez podgrupy" />
         </div>
         <PermControlFields type={type} setType={setType} options={opts} setOptions={setOpts}
@@ -413,6 +416,7 @@ export default function SoftwareRegistry() {
   const [units,   setUnits]   = useState([])
   const [vendors, setVendors] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadErr, setLoadErr] = useState(null)
   const [showAdd, setShowAdd] = useState(false)
   const [filterUnit, setFilterUnit] = useState('')   // '' = wszystkie jednostki
   const [onlyUnconfigured, setOnlyUnconfigured] = useState(false)
@@ -466,7 +470,7 @@ export default function SoftwareRegistry() {
         s => !s.all_units && (s.unit_ids || []).length === 0 && passExtra(s)))
 
   async function load() {
-    setLoading(true)
+    setLoading(true); setLoadErr(null)
     try {
       const [rSys, rUnits, rVend] = await Promise.all([
         listSystems(), listActiveUnits(),
@@ -475,6 +479,8 @@ export default function SoftwareRegistry() {
       setSystems(rSys.data)
       setUnits(rUnits.data)
       setVendors(rVend.data)
+    } catch (ex) {
+      setLoadErr(errorMessage(ex, 'Nie udało się wczytać rejestru oprogramowania'))
     } finally {
       setLoading(false)
     }
@@ -625,7 +631,7 @@ export default function SoftwareRegistry() {
             display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: 44, fontSize: 14,
             cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
           }} title="Programy bez trybu „tylko dostęp”, bez pól wnioskodawcy i bez listy uprawnień">
-            <input type="checkbox" checked={onlyUnconfigured} style={{ width: 18, height: 18, accentColor: 'var(--color-navy)' }}
+            <input type="checkbox" checked={onlyUnconfigured} style={{ width: 18, height: 18, accentColor: 'var(--color-selected)' }}
                    onChange={e => setOnlyUnconfigured(e.target.checked)} />
             Bez uprawnień
             {unconfiguredCount > 0 && (
@@ -638,7 +644,7 @@ export default function SoftwareRegistry() {
             display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: 44, fontSize: 14,
             cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
           }} title="Programy bez przypisanego producenta — zaznacz je i przypisz zbiorczo">
-            <input type="checkbox" checked={onlyNoVendor} style={{ width: 18, height: 18, accentColor: 'var(--color-navy)' }}
+            <input type="checkbox" checked={onlyNoVendor} style={{ width: 18, height: 18, accentColor: 'var(--color-selected)' }}
                    onChange={e => setOnlyNoVendor(e.target.checked)} />
             Bez dostawcy
             {noVendorCount > 0 && (
@@ -693,14 +699,14 @@ export default function SoftwareRegistry() {
         <section className="card" aria-label="Akcje zbiorcze" style={{
           padding: '12px 16px', marginBottom: 16,
           display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 14,
-          borderColor: selected.size > 0 ? 'var(--color-navy)' : undefined,
+          borderColor: selected.size > 0 ? 'var(--color-selected)' : undefined,
         }}>
           <label style={{
             display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: 40,
             fontSize: 14, cursor: 'pointer', userSelect: 'none',
           }}>
             <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll}
-                   style={{ width: 18, height: 18, accentColor: 'var(--color-navy)' }} />
+                   style={{ width: 18, height: 18, accentColor: 'var(--color-selected)' }} />
             {selected.size > 0
               ? <strong>Zaznaczono: {selected.size}</strong>
               : <span style={{ color: 'var(--color-text-muted)' }}>Zaznacz wszystkie</span>}
@@ -779,9 +785,10 @@ export default function SoftwareRegistry() {
         </section>
       )}
 
+      {loadErr && <div className="alert alert--error mb-4" role="alert">{loadErr}</div>}
       {loading ? (
         <div className="card" style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
-      ) : systems.length === 0 ? (
+      ) : loadErr && systems.length === 0 ? null : systems.length === 0 ? (
         <div className="card" style={{ color: 'var(--color-text-muted)', padding: 16 }}>
           <Package size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
           Brak zarejestrowanego oprogramowania. Dodaj program przyciskiem „Dodaj oprogramowanie”.
@@ -840,6 +847,7 @@ export default function SoftwareRegistry() {
 // Formularz „Dodaj oprogramowanie"
 // ---------------------------------------------------------------------------
 function AddSystemForm({ units, vendors = [], allSystems = [], onCancel, onSaved }) {
+  const fid = useId()   // id pól formularza (etykiety htmlFor)
   const [name, setName]         = useState('')
   const [desc, setDesc]         = useState('')
   const [accessOnly, setAO]     = useState(false)
@@ -888,17 +896,17 @@ function AddSystemForm({ units, vendors = [], allSystems = [], onCancel, onSaved
   }
 
   return (
-    <div className="card mb-4" style={{ border: '2px solid var(--color-navy)' }}>
+    <div className="card mb-4" style={{ border: '2px solid var(--color-selected)' }}>
       <form onSubmit={submit}>
         <div className="form-row">
           <div className="form-group">
-            <label className="form-label">Nazwa oprogramowania *</label>
-            <input aria-label="Nazwa oprogramowania" className="form-control" required value={name}
+            <label className="form-label" htmlFor={`${fid}-name`}>Nazwa oprogramowania *</label>
+            <input id={`${fid}-name`} className="form-control" required value={name}
                    onChange={e => setName(e.target.value)} autoFocus />
           </div>
           <div className="form-group">
-            <label className="form-label">Opis</label>
-            <input aria-label="Opis" className="form-control" value={desc}
+            <label className="form-label" htmlFor={`${fid}-desc`}>Opis</label>
+            <input id={`${fid}-desc`} className="form-control" value={desc}
                    onChange={e => setDesc(e.target.value)} />
           </div>
         </div>
@@ -926,8 +934,10 @@ function AddSystemForm({ units, vendors = [], allSystems = [], onCancel, onSaved
 
         {!allUnits && (
           <div className="form-group">
-            <label className="form-label">Wybierz jednostki</label>
-            <UnitsPicker units={units} selected={unitIds} onToggle={toggleUnit} />
+            <div className="form-label" id={`${fid}-units`}>Wybierz jednostki</div>
+            <div role="group" aria-labelledby={`${fid}-units`}>
+              <UnitsPicker units={units} selected={unitIds} onToggle={toggleUnit} />
+            </div>
           </div>
         )}
 
@@ -946,10 +956,10 @@ function AddSystemForm({ units, vendors = [], allSystems = [], onCancel, onSaved
 
         {copySources.length > 0 && (
           <div className="form-group">
-            <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <label className="form-label" htmlFor={`${fid}-copy`} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <Copy size={13} /> Kopiuj uprawnienia z innego oprogramowania
             </label>
-            <select className="form-control" style={{ maxWidth: 420 }}
+            <select id={`${fid}-copy`} className="form-control" style={{ maxWidth: 420 }}
                     value={copyFrom} onChange={e => setCopyFrom(e.target.value)}>
               <option value="">— nie kopiuj —</option>
               {copySources.map(x => (
@@ -990,10 +1000,11 @@ function AddSystemForm({ units, vendors = [], allSystems = [], onCancel, onSaved
  * powodu co RequestListingFields poniżej (żeby oba formularze się nie rozjechały).
  */
 function VendorField({ vendors, value, onChange }) {
+  const fid = useId()   // id pól formularza (etykiety htmlFor)
   return (
     <div className="form-group">
-      <label className="form-label">Dostawca / producent</label>
-      <select aria-label="Dostawca / producent" className="form-control" style={{ maxWidth: 420 }}
+      <label className="form-label" htmlFor={`${fid}-vendor`}>Dostawca / producent</label>
+      <select id={`${fid}-vendor`} className="form-control" style={{ maxWidth: 420 }}
               value={value} onChange={e => onChange(e.target.value)}>
         <option value="">— nie przypisano —</option>
         {vendors.map(v => (
@@ -1056,11 +1067,12 @@ function ScopeRequiredField({ checked, onChecked }) {
 
 
 function RequestListingFields({ order, onOrder, checked, onChecked }) {
+  const fid = useId()   // id pól formularza (etykiety htmlFor)
   return (
     <div className="form-row">
       <div className="form-group">
-        <label className="form-label">Nr na wniosku</label>
-        <input className="form-control" type="number" min={1} step={1}
+        <label className="form-label" htmlFor={`${fid}-order`}>Nr na wniosku</label>
+        <input id={`${fid}-order`} className="form-control" type="number" min={1} step={1}
                style={{ maxWidth: 140 }}
                value={order} onChange={e => onOrder(e.target.value)}
                placeholder="np. 1" />
@@ -1180,7 +1192,7 @@ function SystemRow({ system: s, units, vendors = [], allSystems = [], selected =
     <section className="card" aria-label={s.name} style={{
       padding: 0, overflow: 'hidden',
       // v3.0: zaznaczenie — granatowa ramka (bez lewego paska).
-      borderColor: selected ? 'var(--color-navy)' : undefined,
+      borderColor: selected ? 'var(--color-selected)' : undefined,
       // Nieaktywne oprogramowanie — lekko wyszarzone (ląduje też na dole listy).
       opacity: s.is_active === false ? 0.55 : 1,
     }}>
@@ -1190,7 +1202,7 @@ function SystemRow({ system: s, units, vendors = [], allSystems = [], selected =
       }}>
         <input type="checkbox" checked={selected} onChange={onToggleSelect}
                title="Zaznacz do operacji zbiorczej" aria-label={`Zaznacz ${s.name}`}
-               style={{ width: 18, height: 18, marginTop: 8, flexShrink: 0, cursor: 'pointer', accentColor: 'var(--color-navy)' }} />
+               style={{ width: 18, height: 18, marginTop: 8, flexShrink: 0, cursor: 'pointer', accentColor: 'var(--color-selected)' }} />
         <span aria-hidden="true" style={{
           width: 34, height: 34, borderRadius: 8, flexShrink: 0, background: 'var(--bg-secondary)',
           color: 'var(--color-heading)', display: 'grid', placeItems: 'center',
@@ -1252,7 +1264,7 @@ function SystemRow({ system: s, units, vendors = [], allSystems = [], selected =
 
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <button className="btn btn--ghost btn--sm" onClick={() => setOpen(o => !o)} aria-expanded={open}
-                  style={open ? { minHeight: 36, borderColor: 'var(--color-navy)', background: 'var(--color-warning-bg)', fontWeight: 700 } : { minHeight: 36 }}>
+                  style={open ? { minHeight: 36, borderColor: 'var(--color-selected)', background: 'var(--color-warning-bg)', fontWeight: 700 } : { minHeight: 36 }}>
             {open ? '▲' : '▼'} {s.access_only ? 'Szczegóły' : 'Uprawnienia'}
           </button>
           <button className="btn btn--ghost btn--sm" onClick={() => setEditing(e => !e)}>
@@ -1299,6 +1311,7 @@ function SystemRow({ system: s, units, vendors = [], allSystems = [], selected =
 
 
 function EditSystemForm({ system: s, units, vendors = [], onCancel, onSaved }) {
+  const fid = useId()   // id pól formularza (etykiety htmlFor)
   const [name, setName]     = useState(s.name)
   const [desc, setDesc]     = useState(s.description || '')
   const [accessOnly, setAO] = useState(!!s.access_only)
@@ -1347,13 +1360,13 @@ function EditSystemForm({ system: s, units, vendors = [], onCancel, onSaved }) {
     }}>
       <div className="form-row">
         <div className="form-group">
-          <label className="form-label">Nazwa *</label>
-          <input className="form-control" required value={name}
+          <label className="form-label" htmlFor={`${fid}-name`}>Nazwa *</label>
+          <input id={`${fid}-name`} className="form-control" required value={name}
                  onChange={e => setName(e.target.value)} />
         </div>
         <div className="form-group">
-          <label className="form-label">Opis</label>
-          <input aria-label="Opis" className="form-control" value={desc}
+          <label className="form-label" htmlFor={`${fid}-desc`}>Opis</label>
+          <input id={`${fid}-desc`} className="form-control" value={desc}
                  onChange={e => setDesc(e.target.value)} />
         </div>
       </div>
@@ -1375,8 +1388,10 @@ function EditSystemForm({ system: s, units, vendors = [], onCancel, onSaved }) {
       </div>
       {!allUnits && (
         <div className="form-group">
-          <label className="form-label">Wybierz jednostki</label>
-          <UnitsPicker units={units} selected={unitIds} onToggle={toggleUnit} />
+          <div className="form-label" id={`${fid}-units`}>Wybierz jednostki</div>
+          <div role="group" aria-labelledby={`${fid}-units`}>
+            <UnitsPicker units={units} selected={unitIds} onToggle={toggleUnit} />
+          </div>
         </div>
       )}
       <VendorField vendors={vendors} value={vendorId} onChange={setVendorId} />
@@ -1418,9 +1433,11 @@ function PermissionsPanel({ system: s }) {
   })
   const clearSel = () => setSelPerms(new Set())
 
+  const [loadErr, setLoadErr] = useState(null)
   async function load() {
-    setLoading(true)
+    setLoading(true); setLoadErr(null)
     try { const r = await listPermissions(s.id); setPerms(r.data) }
+    catch (ex) { setLoadErr(errorMessage(ex, 'Nie udało się wczytać listy uprawnień')) }
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [s.id])
@@ -1512,6 +1529,7 @@ function PermissionsPanel({ system: s }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {loadErr && <div className="alert alert--error" role="alert">{loadErr}</div>}
       {loading ? (
         <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
       ) : (

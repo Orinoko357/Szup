@@ -3,6 +3,7 @@ Router: Auth — setup, local login, LDAP login, logout, password change.
 """
 from __future__ import annotations
 
+import logging
 import os
 import secrets as _secrets
 import time
@@ -17,16 +18,18 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from database import get_session
-from models import User, UserRole, AuthType, AppSettings, LdapSettings, SecuritySeverity, parse_roles, roles_to_json, primary_role
+from models import User, AuthType, AppSettings, LdapSettings, SecuritySeverity, parse_roles, roles_to_json, primary_role
 from services.audit import record_event, request_meta
 from services.security_events import emit as emit_security_event
 from services.auth_service import (
     hash_password, verify_password, create_access_token, get_current_user,
     validate_password_strength, is_password_expired, revoke_token_jti,
     get_current_token_payload, MAX_FAILED_LOGINS, LOCKOUT_MINUTES,
+    password_change_required,
 )
 
 router = APIRouter()
+_log = logging.getLogger("szup.auth")
 
 
 def test_mode_env_allowed() -> bool:
@@ -49,8 +52,26 @@ def test_mode_effective(app_cfg: Optional[AppSettings]) -> bool:
 
 _LOGIN_WINDOW_SECONDS = 60
 _LOGIN_MAX_PER_WINDOW = 10
+# Górny limit liczby śledzonych adresów — słownik żyje w pamięci procesu,
+# więc bez sprzątania rósłby bez końca (np. przy skanowaniu z wielu adresów).
+_IP_HITS_MAX_KEYS = 10000
 _ip_hits: dict[str, deque] = defaultdict(deque)
 _ip_lock = Lock()
+_ip_last_purge = 0.0
+
+
+def _purge_ip_hits(now: float) -> None:
+    """Usuń adresy bez prób w bieżącym oknie; gdy nadal za dużo — najstarsze.
+    Wołać pod `_ip_lock`."""
+    global _ip_last_purge
+    cutoff = now - _LOGIN_WINDOW_SECONDS
+    for key in [k for k, dq in _ip_hits.items() if not dq or dq[-1] < cutoff]:
+        _ip_hits.pop(key, None)
+    overflow = len(_ip_hits) - _IP_HITS_MAX_KEYS
+    if overflow > 0:
+        for key in sorted(_ip_hits, key=lambda k: _ip_hits[k][-1])[:overflow]:
+            _ip_hits.pop(key, None)
+    _ip_last_purge = now
 
 
 def _check_ip_rate_limit(ip: Optional[str]) -> None:
@@ -58,6 +79,8 @@ def _check_ip_rate_limit(ip: Optional[str]) -> None:
         return
     now = time.monotonic()
     with _ip_lock:
+        if now - _ip_last_purge > _LOGIN_WINDOW_SECONDS or len(_ip_hits) >= _IP_HITS_MAX_KEYS:
+            _purge_ip_hits(now)
         dq = _ip_hits[ip]
         cutoff = now - _LOGIN_WINDOW_SECONDS
         while dq and dq[0] < cutoff:
@@ -93,6 +116,9 @@ class TokenResponse(BaseModel):
     role: str                  # primary role (dla kompatybilności)
     full_name: Optional[str] = None
     must_change_password: bool = False
+    # True, gdy powodem wymuszonej zmiany jest WYGASŁE hasło (a nie reset przez
+    # admina) — wtedy /change-password wymaga podania obecnego hasła.
+    password_expired: bool = False
     password_expires_in_days: Optional[int] = None
 
 
@@ -254,6 +280,7 @@ def login(data: LoginRequest, request: Request, session: Session = Depends(get_s
     return TokenResponse(access_token=token, username=user.username,
                          roles=_effective_roles(session, user, user_roles), role=primary_role(user),
                          full_name=user.full_name, must_change_password=must_change,
+                         password_expired=is_password_expired(user) and not user.must_change_password,
                          password_expires_in_days=_days_until_expiry(user))
 
 
@@ -316,14 +343,35 @@ def login_test(data: TestLoginRequest, request: Request, session: Session = Depe
 
     user_roles = parse_roles(user.roles)
     token = create_access_token(user.username, user_roles, user.id)
+    # Flaga zgodna z egzekwowaniem w get_current_user — inaczej front nie pokaże
+    # ekranu zmiany hasła, a backend odrzuci każde żądanie (403).
     return TokenResponse(access_token=token, username=user.username,
                          roles=_effective_roles(session, user, user_roles), role=primary_role(user),
-                         full_name=user.full_name, must_change_password=False)
+                         full_name=user.full_name, must_change_password=password_change_required(user))
+
+
+def _reject_non_domain_account(session: Session, user: User, request: Request, channel: str) -> None:
+    """Logowanie AD/SSO wolno wydać token WYŁĄCZNIE kontu domenowemu.
+
+    Konto lokalne (w tym superadmin break-glass) loguje się tylko hasłem lokalnym
+    (/auth/login). Inaczej ktoś, kto kontroluje serwer LDAP (np. admin zmieniający
+    ustawienia) albo nagłówek SSO, zalogowałby się jako lokalny superadmin.
+    Rejestrujemy to jako zdarzenie bezpieczeństwa; klient dostaje ogólny błąd."""
+    meta = request_meta(request)
+    record_event(session, action="login.failed", user_id=user.id, username=user.username,
+                 ip=meta["ip"], user_agent=meta["user_agent"],
+                 details={"auth_type": channel, "reason": "local_account_via_domain_login"})
+    emit_security_event(
+        session, event_type="auth.domain_login_local_account", source="auth",
+        severity=SecuritySeverity.high,
+        summary=f"Odrzucono logowanie {channel.upper()} na konto lokalne: {user.username}",
+        details={"ip": meta["ip"], "channel": channel}, user_id=user.id, ip=meta["ip"],
+    )
 
 
 @router.post("/login/ldap", response_model=TokenResponse)
 def login_ldap(data: LoginRequest, request: Request, session: Session = Depends(get_session)):
-    from services.ldap_service import authenticate_ldap
+    from services.ldap_service import authenticate_ldap, normalize_login, find_user_by_login
     meta = request_meta(request)
     _check_ip_rate_limit(meta["ip"])
 
@@ -331,15 +379,22 @@ def login_ldap(data: LoginRequest, request: Request, session: Session = Depends(
     if not ldap_settings or not ldap_settings.enabled:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Logowanie przez AD nie jest skonfigurowane")
 
-    if not authenticate_ldap(ldap_settings, data.username, data.password):
-        record_event(session, action="login.failed", username=data.username,
+    # 'DOMENA\\Jan.Kowalski' / 'jan.kowalski@domena' → 'jan.kowalski' — jedno konto AD
+    # = jedno konto w aplikacji (tak samo jak w SSO i imporcie z AD).
+    username = normalize_login(data.username)
+
+    if not username or not authenticate_ldap(ldap_settings, username, data.password):
+        record_event(session, action="login.failed", username=username or data.username,
                      ip=meta["ip"], user_agent=meta["user_agent"],
                      details={"reason": "ldap_reject"})
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Nieprawidłowy login lub hasło AD")
 
-    user = session.exec(select(User).where(User.username == data.username)).first()
+    user = find_user_by_login(session, username)
+    if user and user.auth_type != AuthType.ldap:
+        _reject_non_domain_account(session, user, request, "ldap")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Nieprawidłowy login lub hasło AD")
     if not user:
-        user = User(username=data.username, roles=roles_to_json(["viewer"]), auth_type=AuthType.ldap)
+        user = User(username=username, roles=roles_to_json(["viewer"]), auth_type=AuthType.ldap)
         session.add(user); session.commit(); session.refresh(user)
 
     if not user.is_active:
@@ -363,8 +418,10 @@ def login_ldap(data: LoginRequest, request: Request, session: Session = Depends(
 # Apache (mod_auth_gssapi) chroni WYŁĄCZNIE /api/auth/sso-login i przekazuje
 # zweryfikowany login w nagłówku X-Remote-User. Ten sam nagłówek przysłany
 # przez przeglądarkę Apache usuwa ("RequestHeader unset ... early"), a backend
-# słucha tylko na 127.0.0.1 — patrz deploy/szup-apache.conf. Dodatkowo, jeśli
-# ustawiono SZUP_SSO_PROXY_SECRET, wymagamy zgodnego X-SSO-Proxy-Secret.
+# słucha tylko na 127.0.0.1 — patrz deploy/szup-apache.conf. Dodatkowo WYMAGAMY
+# zgodnego X-SSO-Proxy-Secret (SZUP_SSO_PROXY_SECRET, ustawia go
+# deploy/enable-sso.sh w Apache i /opt/szup/.env) — bez sekretu SSO jest
+# odrzucane, bo nagłówek X-Remote-User mógłby wysłać dowolny proces na hoście.
 #
 # Token JWT nie trafia do URL: sso-login wydaje jednorazowy kod (60 s),
 # frontend wymienia go na token przez POST /sso-exchange.
@@ -379,17 +436,34 @@ def _sso_fail(reason: str) -> RedirectResponse:
     return RedirectResponse(f"/login?sso={reason}", status_code=status.HTTP_303_SEE_OTHER)
 
 
+def sso_proxy_secret() -> str:
+    """Sekret współdzielony z Apache (nagłówek X-SSO-Proxy-Secret)."""
+    return os.getenv("SZUP_SSO_PROXY_SECRET", "").strip()
+
+
 @router.get("/sso-login")
 def sso_login(request: Request, session: Session = Depends(get_session)):
-    from services.ldap_service import lookup_user, normalize_login
+    from services.ldap_service import lookup_user, normalize_login, find_user_by_login, login_realm_ok
 
     meta = request_meta(request)
     ldap_settings = session.exec(select(LdapSettings)).first()
     if not ldap_settings or not ldap_settings.enabled or not getattr(ldap_settings, "sso_enabled", False):
         return _sso_fail("off")
 
-    expected = os.getenv("SZUP_SSO_PROXY_SECRET", "")
-    if expected and not _secrets.compare_digest(request.headers.get("x-sso-proxy-secret", ""), expected):
+    expected = sso_proxy_secret()
+    if not expected:
+        # Sekret jest OBOWIĄZKOWY — bez niego nie odróżnimy Apache od dowolnego
+        # lokalnego procesu wysyłającego X-Remote-User na 127.0.0.1:8003.
+        _log.error("SSO odrzucone: brak SZUP_SSO_PROXY_SECRET w środowisku usługi "
+                   "(uruchom deploy/enable-sso.sh i zrestartuj szup)")
+        emit_security_event(
+            session, event_type="sso.no_proxy_secret", source="auth",
+            severity=SecuritySeverity.high,
+            summary="SSO odrzucone: nie skonfigurowano sekretu proxy (SZUP_SSO_PROXY_SECRET)",
+            details={"remote_user_header": request.headers.get("x-remote-user")}, ip=meta["ip"],
+        )
+        return _sso_fail("error")
+    if not _secrets.compare_digest(request.headers.get("x-sso-proxy-secret", ""), expected):
         emit_security_event(
             session, event_type="sso.untrusted_proxy", source="auth",
             severity=SecuritySeverity.high,
@@ -398,7 +472,21 @@ def sso_login(request: Request, session: Session = Depends(get_session)):
         )
         return _sso_fail("error")
 
-    username = normalize_login(request.headers.get("x-remote-user", ""))
+    raw_user = request.headers.get("x-remote-user", "")
+    # Realm z Kerberosa musi należeć do domeny skonfigurowanej w LDAP — obcięcie
+    # „@REALM” bez sprawdzenia wpuściłoby konto z obcej (zaufanej) domeny.
+    if not login_realm_ok(ldap_settings, raw_user):
+        record_event(session, action="login.failed", username=raw_user[:200],
+                     ip=meta["ip"], user_agent=meta["user_agent"],
+                     details={"auth_type": "sso", "reason": "foreign_realm"})
+        emit_security_event(
+            session, event_type="sso.foreign_realm", source="auth",
+            severity=SecuritySeverity.high,
+            summary="SSO: login z obcej domeny/realmu odrzucony",
+            details={"remote_user_header": raw_user[:200]}, ip=meta["ip"],
+        )
+        return _sso_fail("error")
+    username = normalize_login(raw_user)
     if not username:
         return _sso_fail("error")
 
@@ -415,7 +503,10 @@ def sso_login(request: Request, session: Session = Depends(get_session)):
             )
         return _sso_fail({"not_found": "notfound", "disabled": "disabled"}.get(status_, "error"))
 
-    user = session.exec(select(User).where(User.username == username)).first()
+    user = find_user_by_login(session, username)
+    if user and user.auth_type != AuthType.ldap:
+        _reject_non_domain_account(session, user, request, "sso")
+        return _sso_fail("error")
     if not user:
         user = User(username=username, roles=roles_to_json(["viewer"]), auth_type=AuthType.ldap)
         session.add(user); session.commit(); session.refresh(user)
@@ -448,7 +539,7 @@ def sso_exchange(data: SsoExchange, session: Session = Depends(get_session)):
     if not entry or entry[1] < time.monotonic():
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Kod logowania SSO wygasł — spróbuj ponownie")
     user = session.get(User, entry[0])
-    if not user or not user.is_active:
+    if not user or not user.is_active or user.auth_type != AuthType.ldap:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Konto nieaktywne")
     user_roles = parse_roles(user.roles)
     token = create_access_token(user.username, user_roles, user.id)
@@ -474,21 +565,6 @@ def logout(
     return {"ok": True}
 
 
-@router.post("/logout-all")
-def logout_all(
-    request: Request,
-    current_user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
-):
-    current_user.tokens_valid_from = datetime.utcnow() + timedelta(seconds=1)
-    session.add(current_user); session.commit()
-    meta = request_meta(request)
-    record_event(session, action="logout.all",
-                 user_id=current_user.id, username=current_user.username,
-                 ip=meta["ip"], user_agent=meta["user_agent"])
-    return {"ok": True}
-
-
 @router.post("/change-password")
 def change_password(
     data: ChangePasswordRequest,
@@ -511,7 +587,10 @@ def change_password(
     current_user.password_hash = hash_password(data.new_password)
     current_user.password_changed_at = datetime.utcnow()
     current_user.must_change_password = False
-    current_user.tokens_valid_from = datetime.utcnow() + timedelta(seconds=1)
+    # Unieważnij wcześniejsze tokeny. Pełna sekunda (bez mikrosekund i bez +1 s):
+    # iat w JWT ma rozdzielczość sekundy, więc token z ponownego logowania zaraz
+    # po wymuszonej zmianie hasła nie może zostać odrzucony jako „starszy”.
+    current_user.tokens_valid_from = datetime.utcnow().replace(microsecond=0)
     session.add(current_user); session.commit()
 
     meta = request_meta(request)
@@ -522,13 +601,18 @@ def change_password(
 
 
 @router.get("/me")
-def me(current_user: User = Depends(get_current_user)):
+def me(current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    # Front odświeża zapamiętanego użytkownika z /me przy starcie — role muszą być
+    # te same co w odpowiedzi logowania (z efektywną rolą „hr” komórki kadrowej).
     return {
         "id": current_user.id,
         "username": current_user.username,
         "full_name": current_user.full_name,
-        "roles": parse_roles(current_user.roles),
+        "roles": _effective_roles(session, current_user, parse_roles(current_user.roles)),
+        "auth_type": getattr(current_user.auth_type, "value", current_user.auth_type),
         "role": primary_role(current_user),
-        "must_change_password": bool(current_user.must_change_password) or is_password_expired(current_user),
+        # Te same warunki co egzekwowanie w get_current_user (tylko konta lokalne).
+        "must_change_password": password_change_required(current_user),
+        "password_expired": is_password_expired(current_user) and not current_user.must_change_password,
         "password_expires_in_days": _days_until_expiry(current_user),
     }

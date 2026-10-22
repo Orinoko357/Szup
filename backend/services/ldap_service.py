@@ -31,11 +31,68 @@ def normalize_login(username: str) -> str:
     return u.strip().lower()
 
 
+# Dozwolone znaki loginu PO normalizacji (bez realmu: „@” i „\\” już obcięte).
+# Ten sam wzorzec dla logowania AD, SSO i importu — „jan@domena” nie może
+# przejść jako osobny login i utworzyć drugiego konta.
+_LOGIN_RE = re.compile(r"[\w\-. ]+")
+
+
+def is_valid_login(username: str) -> bool:
+    return bool(username) and bool(_LOGIN_RE.fullmatch(username))
+
+
+def find_user_by_login(session, login: str):
+    """Wyszukanie istniejącego konta po loginie BEZ względu na wielkość liter
+    (np. stare konto „Jan.Kowalski” i logowanie „jan.kowalski”) — żeby nie
+    powstawały duplikaty. Przy kilku dopasowaniach preferujemy dokładne."""
+    from sqlalchemy import func
+    from sqlmodel import select
+    from models import User
+    if not login:
+        return None
+    rows = session.exec(
+        select(User).where(func.lower(User.username) == login.lower()).order_by(User.id)
+    ).all()
+    if not rows:
+        return None
+    for u in rows:
+        if u.username == login:
+            return u
+    return rows[0]
+
+
+def ad_domain(settings) -> str:
+    """Domena DNS wyliczona z Base DN (DC=wods,DC=local → 'wods.local'); '' gdy brak."""
+    dcs = re.findall(r"(?i)\bDC=([^,]+)", getattr(settings, "base_dn", "") or "")
+    return ".".join(d.strip() for d in dcs).lower()
+
+
+def login_realm_ok(settings, raw: str) -> bool:
+    """Czy realm/domena w surowym loginie (np. z X-Remote-User) zgadza się z
+    domeną skonfigurowaną w LDAP. Login bez realmu → OK (Apache z
+    GssapiLocalName sam obcina realm domyślny). Gdy w ustawieniach nie ma
+    domeny (pusty Base DN) — nie mamy z czym porównać, przepuszczamy.
+
+    Akceptujemy: 'jan@WODS.LOCAL' (pełna domena) oraz 'WODS\\jan' / 'WODS.LOCAL\\jan'
+    (pierwszy człon domeny jako nazwa NetBIOS albo pełna domena)."""
+    domain = ad_domain(settings)
+    u = (raw or "").strip()
+    if not domain:
+        return True
+    if "\\" in u:
+        realm = u.split("\\", 1)[0].strip().lower()
+        return realm in (domain, domain.split(".")[0])
+    if "@" in u:
+        realm = u.split("@", 1)[1].strip().lower()
+        return realm == domain
+    return True
+
+
 def lookup_user(settings, username: str) -> tuple[str, dict]:
     """Wyszukanie konta w AD kontem usługowym (bez hasła użytkownika) — dla SSO,
     gdzie tożsamość potwierdził już Kerberos w Apache. Zwraca (status, dane):
     "ok" + {display_name}, "not_found", "disabled", albo "error" + {message}."""
-    if not re.fullmatch(r"[\w\-. ]+", username or ""):
+    if not is_valid_login(username or ""):
         return "not_found", {}
     from ldap3 import Server, Connection, SUBTREE
     from ldap3.utils.conv import escape_filter_chars
@@ -214,16 +271,18 @@ def fetch_ldap_users(settings, search_base: str) -> list[dict]:
 
 
 def authenticate_ldap(settings, username: str, password: str) -> bool:
-    if not re.fullmatch(r"[\w\-@. ]+", username):
+    # Login musi być już znormalizowany (normalize_login) — bez realmu i „@”.
+    if not is_valid_login(username or ""):
         logger.warning("LDAP: rejected username with unsafe characters: %r", username)
         return False
     try:
         from ldap3 import Server, Connection, ALL, SUBTREE
+        from ldap3.utils.conv import escape_filter_chars
         from services.crypto import decrypt
 
         bind_password = decrypt(settings.bind_password_enc) if settings.bind_password_enc else ""
         search_base   = settings.user_search_base or settings.base_dn
-        search_filter = settings.user_filter.format(username=username)
+        search_filter = settings.user_filter.format(username=escape_filter_chars(username))
 
         server = Server(settings.host, port=settings.port, use_ssl=settings.use_ssl, get_info=ALL)
 

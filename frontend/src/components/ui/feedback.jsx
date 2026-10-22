@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { CheckCircle, AlertTriangle, Info, X } from 'lucide-react'
+import useDialog from './useDialog'
 
 /**
  * Wspólne powiadomienia i okna dialogowe (v3.1) — zamiast systemowych
@@ -80,10 +81,8 @@ export function FeedbackHost() {
 
   return (
     <>
-      <div aria-live="polite" style={{
-        position: 'fixed', right: 16, bottom: 16, zIndex: 3000, display: 'flex',
-        flexDirection: 'column', gap: 8, maxWidth: 'min(420px, calc(100vw - 32px))',
-      }}>
+      {/* Pozycja w theme.css (.toast-host) — na wąskim ekranie nad przyciskiem motywu */}
+      <div aria-live="polite" className="toast-host">
         {toasts.map(t => {
           const T = TONE[t.tone] || TONE.info
           const Icon = T.icon
@@ -114,8 +113,7 @@ export function FeedbackHost() {
         <div role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) close(dialog.kind === 'confirm' ? false : null) }}
              style={{ position: 'fixed', inset: 0, zIndex: 2900, background: 'rgba(13,20,36,.5)',
                       display: 'grid', placeItems: 'center', padding: 16 }}>
-          <div role="dialog" aria-modal="true" aria-labelledby="fb-title"
-               onKeyDown={e => { if (e.key === 'Escape') close(dialog.kind === 'confirm' ? false : null) }}
+          <DialogBox onClose={() => close(dialog.kind === 'confirm' ? false : null)}
                style={{ width: '100%', maxWidth: 480, background: 'var(--color-card)', color: 'var(--color-text)',
                         border: '1px solid var(--color-border)', borderRadius: 10,
                         boxShadow: '0 16px 40px rgba(13,20,36,.3)' }}>
@@ -150,9 +148,20 @@ export function FeedbackHost() {
                         className={`btn ${dialog.danger ? 'btn--danger' : 'btn--action'}`}>{dialog.confirmLabel}</button>
               </div>
             </form>
-          </div>
+          </DialogBox>
         </div>
       )}
     </>
+  )
+}
+
+/** Okno potwierdzenia/zapytania — pułapka fokusu, Escape i zwrot fokusu (useDialog). */
+function DialogBox({ onClose, style, children }) {
+  const ref = useDialog({ onClose })
+  return (
+    <div ref={ref} role="dialog" aria-modal="true" aria-labelledby="fb-title" tabIndex={-1}
+         style={{ ...style, outline: 'none' }}>
+      {children}
+    </div>
   )
 }

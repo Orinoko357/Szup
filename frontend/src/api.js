@@ -1,9 +1,11 @@
 import axios from 'axios'
+import { clearSession, updateCurrentUser } from './roles'
 
 const api = axios.create({ baseURL: '/api', timeout: 30000 })
 
 api.interceptors.request.use(config => {
-  const token = localStorage.getItem('szup_token')
+  let token = null
+  try { token = localStorage.getItem('szup_token') } catch { /* zablokowany storage */ }
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
@@ -19,9 +21,16 @@ api.interceptors.response.use(
     const isAuthAttempt = url.includes('/auth/login') || url.includes('/auth/setup')
     const onLoginPage = window.location.pathname.startsWith('/login')
     if (err.response?.status === 401 && !isAuthAttempt && !onLoginPage) {
-      localStorage.removeItem('szup_token')
-      localStorage.removeItem('szup_user')
+      clearSession()
       window.location.href = '/login'
+    }
+    // 403 PASSWORD_CHANGE_REQUIRED — hasło trzeba zmienić (np. wygasło w trakcie
+    // sesji albo admin wymusił zmianę). Zapisz flagę w sesji i daj znać App,
+    // która pokaże ekran wymuszonej zmiany hasła.
+    if (err.response?.status === 403
+        && err.response?.data?.detail?.code === 'PASSWORD_CHANGE_REQUIRED') {
+      updateCurrentUser({ must_change_password: true })
+      window.dispatchEvent(new Event('szup:mustchange'))
     }
     return Promise.reject(err)
   }
@@ -79,16 +88,15 @@ export const userPermissions   = (userId)       => api.get(`/users/${userId}/per
 export const listItStaff       = ()             => api.get('/users/it-staff')
 export const assignRequest     = (id, userId)   => api.post(`/requests/${id}/assign`, { user_id: userId })
 
-// --- Audit log ---
+// --- Dziennik zdarzeń (audit log) ---
 export const listAudit          = (params) => api.get('/audit/', { params })
 // Usuwanie wpisów (admin, wymaga hasła): mode all | before | filter
 export const auditStats         = ()       => api.get('/audit/stats')
-export const auditExportUrl     = (since, until) => {
-  const qs = new URLSearchParams()
-  if (since) qs.set('since', since)
-  if (until) qs.set('until', until)
-  return `/api/audit/export.csv?${qs.toString()}`
-}
+// Eksport CSV przez instancję `api` (token, obsługa 401) — odpowiedź jako Blob.
+export const exportAuditCsv     = (since, until) => api.get('/audit/export.csv', {
+  params: { ...(since ? { since } : {}), ...(until ? { until } : {}) },
+  responseType: 'blob', timeout: 120000,
+})
 
 // --- Security events ---
 export const listSecurityEvents    = (params) => api.get('/security/', { params })

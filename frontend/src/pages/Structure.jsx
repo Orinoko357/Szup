@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import { getMySubtree, errorMessage } from '../api'
 import { fmtDate } from '../serverTime'
-import { KindBadge, kindMeta } from './Units'
+import { DeptKindBadge, kindMeta } from './Units'
 
 // Zakładka „Struktura” strony „Moi pracownicy” — nagłówek i zakładki dostarcza
 // strona-rodzic przez `renderHeader(onRefresh, loading)` (wymagane).
@@ -86,7 +86,7 @@ function DeptNode({ dept: d, depth, defaultOpen = false }) {
           return <Icon size={17} aria-hidden="true" style={{ color: 'var(--color-heading)' }} />
         })()}
         <strong style={{ fontSize: 14, color: 'var(--color-heading)' }}>{d.name}</strong>
-        <KindBadge kind={d.kind} />
+        <DeptKindBadge kind={d.kind} />
         {d.requires_higher_approval && (
           <span className="badge badge--warning" style={{ fontSize: 11, fontWeight: 700 }}>
             2-stopniowy

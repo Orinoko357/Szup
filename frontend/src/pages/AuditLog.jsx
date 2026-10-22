@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Download, RefreshCw, Filter } from 'lucide-react'
-import { listAudit, auditStats, auditExportUrl, errorMessage } from '../api'
+import { listAudit, auditStats, exportAuditCsv, errorMessage } from '../api'
+import { toast } from '../components/ui/feedback'
 import { fmtDateTime } from '../serverTime'
 
 export default function AuditLog() {
@@ -22,7 +23,7 @@ export default function AuditLog() {
       setRows(a.data)
       setStats(s.data)
     } catch (ex) {
-      setErr(errorMessage(ex, 'Błąd odczytu audit logu'))
+      setErr(errorMessage(ex, 'Nie udało się odczytać dziennika zdarzeń'))
     } finally {
       setLoading(false)
     }
@@ -30,17 +31,28 @@ export default function AuditLog() {
 
   useEffect(() => { load() }, [])
 
-  function downloadCsv() {
-    const url = auditExportUrl(filters.since, filters.until)
-    const token = localStorage.getItem('szup_token')
-    fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.blob())
-      .then(b => {
-        const a = document.createElement('a')
-        a.href = URL.createObjectURL(b)
-        a.download = 'szup-audit.csv'
-        a.click()
-      })
+  const [exporting, setExporting] = useState(false)
+  async function downloadCsv() {
+    setExporting(true)
+    try {
+      const res = await exportAuditCsv(filters.since, filters.until)
+      const url = URL.createObjectURL(res.data)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'szup-audit.csv'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (ex) {
+      // Przy responseType 'blob' treść błędu (JSON z `detail`) też jest Blobem —
+      // odczytaj ją, żeby errorMessage pokazał komunikat z serwera.
+      const data = ex?.response?.data
+      if (data instanceof Blob) {
+        try { ex.response.data = JSON.parse(await data.text()) } catch { /* zostaw */ }
+      }
+      toast(errorMessage(ex, 'Nie udało się wyeksportować dziennika zdarzeń'), { tone: 'error' })
+    } finally { setExporting(false) }
   }
 
   const setF = (k, v) => setFilters(f => ({ ...f, [k]: v }))
@@ -56,9 +68,9 @@ export default function AuditLog() {
     <div>
       <div className="page-header" style={{ marginBottom: 18 }}>
         <div>
-          <h1 className="page-header__title">Audit log</h1>
+          <h1 className="page-header__title">Dziennik zdarzeń</h1>
           <div className="page-header__sub">
-            Ślad zdarzeń w systemie (NIS2 / KSC). Wpisów nie można zmieniać; usuwać może tylko administrator (z potwierdzeniem hasłem).
+            Ślad zdarzeń w systemie (NIS2 / KSC). Wpisów nie można zmieniać ani usuwać.
           </div>
           {stats && (
             <div style={{ marginTop: 8, fontSize: 13, color: 'var(--color-text-muted)' }}>
@@ -93,8 +105,8 @@ export default function AuditLog() {
             <RefreshCw size={14} /> Odśwież
           </button>
           <div style={{ flex: 1 }} />
-          <button type="button" className="btn btn--ghost" onClick={downloadCsv}>
-            <Download size={14} /> Eksport CSV
+          <button type="button" className="btn btn--ghost" onClick={downloadCsv} disabled={exporting}>
+            <Download size={14} /> {exporting ? 'Eksport…' : 'Eksport CSV'}
           </button>
         </div>
       </form>

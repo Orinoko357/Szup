@@ -42,7 +42,6 @@ from sqlmodel import Session, select
 
 from models import (
     NODE_TYPES,
-    SIGNATURE_REQUIRED_NODE_TYPES,
     AccessRequest,
     Department,
     RequestItem,
@@ -212,7 +211,6 @@ def parse_graph(graph_json: str) -> dict:
     # Detekcja cyklu (graf musi być acykliczny) — DFS z kolorowaniem.
     WHITE, GRAY, BLACK = 0, 1, 2
     color = {n["id"]: WHITE for n in nodes}
-    order = [start_id]
     parent_stack: list[tuple[str, list[str]]] = [(start_id, list(out_edges.get(start_id, [])))]
     color[start_id] = GRAY
     while parent_stack:
@@ -512,14 +510,6 @@ def _record_step(
     return step
 
 
-def _reset_pending_state(instance: WorkflowInstance) -> None:
-    """Wchodzimy w nowy węzeł → obieg papierowy startuje od zera."""
-    instance.pending_pdf_at = None
-    instance.pending_ezd_confirmed = False
-    instance.pending_pdf_by_user_id = None
-    instance.pending_ezd_by_user_id = None
-
-
 def advance(
     session: Session,
     instance: WorkflowInstance,
@@ -562,7 +552,6 @@ def advance(
                 "Wniosek nie został zamknięty — zgłoś administratorowi.")
 
         instance.current_node_id = nxt["id"]
-        _reset_pending_state(instance)
         session.add(instance)
 
         if nxt["type"] == "end":
@@ -601,48 +590,86 @@ def _actor_sender(actor_user: Optional[User]) -> tuple[Optional[str], Optional[s
     return None, None
 
 
+def _responsible_dept(session: Session, d: Optional[Department]) -> Optional[Department]:
+    """Komórka, której kierownik odpowiada za `d` (samodzielne stanowisko /
+    komórka bez kierownika → najbliższy kierownik wyżej). None, gdy nikogo wyżej."""
+    from services.permissions import effective_manager_dept
+    if d and (getattr(d, "kind", None) == "standalone" or not d.manager_user_id):
+        return effective_manager_dept(session, d)
+    return d
+
+
+def _deputy_ids(session: Session, dept: Optional[Department]) -> list[int]:
+    from models import DepartmentDeputy
+    if not dept:
+        return []
+    return [int(x) for x in session.exec(
+        select(DepartmentDeputy.user_id).where(DepartmentDeputy.department_id == dept.id)
+    ).all()]
+
+
+def _unit_director_id(session: Session, dept: Optional[Department]) -> Optional[int]:
+    """Kierownik CAŁEJ jednostki komórki (`Unit.manager_user_id`) — wg reguły
+    przełożonego może wykonać każdy krok kierowniczy (także akceptację wyższą)."""
+    from models import Unit
+    if not dept or not getattr(dept, "unit_id", None):
+        return None
+    unit = session.get(Unit, dept.unit_id)
+    return unit.manager_user_id if unit and unit.manager_user_id else None
+
+
+def _stage_actor_ids(session: Session, node: dict,
+                     dept: Optional[Department]) -> list[int]:
+    """Id osób, które powinny działać na kroku kierowniczym (kolejność = ważność).
+
+    - krok kierownika (wybór / akceptacja): kierownik odpowiedzialnej komórki
+      i jej zastępcy, a także zastępcy SAMEJ komórki, gdy nie ma ona kierownika
+      (mogą działać — `is_superior_for` z include_self),
+    - akceptacja wyższa: kierownik (odpowiedzialny) komórki nadrzędnej, jego
+      zastępcy oraz zastępcy samej komórki nadrzędnej.
+    Gdy nikogo takiego nie ma (komórka najwyższego poziomu, łańcuch bez
+    kierownika) — dyrektor jednostki, który i tak może wykonać ten krok.
+    """
+    ntype = node["type"]
+    if ntype in ("manager_approve", "select_permissions"):
+        own = dept
+    elif ntype == "higher_manager_approve":
+        own = session.get(Department, dept.parent_dept_id) if dept and dept.parent_dept_id else None
+    else:
+        return []
+
+    resp = _responsible_dept(session, own)
+    ids: list[int] = []
+
+    def _add(uid):
+        if uid and uid not in ids:
+            ids.append(uid)
+
+    if resp:
+        _add(resp.manager_user_id)
+        for uid in _deputy_ids(session, resp):
+            _add(uid)
+    if own and own is not resp:
+        for uid in _deputy_ids(session, own):
+            _add(uid)
+    if not ids:
+        _add(_unit_director_id(session, dept))
+    return ids
+
+
 def _addressee_for_node(session: Session, node: dict, request: AccessRequest,
                         dept: Optional[Department]) -> list[str]:
     """Adresy e-mail osób, które trzeba powiadomić o wejściu w dany węzeł.
 
-    Spójnie z `waiting_for_label`: samodzielne stanowisko / komórka bez kierownika
-    (także komórka NADRZĘDNA przy akceptacji wyższej) → najbliższy kierownik wyżej.
-    Powiadamiamy też zastępców odpowiedzialnej komórki — mogą działać na równi
-    z kierownikiem. Puste, jeśli nie potrafimy znaleźć adresata."""
-    from services.permissions import effective_manager_dept
-    from models import DepartmentDeputy
-
-    def _responsible(d):
-        if d and (getattr(d, "kind", None) == "standalone" or not d.manager_user_id):
-            return effective_manager_dept(session, d) or d
-        return d
-
-    ntype = node["type"]
-    resp = None
-    if ntype in ("manager_approve", "select_permissions"):
-        resp = _responsible(dept)
-    elif ntype == "higher_manager_approve":
-        parent = session.get(Department, dept.parent_dept_id) if dept and dept.parent_dept_id else None
-        resp = _responsible(parent)
-    elif ntype == "it_execute":
+    Spójnie z `waiting_for_label` i `can_act` — patrz `_stage_actor_ids`.
+    Puste, jeśli nie potrafimy znaleźć adresata."""
+    if node["type"] == "it_execute":
         # Realizacja IT: powiadamiamy WYŁĄCZNIE skrzynkę helpdesku
         # (patrz `_notify_helpdesk`) — bez imiennych maili do pracowników IT,
         # bo zgłoszenie zakłada się w systemie helpdesku, nie u poszczególnych osób.
         return []
-    if not resp:
-        return []
-
-    ids: list[int] = []
-    if resp.manager_user_id:
-        ids.append(resp.manager_user_id)
-    for uid in session.exec(
-        select(DepartmentDeputy.user_id).where(DepartmentDeputy.department_id == resp.id)
-    ).all():
-        if uid not in ids:
-            ids.append(uid)
-
     emails: list[str] = []
-    for uid in ids:
+    for uid in _stage_actor_ids(session, node, dept):
         u = session.get(User, uid)
         if u and u.is_active and u.email and u.email not in emails:
             emails.append(u.email)
@@ -661,30 +688,38 @@ def waiting_for_label(session: Session, node: Optional[dict], request: AccessReq
     """Krótki opis, KTO ma teraz działać na wniosku (v3.1 — „Czeka na: …”).
 
     Odpowiada logice adresata powiadomień: samodzielne stanowisko / komórka bez
-    kierownika → najbliższy kierownik wyżej; akceptacja wyższa → kierownik
-    komórki nadrzędnej; realizacja → przypisany pracownik IT albo Biuro Informatyki.
+    kierownika → najbliższy kierownik wyżej (albo zastępca samej komórki);
+    akceptacja wyższa → kierownik komórki nadrzędnej; brak kogokolwiek →
+    dyrektor jednostki; realizacja → przypisany pracownik IT albo Biuro Informatyki.
     """
     if not node:
         return None
-    from services.permissions import effective_manager_dept
+    from models import Unit
     ntype = node.get("type")
-    if ntype in ("manager_approve", "select_permissions"):
-        resp = dept
-        if dept and (getattr(dept, "kind", None) == "standalone" or not dept.manager_user_id):
-            resp = effective_manager_dept(session, dept) or dept
+    if ntype in ("manager_approve", "select_permissions", "higher_manager_approve"):
+        higher = ntype == "higher_manager_approve"
+        own = (session.get(Department, dept.parent_dept_id)
+               if higher and dept and dept.parent_dept_id else (None if higher else dept))
+        resp = _responsible_dept(session, own)
+        # Komórka bez (własnego) kierownika, ale z zastępcą — to on jest
+        # najbliżej i dostaje powiadomienie (kierownik wyżej też może działać).
+        if own is not None and own is not resp:
+            dep_names = [n for n in (_person_name(session, uid)
+                                     for uid in _deputy_ids(session, own)) if n]
+            if dep_names:
+                return (("kierownik nadrzędny: " if higher else "")
+                        + f"{', '.join(dep_names)} (zastępca kierownika {own.name})")
         name = _person_name(session, resp.manager_user_id) if resp else None
         if name:
-            return f"{name} (kierownik {resp.name})"
-        return "kierownik komórki (nieprzypisany)"
-    if ntype == "higher_manager_approve":
-        parent = session.get(Department, dept.parent_dept_id) if dept and dept.parent_dept_id else None
-        resp = parent
-        if parent and (getattr(parent, "kind", None) == "standalone" or not parent.manager_user_id):
-            resp = effective_manager_dept(session, parent) or parent
-        name = _person_name(session, resp.manager_user_id) if resp else None
-        if name:
-            return f"kierownik nadrzędny: {name} ({resp.name})"
-        return "kierownik nadrzędny (nieprzypisany)"
+            return (f"kierownik nadrzędny: {name} ({resp.name})" if higher
+                    else f"{name} (kierownik {resp.name})")
+        director = _unit_director_id(session, dept)
+        dname = _person_name(session, director)
+        if dname:
+            unit = session.get(Unit, dept.unit_id) if dept else None
+            return f"dyrektor jednostki: {dname}" + (f" ({unit.name})" if unit else "")
+        return ("kierownik nadrzędny (nieprzypisany)" if higher
+                else "kierownik komórki (nieprzypisany)")
     if ntype == "it_execute":
         name = _person_name(session, getattr(request, "assigned_to_user_id", None))
         return f"IT: {name}" if name else "Biuro Informatyki (IT)"
@@ -741,7 +776,6 @@ def _notify_helpdesk(session: Session, request: AccessRequest,
         if not s_email:
             s_name, s_email = _actor_sender(actor_user)
 
-        import threading
         from services.email_alerts import notify_helpdesk_new_request
         defer(session, notify_helpdesk_new_request, **{
                 "request_id": request.id,
@@ -772,7 +806,6 @@ def _notify_stage(session: Session, request: AccessRequest, node: dict,
         if not emails:
             return
         s_name, s_email = _actor_sender(actor_user)
-        import threading
         from services.email_alerts import notify_workflow_stage
         for e in emails:
             defer(session, notify_workflow_stage, **{
@@ -826,7 +859,6 @@ def _notify_request_completed(session: Session, request: AccessRequest,
             if getattr(it, "deny_comment", None):
                 label += f" (powód: {it.deny_comment})"
             denied_lines.append(label)
-        import threading
         from services.email_alerts import notify_request_completed
         from services.permissions import user_is_hr
         defer(session, notify_request_completed, **{
@@ -855,7 +887,6 @@ def _notify_request_rejected(session: Session, request: AccessRequest,
         step = _selector_step(session, request)
         if step and step.actor_user_id and step.actor_user_id not in targets:
             targets.append(step.actor_user_id)
-        import threading
         from services.email_alerts import notify_request_rejected
         from services.permissions import user_is_hr
         for uid in targets:
@@ -908,18 +939,19 @@ def _sync_request_status(request: AccessRequest, instance: WorkflowInstance) -> 
 # Akcja użytkownika na aktualnym węźle
 # ---------------------------------------------------------------------------
 
-def execute_action(
+def validate_action(
     session: Session,
     instance: WorkflowInstance,
     request: AccessRequest,
     user: User,
     action: str,
-    payload: Any = None,
-    comment: Optional[str] = None,
-) -> WorkflowInstance:
-    """Waliduje uprawnienia, zapisuje krok, przechodzi do kolejnego węzła.
+) -> tuple[dict, Optional[Department]]:
+    """Sprawdza (BEZ żadnych zmian w bazie), czy `user` może wykonać `action`
+    na bieżącym węźle: stan instancji, węzeł, `can_act`, dozwolona akcja i wymóg
+    obiegu papierowego. Zwraca (węzeł, komórka) albo rzuca HTTPException.
 
-    action ∈ {"approve", "reject", "select", "execute"}
+    Router woła to PRZED zapisem pozycji / kont pracowników, żeby odmowa (403/400)
+    nie zostawiała w bazie częściowych zmian; `execute_action` woła to ponownie.
     """
     if instance.status != WorkflowInstanceStatus.active:
         raise HTTPException(400, f"Instancja obiegu jest w stanie {instance.status.value} — brak akcji.")
@@ -948,16 +980,23 @@ def execute_action(
         raise HTTPException(400, f"Akcja '{action}' nie jest dozwolona na węźle '{ntype}'. "
                                  f"Dozwolone: {', '.join(sorted(valid)) or 'brak (auto)'}")
 
-    # Wymóg obiegu papierowego: dla approve/select na węzłach z podpisem
-    # trzeba najpierw pobrać PDF (pending_pdf_at) i potwierdzić EZD FINN
-    # (pending_ezd_confirmed). Odrzut nie wymaga podpisu.
-    if action in ("approve", "select") and ntype in SIGNATURE_REQUIRED_NODE_TYPES:
-        if not instance.pending_pdf_at:
-            raise HTTPException(400,
-                'Najpierw pobierz PDF wniosku do podpisu (przycisk "Pobierz do podpisu").')
-        if not instance.pending_ezd_confirmed:
-            raise HTTPException(400,
-                'Zaznacz potwierdzenie "Wniosek podpisany i wysłany EZD FINN do Biura Informatyki".')
+    return node, dept
+
+
+def execute_action(
+    session: Session,
+    instance: WorkflowInstance,
+    request: AccessRequest,
+    user: User,
+    action: str,
+    payload: Any = None,
+    comment: Optional[str] = None,
+) -> WorkflowInstance:
+    """Waliduje uprawnienia, zapisuje krok, przechodzi do kolejnego węzła.
+
+    action ∈ {"approve", "reject", "select", "execute"}
+    """
+    node, _dept = validate_action(session, instance, request, user, action)
 
     action_enum = {
         "approve": WorkflowStepAction.approve,
@@ -998,28 +1037,6 @@ def serialize_instance(session: Session, instance: WorkflowInstance) -> dict:
         .order_by(WorkflowStep.step_index.asc())
     ).all()
 
-    # Kompaktowa oś czasu — dla „paska postępu" na froncie.
-    ribbon = []
-    completed_ids = {s.node_id for s in steps if s.action in (
-        WorkflowStepAction.approve, WorkflowStepAction.execute, WorkflowStepAction.select,
-        WorkflowStepAction.auto_advance,
-    )}
-    skipped_ids = {s.node_id for s in steps if s.action == WorkflowStepAction.auto_skip}
-    for n in graph["nodes"]:
-        state = "pending"
-        if n["id"] in skipped_ids:
-            state = "skipped"
-        elif n["id"] in completed_ids:
-            state = "done"
-        if n["id"] == instance.current_node_id and instance.status == WorkflowInstanceStatus.active:
-            state = "current"
-        ribbon.append({
-            "id": n["id"], "type": n["type"], "label": n.get("label") or n["type"],
-            "state": state,
-        })
-
-    signature_required = bool(current) and current.get("type") in SIGNATURE_REQUIRED_NODE_TYPES
-
     return {
         "instance_id": instance.id,
         "request_id": instance.request_id,
@@ -1028,10 +1045,6 @@ def serialize_instance(session: Session, instance: WorkflowInstance) -> dict:
         "status": instance.status.value if hasattr(instance.status, "value") else instance.status,
         "current_node_id": instance.current_node_id,
         "current_node": current,
-        "signature_required": signature_required,
-        "pending_pdf_at": instance.pending_pdf_at,
-        "pending_ezd_confirmed": bool(instance.pending_ezd_confirmed),
-        "ribbon": ribbon,
         "steps": [
             {
                 "step_index": s.step_index,

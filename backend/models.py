@@ -6,7 +6,7 @@ from __future__ import annotations
 import enum
 import json
 from datetime import date, datetime
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
 
 from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
@@ -656,12 +656,6 @@ NODE_TYPES = (
 )
 
 
-# Obieg papierowy z podpisem (PDF → EZD FINN) został wyłączony — decyzje
-# zatwierdza się bezpośrednio w systemie. Pusty zbiór = żaden węzeł nie
-# wymaga podpisu; bramka PDF/EZD w silniku pozostaje nieaktywna.
-SIGNATURE_REQUIRED_NODE_TYPES = frozenset()
-
-
 class WorkflowTemplate(SQLModel, table=True):
     """Szablon obiegu — graf węzłów zapisany jako JSON."""
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -702,12 +696,11 @@ class WorkflowInstance(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     completed_at: Optional[datetime] = None
 
-    # --- Stan procesu papierowego dla bieżącego węzła (resetowany na każdym advance) ---
-    # Kiedy kierownik pobrał PDF wniosku do podpisu (obieg papierowy → EZD FINN)
+    # Pozostałość po usuniętym obiegu papierowym (PDF → EZD FINN). Kod już
+    # z nich nie korzysta; kolumny zostają w bazie, żeby nie robić migracji
+    # destrukcyjnej na istniejących instalacjach.
     pending_pdf_at: Optional[datetime] = None
-    # Czy kierownik potwierdził że podpisany PDF został wysłany EZD FINN do IT
     pending_ezd_confirmed: bool = Field(default=False)
-    # Kto pobrał / potwierdził (audit)
     pending_pdf_by_user_id: Optional[int] = Field(default=None, foreign_key="user.id")
     pending_ezd_by_user_id: Optional[int] = Field(default=None, foreign_key="user.id")
 

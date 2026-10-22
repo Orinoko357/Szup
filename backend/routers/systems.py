@@ -417,16 +417,6 @@ def list_systems(
     return [_serialize(session, s) for s in rows]
 
 
-@router.get("/active", response_model=list[SystemRead])
-def list_active_systems(
-    unit_id: Optional[int] = Query(None),
-    session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
-):
-    # Delegacja do list_systems dla spójności.
-    return list_systems(unit_id=unit_id, active_only=True, session=session, _=user)
-
-
 @router.post("/", response_model=SystemRead, status_code=status.HTTP_201_CREATED)
 def create_system(
     data: SystemCreate,

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import { X, Check } from 'lucide-react'
-import { listSystems, listPermissions, copyPermissionGroup , errorMessage} from '../api'
+import { Check } from 'lucide-react'
+import { listSystems, listPermissions, copyPermissionGroup, errorMessage } from '../api'
 import { groupPerms } from './ItemFields'
-
-// Okno dialogowe dostaje fokus po otwarciu (Escape i czytniki ekranu działają od razu).
-const focusDialog = el => { if (el && !el.contains(document.activeElement)) el.focus() }
+import Modal from './ui/Modal'
+import Field from './ui/Field'
+import { toast } from './ui/feedback'
 
 /**
  * Kopiowanie JEDNEJ grupy uprawnień z innego programu do bieżącego.
@@ -29,7 +29,10 @@ export default function CopyGroupModal({ system, existingGroups = [], onClose, o
     listSystems().then(r => {
       setSystems((r.data || []).filter(
         s => s.id !== system.id && !s.access_only && s.permission_count > 0))
-    }).catch(() => setSystems([]))
+    }).catch(ex => {
+      setSystems([])
+      toast(errorMessage(ex, 'Nie udało się pobrać listy programów'), { tone: 'warning' })
+    })
   }, [system.id])
 
   // Po wyborze źródła — pobierz jego grupy (z licznikami pozycji).
@@ -45,7 +48,10 @@ export default function CopyGroupModal({ system, existingGroups = [], onClose, o
         setSrcGroups(groups)
         setGroup(groups[0]?.group || '')
       })
-      .catch(() => setSrcGroups([]))
+      .catch(ex => {
+        setSrcGroups([])
+        toast(errorMessage(ex, 'Nie udało się pobrać grup programu źródłowego'), { tone: 'warning' })
+      })
       .finally(() => setLoadingGroups(false))
   }, [sourceId])
 
@@ -75,79 +81,53 @@ export default function CopyGroupModal({ system, existingGroups = [], onClose, o
     }
   }
 
+  // Wspólne ui/Modal; etykiety powiązane z polami przez ui/Field.
   return (
-    <div className="modal-overlay" role="presentation" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Kopiuj grupę uprawnień →" tabIndex={-1} ref={focusDialog}
-           onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }} style={{ maxWidth: 620, width: '92vw' }}>
-        <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-heading)', padding: '12px 12px 12px 20px', gap: 12 }}>
-          <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
-            Kopiuj grupę uprawnień → {system.name}
-          </h2>
-          <button type="button" onClick={onClose} aria-label="Zamknij" title="Zamknij"
-                  style={{ width: 44, height: 44, display: 'grid', placeItems: 'center', border: 0, borderRadius: 8,
-                           background: 'transparent', color: 'var(--color-text-muted)', cursor: 'pointer', flexShrink: 0 }}>
-            <X size={18} />
-          </button>
-        </div>
+    <Modal title={`Kopiuj grupę uprawnień do programu ${system.name}`} onClose={onClose} width={620}
+           footer={<>
+             <button type="button" className="btn btn--ghost btn--sm" onClick={onClose} disabled={busy}>Anuluj</button>
+             <button type="button" className="btn btn--primary btn--sm" onClick={save}
+                     disabled={busy || !sourceId || !group}>
+               <Check size={13} aria-hidden="true" /> {busy
+                 ? 'Kopiuję…'
+                 : `Skopiuj grupę${chosen ? ` (${chosen.count})` : ''}`}
+             </button>
+           </>}>
+      {err && <div className="alert alert--error mb-4" role="alert">{err}</div>}
 
-        <div className="modal__body">
-          {err && <div className="alert alert--error mb-4">{err}</div>}
+      <Field label="Program źródłowy" required
+             hint={systems.length === 0 ? 'Brak innych programów z listą uprawnień.' : null}>
+        <select className="form-control" value={sourceId} data-autofocus
+                onChange={e => setSourceId(e.target.value)}>
+          <option value="">— wybierz program —</option>
+          {systems.map(s => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
+      </Field>
 
-          <div className="form-group">
-            <label className="form-label">Program źródłowy *</label>
-            <select aria-label="Program źródłowy" className="form-control" value={sourceId}
-                    onChange={e => setSourceId(e.target.value)}>
-              <option value="">— wybierz program —</option>
-              {systems.map(s => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-            {systems.length === 0 && (
-              <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
-                Brak innych programów z listą uprawnień.
-              </div>
-            )}
-          </div>
+      <Field label="Grupa do skopiowania" required>
+        <select className="form-control" value={group} disabled={!sourceId || loadingGroups}
+                onChange={e => setGroup(e.target.value)}>
+          {loadingGroups && <option value="">Ładowanie…</option>}
+          {!loadingGroups && srcGroups.length === 0 && (
+            <option value="">{sourceId ? 'Ten program nie ma nazwanych grup' : '—'}</option>
+          )}
+          {srcGroups.map(g => (
+            <option key={g.group} value={g.group}>{g.group} ({g.count})</option>
+          ))}
+        </select>
+      </Field>
 
-          <div className="form-group">
-            <label className="form-label">Grupa do skopiowania *</label>
-            <select aria-label="Grupa do skopiowania" className="form-control" value={group} disabled={!sourceId || loadingGroups}
-                    onChange={e => setGroup(e.target.value)}>
-              {loadingGroups && <option value="">Ładowanie…</option>}
-              {!loadingGroups && srcGroups.length === 0 && (
-                <option value="">{sourceId ? 'Ten program nie ma nazwanych grup' : '—'}</option>
-              )}
-              {srcGroups.map(g => (
-                <option key={g.group} value={g.group}>{g.group} ({g.count})</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Nazwa grupy w tym programie</label>
-            <input aria-label="Nazwa grupy w tym programie" className="form-control" list="szup-copy-target-groups"
-                   value={targetName} onChange={e => setTargetName(e.target.value)}
-                   placeholder={group || 'domyślnie ta sama co źródłowa'} />
-            <datalist id="szup-copy-target-groups">
-              {existingGroups.map(g => <option key={g} value={g} />)}
-            </datalist>
-            <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
-              Puste = ta sama nazwa co źródłowa. Jeśli podasz nazwę istniejącej grupy,
-              pozycje zostaną do niej dopisane (bez duplikatów).
-            </div>
-          </div>
-        </div>
-
-        <div className="modal__footer" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button className="btn btn--ghost btn--sm" onClick={onClose} disabled={busy}>Anuluj</button>
-          <button className="btn btn--primary btn--sm" onClick={save}
-                  disabled={busy || !sourceId || !group}>
-            <Check size={13} /> {busy
-              ? 'Kopiuję…'
-              : `Skopiuj grupę${chosen ? ` (${chosen.count})` : ''}`}
-          </button>
-        </div>
-      </div>
-    </div>
+      <Field label="Nazwa grupy w tym programie"
+             hint="Puste = ta sama nazwa co źródłowa. Jeśli podasz nazwę istniejącej grupy, pozycje zostaną do niej dopisane (bez duplikatów).">
+        <input className="form-control" list="szup-copy-target-groups"
+               value={targetName} onChange={e => setTargetName(e.target.value)}
+               placeholder={group || 'domyślnie ta sama co źródłowa'} />
+      </Field>
+      <datalist id="szup-copy-target-groups">
+        {existingGroups.map(g => <option key={g} value={g} />)}
+      </datalist>
+    </Modal>
   )
 }

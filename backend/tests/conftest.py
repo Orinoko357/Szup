@@ -154,7 +154,17 @@ class Api:
             body["unit_ids"] = unit_ids
         r = self.post("/users/", token=admin_token, json=body)
         assert r.status_code in (200, 201), r.text
-        return r.json()["id"]
+        uid = r.json()["id"]
+        # Konto założone przez admina ma must_change_password=True, a backend
+        # egzekwuje zmianę hasła (403 PASSWORD_CHANGE_REQUIRED). Testy obiegu
+        # symulują użytkownika po pierwszej zmianie hasła — zdejmujemy flagę.
+        from sqlmodel import Session as _S
+        from models import User as _U
+        with _S(engine) as s:
+            u = s.get(_U, uid)
+            u.must_change_password = False
+            s.add(u); s.commit()
+        return uid
 
     def mk_unit(self, admin_token, name=None, code=None):
         name = name or f"Jednostka-{uuid.uuid4().hex[:6]}"

@@ -20,8 +20,25 @@ import PermInput, {
   isScopeGated, missingScopeSystems,
 } from '../components/ItemFields'
 
+// Zakładki (wzorzec WAI-ARIA „tabs”): strzałki lewo/prawo, Home/End
+// przechodzą między zakładkami i od razu je aktywują.
+function onTablistKeyDown(e) {
+  const tabs = Array.from(e.currentTarget.querySelectorAll('[role="tab"]'))
+  const i = tabs.indexOf(e.target)
+  if (i < 0) return
+  const next = e.key === 'ArrowRight' ? (i + 1) % tabs.length
+    : e.key === 'ArrowLeft' ? (i - 1 + tabs.length) % tabs.length
+    : e.key === 'Home' ? 0
+    : e.key === 'End' ? tabs.length - 1
+    : null
+  if (next == null) return
+  e.preventDefault()
+  tabs[next].focus()
+  tabs[next].click()
+}
+
 // v3.0 — „Moi pracownicy” ma dwie zakładki: Pracownicy (lista + wnioski)
-// oraz Struktura (dawna strona „Moja struktura”, ta sama logika).
+// oraz Struktura (drzewo komórek w zakresie kierownika).
 export default function MyTeam() {
   const [params, setParams] = useSearchParams()
   const tab = params.get('tab') === 'structure' ? 'structure' : 'workers'
@@ -40,9 +57,10 @@ export default function MyTeam() {
           <RefreshCw size={14} /> Odśwież
         </button>
       </div>
-      <div className="tabs" role="tablist" style={{ marginTop: 0 }}>
+      <div className="tabs" role="tablist" aria-label="Widok" style={{ marginTop: 0 }}
+           onKeyDown={onTablistKeyDown}>
         {[['workers', 'Pracownicy'], ['structure', 'Struktura']].map(([id, label]) => (
-          <button key={id} role="tab" aria-selected={tab === id}
+          <button key={id} role="tab" aria-selected={tab === id} tabIndex={tab === id ? 0 : -1}
                   className={`tab-btn${tab === id ? ' active' : ''}`}
                   onClick={() => setParams(id === 'structure' ? { tab: 'structure' } : {})}>
             {label}
@@ -55,6 +73,8 @@ export default function MyTeam() {
     ? <Structure renderHeader={renderHeader} />
     : <WorkersTab renderHeader={renderHeader} />
 }
+
+const NO_TYPE_MSG = 'Brak aktywnego typu wniosku — wysłanie jest zablokowane. Poproś administratora o włączenie typu wniosku.'
 
 function WorkersTab({ renderHeader }) {
   const [workers, setWorkers] = useState([])
@@ -323,7 +343,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
         const t = types.data.find(x => x.code === 'MODIFY') || types.data[0]
         if (t) setRequestTypeId(t.id)
       } catch (ex) {
-        setErr('Nie udało się pobrać listy uprawnień')
+        setErr(errorMessage(ex, 'Nie udało się pobrać listy uprawnień'))
       } finally {
         setLoading(false)
       }
@@ -399,6 +419,8 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
   }
 
   async function submit() {
+    // Bez typu wniosku backend odrzuca zgłoszenie (400) — nie wysyłamy.
+    if (!requestTypeId) { setErr(NO_TYPE_MSG); return }
     if (noChange) {
       setErr('Nic nie zmieniono — zaznacz nowe uprawnienia lub odznacz te do odebrania')
       return
@@ -462,7 +484,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
       unit_id:         w.unit_id,
       department_id:   w.department_id,
       items,
-      request_type_id: requestTypeId || null,
+      request_type_id: requestTypeId,
     }
     if (declaration) body.declaration = declaration
     try {
@@ -487,10 +509,12 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
 
   // Kopiowanie uprawnień od współpracownika → nowy stan docelowy.
   function copyFrom(perms) {
-    const res = buildCopiedSelection(perms, permsBySys, picked, fieldValues)
+    // `held` — odznaczone posiadane to zaplanowane odebrania; kopiowanie ich nie cofa.
+    const res = buildCopiedSelection(perms, permsBySys, picked, fieldValues, { held })
     setPicked(res.keys)
     setFieldValues(res.values)
-    return { count: res.added, skippedAdmin: res.skippedAdmin, skippedUnavailable: res.skippedUnavailable }
+    return { count: res.added, skippedAdmin: res.skippedAdmin,
+             skippedUnavailable: res.skippedUnavailable, skippedRevoke: res.skippedRevoke }
   }
 
   const _steps = buildWorkflowSteps({
@@ -517,7 +541,8 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
         {' · '}<strong style={{ color: 'var(--color-error-text)' }}>−{toRevoke.length}</strong> odebrania</>}
       footerActions={<>
         <button className="btn btn--ghost" onClick={guardedClose} disabled={busy}>Anuluj</button>
-        <button className="btn btn--success" onClick={submit} disabled={busy || loading || noChange}>
+        <button className="btn btn--success" onClick={submit} disabled={busy || loading || noChange || !requestTypeId}
+                title={!loading && !requestTypeId ? NO_TYPE_MSG : undefined}>
           <Send size={13} /> Sprawdź i wyślij
         </button>
       </>}>
@@ -733,13 +758,16 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
 
           <Section n={3} title="Uwagi" note="opcjonalne">
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">Komentarz · uzasadnienie wniosku</label>
-              <textarea className="form-control" style={{ minHeight: 70 }}
+              <label className="form-label" htmlFor="myteam-comment">Komentarz · uzasadnienie wniosku</label>
+              <textarea id="myteam-comment" className="form-control" style={{ minHeight: 70 }}
                         value={comment} onChange={e => setComment(e.target.value)}
                         placeholder="Uzasadnienie / kontekst wniosku" />
             </div>
           </Section>
 
+          {!loading && !requestTypeId && !err && (
+            <div className="alert alert--error" role="alert">{NO_TYPE_MSG}</div>
+          )}
           {err && <div className="alert alert--error">{err}</div>}
     </RequestViewShell>
 
@@ -749,7 +777,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
         grants={describeKeys([...toGrant, ...scopeChanged], systems, permsBySys, fieldValues)}
         revokes={describeKeys(toRevoke, systems, permsBySys)}
         target={w.requires_higher_approval
-          ? 'Po wysłaniu wniosek trafi do akceptacji kierownika wyższego rzędu, potem do IT.'
+          ? 'Po wysłaniu wniosek trafi do akceptacji kierownika nadrzędnego, potem do IT.'
           : 'Po wysłaniu wniosek trafi do realizacji przez IT.'}
         confirmLabel="Wyślij wniosek"
         busy={busy}

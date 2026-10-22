@@ -34,7 +34,10 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
   // v3.1 — szybki filtr kolejki: wszystkie / moje / nieprzypisane.
   const [who, setWho]           = useState('all')
   const [meId, setMeId]         = useState(null)
-  useEffect(() => { getMe().then(r => setMeId(r.data?.id ?? null)).catch(() => {}) }, [])
+  useEffect(() => {
+    getMe().then(r => setMeId(r.data?.id ?? null))
+      .catch(ex => toast(errorMessage(ex, 'Nie udało się ustalić zalogowanego użytkownika — filtr „Moje” nie zadziała.'), { tone: 'warning' }))
+  }, [])
   const [openReq, setOpenReq]   = useState(null)   // jeden wspólny widok: podgląd + realizacja
   const openedRef = useRef(false)
 
@@ -83,7 +86,18 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
     onChanged?.()
     const data = await load().catch(() => [])
     if (result?.realizedId) {
-      const next = (data || [])
+      // Następny wniosek wybieramy ZAWSZE z kolejki „pending_it” — przy filtrze
+      // „Wszystkie” lista zawiera tylko 200 najnowszych wniosków w ogóle,
+      // więc najstarszy oczekujący mógłby zostać pominięty.
+      let queue = data || []
+      if (filter !== 'pending_it') {
+        try { queue = (await listRequests({ status: 'pending_it' })).data || [] }
+        catch (ex) {
+          toast(errorMessage(ex, 'Nie udało się pobrać kolejki realizacji'), { tone: 'warning' })
+          queue = []
+        }
+      }
+      const next = queue
         .filter(x => x.status === 'pending_it' && x.id !== result.realizedId)
         .filter(matchWho)
         .sort((a, b) => (serverTs(a.step_since || a.created_at) || 0) - (serverTs(b.step_since || b.created_at) || 0))[0]
@@ -107,7 +121,7 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
     <>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 16 }}>
         <Segmented ariaLabel="Filtr statusu" value={filter} onChange={setFilter}
-                   options={[{ value: 'pending_it', label: 'Do realizacji' }, { value: 'all', label: 'Wszystkie' }]} />
+                   options={[{ value: 'pending_it', label: statusLabel('pending_it') }, { value: 'all', label: 'Wszystkie' }]} />
         {filter === 'pending_it' && (
           <Segmented ariaLabel="Kto realizuje" value={who} onChange={setWho}
                      options={[
@@ -309,7 +323,10 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     if (!showAdd || addSystems.length > 0) return
     listSystems({ unit_id: r.unit_id, active_only: true })
       .then(res => setAddSystems(res.data))
-      .catch(() => setAddSystems([]))
+      .catch(ex => {
+        setAddSystems([])
+        toast(errorMessage(ex, 'Nie udało się pobrać listy programów'), { tone: 'warning' })
+      })
   }, [showAdd, r.unit_id, addSystems.length])
 
   // Przekazanie wniosku pracownikowi IT (tylko kierownik IT / admin).
@@ -317,7 +334,10 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   const [assignee, setAssignee] = useState(r.assigned_to_user_id || '')
   useEffect(() => {
     if (!isItManager || !canRealize) return
-    listItStaff().then(res => setItStaff(res.data)).catch(() => setItStaff([]))
+    listItStaff().then(res => setItStaff(res.data)).catch(ex => {
+      setItStaff([])
+      toast(errorMessage(ex, 'Nie udało się pobrać listy pracowników IT'), { tone: 'warning' })
+    })
   }, [isItManager, canRealize])
 
   async function assign() {
@@ -627,8 +647,8 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       {canRealize && needsAd && (
         <Section n={sec()} title="Konto pracownika">
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Login AD (sAMAccountName) pracownika *</label>
-            <input className="form-control" value={adUsername}
+            <label className="form-label" htmlFor="it-ad-username">Login AD (sAMAccountName) pracownika *</label>
+            <input id="it-ad-username" className="form-control" value={adUsername}
                    onChange={e => setAdUsername(e.target.value)}
                    placeholder="np. jkowalski" autoComplete="off" spellCheck={false} />
             <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
@@ -642,12 +662,12 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       {canRealize && (
         <Section n={sec()} title="Uwagi" note={addPicked.size > 0 ? null : 'opcjonalne'}>
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">
+            <label className="form-label" htmlFor="it-comment">
               {addPicked.size > 0
                 ? 'Uzasadnienie dodanych uprawnień *'
                 : 'Komentarz IT · widoczny w historii'}
             </label>
-            <textarea className="form-control" style={{ minHeight: 70 }}
+            <textarea id="it-comment" className="form-control" style={{ minHeight: 70 }}
                       placeholder={addPicked.size > 0
                         ? 'Dlaczego te uprawnienia są konieczne?' : ''}
                       value={comment} onChange={e => setComment(e.target.value)} />
@@ -665,8 +685,8 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           </p>
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
             <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
-              <label className="form-label">Pracownik IT</label>
-              <select className="form-control" value={assignee}
+              <label className="form-label" htmlFor="it-assignee">Pracownik IT</label>
+              <select id="it-assignee" className="form-control" value={assignee}
                       onChange={e => setAssignee(e.target.value)}>
                 <option value="">— nieprzypisany —</option>
                 {itStaff.map(u => (
@@ -696,8 +716,8 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
             pojawiły się w profilu pracownika i w widoku struktury.
           </p>
           <div className="form-group">
-            <label className="form-label">Login AD (sAMAccountName) *</label>
-            <input className="form-control" value={adUsername}
+            <label className="form-label" htmlFor="it-link-ad">Login AD (sAMAccountName) *</label>
+            <input id="it-link-ad" className="form-control" value={adUsername}
                    onChange={e => setAdUsername(e.target.value)}
                    placeholder="np. jkowalski" autoComplete="off" spellCheck={false} />
           </div>

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { RefreshCw, UserPen, X } from 'lucide-react'
+import { RefreshCw, UserPen } from 'lucide-react'
 import { listNameChanges, resolveNameChange, errorMessage } from '../api'
 import { fmtDate } from '../serverTime'
 import { NAME_CHANGE_STATUS } from '../labels'
 import { toast } from './ui/feedback'
 import Segmented from './ui/Segmented'
+import Modal from './ui/Modal'
 
 // Wspólny słownik statusów zmian nazwiska (labels.js).
 const STATUS = Object.fromEntries(Object.entries(NAME_CHANGE_STATUS).map(([k, v]) => [k, [v.badge, v.label]]))
@@ -123,68 +124,51 @@ function ResolveModal({ req, onClose, onDone }) {
                   background: 'var(--color-card)', color: 'var(--color-text)' }
   const lbl = { display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, fontWeight: 700 }
   const btn = { minHeight: 44, fontSize: 14, padding: '0 16px', borderRadius: 8 }
+  // Wspólne ui/Modal (pułapka fokusu, Escape, zwrot fokusu, blokada przewijania).
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <section role="dialog" aria-modal="true" aria-label="Zmiana nazwiska" style={{
-        position: 'relative', width: '92vw', maxWidth: 520, background: 'var(--color-card)',
-        borderRadius: 10, boxShadow: '0 20px 50px rgba(15, 23, 42, .3)', overflow: 'hidden',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 10px 14px 22px',
-                      borderBottom: '1px solid var(--color-border)' }}>
-          <h2 style={{ margin: 0, flex: 1, fontSize: 17, fontWeight: 800, color: 'var(--color-heading)' }}>
-            Zmiana nazwiska — {req.username}
-          </h2>
-          <button type="button" aria-label="Zamknij" onClick={onClose}
-                  style={{ width: 44, height: 44, display: 'grid', placeItems: 'center', border: 0,
-                           borderRadius: 8, background: 'transparent', color: 'var(--color-text-muted)', cursor: 'pointer' }}>
-            <X size={18} aria-hidden="true" />
-          </button>
-        </div>
-        <div style={{ padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {err && <div className="alert alert--error">{err}</div>}
-          <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: '90px 1fr', gap: '6px 12px',
-                       padding: '12px 14px', borderRadius: 8, background: 'var(--bg-secondary)', fontSize: 14 }}>
-            <dt style={{ color: 'var(--color-text-muted)' }}>Obecnie:</dt>
-            <dd style={{ margin: 0, fontWeight: 600 }}>{req.current_full_name || '—'}</dd>
-            <dt style={{ color: 'var(--color-text-muted)' }}>Nowe:</dt>
-            <dd style={{ margin: 0, fontWeight: 800, color: 'var(--color-heading)' }}>{req.requested_full_name}</dd>
-          </dl>
+    <Modal title={`Zmiana nazwiska — ${req.username}`} onClose={onClose} closable={!busy} width={520}
+           footer={<>
+             <button type="button" className="btn btn--ghost" style={btn} onClick={onClose} disabled={busy}>Anuluj</button>
+             <button type="button" className="btn btn--danger" style={btn} onClick={() => act('reject')} disabled={busy}>
+               Odrzuć
+             </button>
+             <button type="button" className="btn btn--success" style={btn} onClick={() => act('apply')} disabled={busy}>
+               {busy ? 'Zapisywanie…' : 'Zmień nazwisko'}
+             </button>
+           </>}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {err && <div className="alert alert--error" role="alert">{err}</div>}
+        <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: '90px 1fr', gap: '6px 12px',
+                     padding: '12px 14px', borderRadius: 8, background: 'var(--bg-secondary)', fontSize: 14 }}>
+          <dt style={{ color: 'var(--color-text-muted)' }}>Obecnie:</dt>
+          <dd style={{ margin: 0, fontWeight: 600 }}>{req.current_full_name || '—'}</dd>
+          <dt style={{ color: 'var(--color-text-muted)' }}>Nowe:</dt>
+          <dd style={{ margin: 0, fontWeight: 800, color: 'var(--color-heading)' }}>{req.requested_full_name}</dd>
+        </dl>
 
-          <label style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 44, fontSize: 14, cursor: 'pointer' }}>
-            <input type="checkbox" checked={changeLogin} onChange={e => setChangeLogin(e.target.checked)}
-                   style={{ width: 18, height: 18, margin: 0, accentColor: 'var(--color-heading)' }} />
-            Zmień też login użytkownika (opcjonalnie)
-          </label>
-          {changeLogin && (
-            <label style={lbl}>
-              Nowy login
-              <input style={field} value={newLogin}
-                     onChange={e => setNewLogin(e.target.value)} placeholder="np. jnowak" />
-              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-error-text)' }}>
-                Po zmianie loginu pracownik będzie się logował nowym loginem
-                (bieżąca sesja zostanie wylogowana).
-              </span>
-            </label>
-          )}
-
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 44, fontSize: 14, cursor: 'pointer' }}>
+          <input type="checkbox" checked={changeLogin} onChange={e => setChangeLogin(e.target.checked)}
+                 style={{ width: 18, height: 18, margin: 0, accentColor: 'var(--color-selected)' }} />
+          Zmień też login użytkownika (opcjonalnie)
+        </label>
+        {changeLogin && (
           <label style={lbl}>
-            Komentarz (opcjonalnie)
-            <textarea rows={3} style={{ ...field, minHeight: 0, padding: '10px 12px', resize: 'vertical' }}
-                      value={comment} onChange={e => setComment(e.target.value)} />
+            Nowy login
+            <input style={field} value={newLogin}
+                   onChange={e => setNewLogin(e.target.value)} placeholder="np. jnowak" />
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-error-text)' }}>
+              Po zmianie loginu pracownik będzie się logował nowym loginem
+              (bieżąca sesja zostanie wylogowana).
+            </span>
           </label>
+        )}
 
-          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8,
-                        borderTop: '1px solid var(--color-border)', marginTop: 4, paddingTop: 14 }}>
-            <button type="button" className="btn btn--ghost" style={btn} onClick={onClose} disabled={busy}>Anuluj</button>
-            <button type="button" className="btn btn--danger" style={btn} onClick={() => act('reject')} disabled={busy}>
-              Odrzuć
-            </button>
-            <button type="button" className="btn btn--success" style={btn} onClick={() => act('apply')} disabled={busy}>
-              {busy ? 'Zapisywanie…' : 'Zmień nazwisko'}
-            </button>
-          </div>
-        </div>
-      </section>
-    </div>
+        <label style={lbl}>
+          Komentarz (opcjonalnie)
+          <textarea rows={3} style={{ ...field, minHeight: 0, padding: '10px 12px', resize: 'vertical' }}
+                    value={comment} onChange={e => setComment(e.target.value)} />
+        </label>
+      </div>
+    </Modal>
   )
 }

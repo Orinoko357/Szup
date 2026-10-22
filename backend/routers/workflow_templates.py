@@ -6,7 +6,6 @@ strukturę obiegu przy tworzeniu wniosku).
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -14,8 +13,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from database import get_session
-from models import NODE_TYPES, RequestType, User, WorkflowInstance, WorkflowTemplate
-from services.auth_service import get_current_user
+from models import RequestType, User, WorkflowInstance, WorkflowTemplate
 from services.permissions import require_admin
 from services.workflow import WorkflowGraphError, parse_graph
 
@@ -56,40 +54,6 @@ class TemplatePatch(BaseModel):
     description: Optional[str] = None
     graph_json: Optional[str] = None
     is_active: Optional[bool] = None
-
-
-@router.get("/node-types")
-def list_node_types(_: User = Depends(require_admin)):
-    """Lista typów węzłów zrozumiałych przez silnik — dla frontendowej palety."""
-    catalog = [
-        {"type": "start",
-         "label": "Zgłoszenie / Start",
-         "description": "Rozpoczęcie obiegu. Zawsze pierwszy węzeł.",
-         "icon": "play"},
-        {"type": "select_permissions",
-         "label": "Wybór uprawnień + podpis",
-         "description": "Kierownik wybiera systemy i uprawnienia dla pracownika.",
-         "icon": "list-checks"},
-        {"type": "manager_approve",
-         "label": "Akceptacja kierownika bezpośredniego + podpis",
-         "description": "Kierownik referatu / biura zatwierdza wniosek.",
-         "icon": "user-check"},
-        {"type": "higher_manager_approve",
-         "label": "Akceptacja kierownika wyższego rzędu + podpis",
-         "description": ("Kierownik wydziału nadrzędnego zatwierdza. Silnik "
-                         "pomija ten węzeł jeśli wydział pracownika nie ma "
-                         "flagi 'wymaga akceptacji wyższego rzędu'."),
-         "icon": "crown"},
-        {"type": "it_execute",
-         "label": "Realizacja przez IT",
-         "description": "Pracownik IT realizuje wniosek technicznie.",
-         "icon": "wrench"},
-        {"type": "end",
-         "label": "Zakończenie",
-         "description": "Zamknięcie obiegu. Musi być co najmniej jeden.",
-         "icon": "flag"},
-    ]
-    return {"node_types": catalog, "raw": list(NODE_TYPES)}
 
 
 @router.get("/")

@@ -94,9 +94,22 @@ def create_name_change(
         current_full_name=current_user.full_name,
         requested_full_name=new_name,
     )
-    session.add(r); session.commit(); session.refresh(r)
+    session.add(r)
+    # Powiadomienie helpdesku — w tle i dopiero po udanym commicie (nie blokuje
+    # żądania na SMTP; przy nieudanym zapisie wiadomość nie wychodzi).
+    try:
+        from services.after_commit import defer
+        from services.email_alerts import notify_name_change_requested
+        defer(session, notify_name_change_requested,
+              full_name=current_user.full_name or current_user.username,
+              new_name=new_name,
+              from_name=current_user.full_name or current_user.username,
+              from_email=current_user.email)
+    except Exception:
+        pass
+    session.commit(); session.refresh(r)
 
-    # Powiadom helpdesk (best-effort) + ślad audytowy.
+    # Ślad audytowy (best-effort).
     try:
         from services.audit import record_event, request_meta
         meta = request_meta(request)
@@ -105,14 +118,6 @@ def create_name_change(
                      target_type="name_change", target_id=r.id,
                      ip=meta["ip"], user_agent=meta["user_agent"],
                      details={"requested_full_name": new_name})
-    except Exception:
-        pass
-    try:
-        from services.email_alerts import resolve_helpdesk_email, _send
-        _send(resolve_helpdesk_email(),
-              "Nowy wniosek o zmianę nazwiska",
-              f"{current_user.full_name or current_user.username} zgłosił(a) zmianę "
-              f"nazwiska na: {new_name}.\n\nRozpatrzenie w panelu IT SZUP.")
     except Exception:
         pass
 

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Search, FileText, User, X, ClipboardList } from 'lucide-react'
 import { searchUsers, listUsers, listRequests, getRequest, errorMessage } from '../api'
 import { getUserRoles, hasAnyRole } from '../roles'
-import { statusLabel } from '../labels'
+import { MANAGER_NODES, statusLabel } from '../labels'
 
 /**
  * Wyszukiwarka globalna (v3.1) — Ctrl+K / „/” albo przycisk w belce.
@@ -106,13 +106,29 @@ export default function GlobalSearch() {
     return () => clearTimeout(t)
   }, [q, open])
 
-  // Dokąd prowadzi wniosek: krok kierowniczy, na którym użytkownik może działać
-  // → „Do obsługi”; dla IT wszystko inne → „Realizacja IT” (tam dociągany jest
-  // każdy wniosek); sam kierownik → „Do obsługi”; samo HR → Kartoteka.
+  // Dokąd prowadzi wniosek — wg bieżącego kroku (current_node_type) i tego,
+  // czy użytkownik może na nim działać (can_act; oba pola zwraca GET /requests/{id}
+  // i lista bez scope):
+  //  - krok kierowniczy z can_act → „Do obsługi”,
+  //  - krok „it_execute” dla IT → „Realizacja IT”,
+  //  - wszystko inne → podgląd: kierownik w „Moich wnioskach” (widok dociąga
+  //    wniosek spoza listy jako podgląd), samo IT w „Realizacji IT”.
+  // Gdy backend nie zwróci pól (starsza wersja) — dotychczasowe zachowanie.
+  // Samo HR → Kartoteka.
   function requestTarget(r) {
     if (!isManager && !isIT) return '/hr'
-    const managerStep = MANAGER_NODES.includes(r.current_node_type) && r.can_act !== false
-    const tab = (isManager && (managerStep || !isIT)) ? 'handle' : 'it'
+    const node = r.current_node_type
+    const known = node !== undefined || r.can_act !== undefined
+    let tab
+    if (!known) {
+      tab = (isManager && !isIT) ? 'handle' : 'it'
+    } else if (isManager && MANAGER_NODES.includes(node) && r.can_act) {
+      tab = 'handle'
+    } else if (isIT && node === 'it_execute' && r.can_act !== false) {
+      tab = 'it'
+    } else {
+      tab = isManager ? 'mine' : 'it'
+    }
     return `/requests?tab=${tab}&open=${r.id}`
   }
   function personTarget(p) {
@@ -261,8 +277,6 @@ export default function GlobalSearch() {
     </>
   )
 }
-
-const MANAGER_NODES = ['select_permissions', 'manager_approve', 'higher_manager_approve']
 
 function fold(s) {
   return (s || '').toLowerCase().replace(/ł/g, 'l').normalize('NFKD').replace(/[̀-ͯ]/g, '')
