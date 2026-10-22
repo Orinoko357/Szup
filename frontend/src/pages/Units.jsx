@@ -217,9 +217,8 @@ function UnitAccordion({ unit: u, depts, users, onChanged }) {
                       value={u.manager_user_id || ''} disabled={mgrBusy}
                       onChange={e => saveUnitManager(e.target.value)}>
                 <option value="">— brak —</option>
-                {users.filter(x => x.is_active).map(x => (
-                  <option key={x.id} value={x.id}>{x.full_name || x.username}</option>
-                ))}
+                <ManagerOptions users={users} unitDeptIds={depts.map(x => x.id)}
+                                currentId={u.manager_user_id} />
               </select>
             </label>
             <span style={{ flex: '1 1 360px', fontSize: 12, color: 'var(--color-text-muted)' }}>
@@ -253,6 +252,43 @@ function UnitAccordion({ unit: u, depts, users, onChanged }) {
 }
 
 // Sortuje wydziały danej jednostki w kolejności drzewa (pre-order) i podaje głębokość.
+// Kandydaci na kierownika / zastępcę: NAJPIERW osoby z danej komórki,
+// potem z tej samej jednostki — bez reszty systemu. Obecnie przypisana osoba
+// spoza jednostki zostaje na liście, żeby wybór nie „znikał”.
+function ManagerOptions({ users, deptId = null, unitDeptIds = [], currentId = null, exclude = [] }) {
+  const unitSet = new Set(unitDeptIds)
+  const skip = new Set(exclude.filter(Boolean).map(Number))
+  const active = users.filter(u => u.is_active !== false && !skip.has(u.id))
+  const lbl = u => `${u.full_name || u.username}`
+    + (u.title ? ` — ${u.title}` : '')
+    + (u.is_manager_title ? ' ★' : '')
+  const byName = (a, b) => (a.full_name || a.username).localeCompare(b.full_name || b.username, 'pl')
+  const byMgr = (a, b) => (b.is_manager_title ? 1 : 0) - (a.is_manager_title ? 1 : 0) || byName(a, b)
+  const here = deptId ? active.filter(u => u.department_id === deptId).sort(byMgr) : []
+  const inUnit = active.filter(u => u.department_id !== deptId && unitSet.has(u.department_id)).sort(byMgr)
+  const cur = currentId ? users.find(u => u.id === Number(currentId)) : null
+  const curOutside = cur && !here.includes(cur) && !inUnit.includes(cur)
+  return (
+    <>
+      {here.length > 0 && (
+        <optgroup label="Z tej komórki">
+          {here.map(u => <option key={u.id} value={u.id}>{lbl(u)}</option>)}
+        </optgroup>
+      )}
+      {inUnit.length > 0 && (
+        <optgroup label="Z tej jednostki">
+          {inUnit.map(u => <option key={u.id} value={u.id}>{lbl(u)}</option>)}
+        </optgroup>
+      )}
+      {curOutside && (
+        <optgroup label="Obecnie przypisany (spoza jednostki)">
+          <option value={cur.id}>{lbl(cur)}</option>
+        </optgroup>
+      )}
+    </>
+  )
+}
+
 function flattenDeptTree(depts) {
   const byParent = new Map()
   for (const d of depts) {
@@ -372,31 +408,10 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
           ) : (
           <select className="form-control" style={{ fontSize: 12 }}
                   value={managerId} onChange={e => setManagerId(e.target.value)}
-                  title="★ = stanowisko kierownicze (z AD). Osoby z tej komórki są na górze.">
-            {(() => {
-              const active = users.filter(u => u.is_active)
-              const lbl = u => `${u.full_name || u.username}`
-                + (u.title ? ` — ${u.title}` : '')
-                + (u.is_manager_title ? ' ★' : '')
-              const byName = (a, b) => (a.full_name || a.username)
-                .localeCompare(b.full_name || b.username, 'pl')
-              const here = active.filter(u => u.department_id === d.id)
-                .sort((a, b) => (b.is_manager_title ? 1 : 0) - (a.is_manager_title ? 1 : 0) || byName(a, b))
-              const others = active.filter(u => u.department_id !== d.id).sort(byName)
-              return (
-                <>
-                  <option value="">— brak —</option>
-                  {here.length > 0 && (
-                    <optgroup label="Z tej komórki">
-                      {here.map(u => <option key={u.id} value={u.id}>{lbl(u)}</option>)}
-                    </optgroup>
-                  )}
-                  <optgroup label="Pozostali">
-                    {others.map(u => <option key={u.id} value={u.id}>{lbl(u)}</option>)}
-                  </optgroup>
-                </>
-              )
-            })()}
+                  title="★ = stanowisko kierownicze (z AD). Najpierw osoby z tej komórki, potem z jednostki.">
+            <option value="">— brak —</option>
+            <ManagerOptions users={users} deptId={d.id}
+                            unitDeptIds={(unitDepts || []).map(x => x.id)} currentId={managerId} />
           </select>
           )}
         </td>
@@ -471,7 +486,7 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
                 title="Usuń" aria-label="Usuń"><Trash2 size={15} /></button>
       </td>
       {deputiesOpen && (
-        <DeputiesModal dept={d} users={users}
+        <DeputiesModal dept={d} users={users} unitDepts={unitDepts}
                        onClose={() => setDeputiesOpen(false)}
                        onChanged={onChanged} />
       )}
@@ -540,9 +555,8 @@ function AddDeptForm({ unitId, users, unitDepts, onAdded }) {
         ) : (
           <select className="form-control" value={managerId} onChange={e => setManagerId(e.target.value)}>
             <option value="">— brak —</option>
-            {users.filter(u => u.is_active).map(u => (
-              <option key={u.id} value={u.id}>{u.full_name || u.username}</option>
-            ))}
+            <ManagerOptions users={users} unitDeptIds={(unitDepts || []).map(x => x.id)}
+                            currentId={managerId} />
           </select>
         )}
       </div>
@@ -1306,7 +1320,7 @@ export function LdapUsersImportModal({ onClose }) {
 // ---------------------------------------------------------------------------
 // Modal zarządzania zastępcami kierownika komórki
 // ---------------------------------------------------------------------------
-function DeputiesModal({ dept, users, onClose, onChanged }) {
+function DeputiesModal({ dept, users, unitDepts = [], onClose, onChanged }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState(null)
@@ -1328,7 +1342,6 @@ function DeputiesModal({ dept, users, onClose, onChanged }) {
   useEffect(() => { load() }, [dept.id])
 
   const alreadyIds = new Set(rows.map(r => r.user_id).concat([dept.manager_user_id].filter(Boolean)))
-  const candidates = users.filter(u => u.is_active !== false && !alreadyIds.has(u.id))
 
   async function onAdd() {
     if (!addUserId) return
@@ -1395,11 +1408,8 @@ function DeputiesModal({ dept, users, onClose, onChanged }) {
               <select className="input input--sm" value={addUserId}
                       onChange={e => setAddUserId(e.target.value)}>
                 <option value="">— wybierz osobę —</option>
-                {candidates.map(u => (
-                  <option key={u.id} value={u.id}>
-                    {(u.full_name || u.username)}{u.department_name ? ' · ' + u.department_name : ''}
-                  </option>
-                ))}
+                <ManagerOptions users={users} deptId={dept.id}
+                                unitDeptIds={unitDepts.map(x => x.id)} exclude={[...alreadyIds]} />
               </select>
               <input className="input input--sm" value={addLabel}
                      onChange={e => setAddLabel(e.target.value)}
