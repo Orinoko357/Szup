@@ -193,3 +193,22 @@ def get_current_token_payload(token: str = Depends(oauth2_scheme)) -> dict:
         return jwt.decode(token, _jwt_secret(), algorithms=[ALGORITHM])
     except JWTError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Nieautoryzowany")
+
+
+def verify_user_password(session, user, password: str) -> bool:
+    """Potwierdzenie tożsamości przy operacjach nieodwracalnych (usuwanie logów,
+    reset): hasło lokalne albo — dla kont domenowych — bind do AD."""
+    if not password:
+        return False
+    from models import AuthType, LdapSettings
+    from sqlmodel import select
+    if user.auth_type == AuthType.ldap:
+        from services.ldap_service import authenticate_ldap
+        cfg = session.exec(select(LdapSettings)).first()
+        if not (cfg and cfg.enabled):
+            return False
+        try:
+            return bool(authenticate_ldap(cfg, user.username, password))
+        except Exception:
+            return False
+    return bool(user.password_hash) and verify_password(password, user.password_hash)

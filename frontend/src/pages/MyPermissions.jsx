@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ShieldCheck, RefreshCw, UserCheck, Mail } from 'lucide-react'
-import { getMyPermissions } from '../api'
+import { getMyPermissions, errorMessage } from '../api'
 import { fmtDate } from '../serverTime'
 import MyNameChanges from '../components/MyNameChanges'
 
@@ -15,7 +15,7 @@ export default function MyPermissions() {
       const r = await getMyPermissions()
       setData(r.data)
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się pobrać listy uprawnień')
+      setErr(errorMessage(ex, 'Nie udało się pobrać listy uprawnień'))
     } finally {
       setLoading(false)
     }
@@ -40,7 +40,7 @@ export default function MyPermissions() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Moje uprawnienia</div>
+          <h1 className="page-header__title">Moje uprawnienia</h1>
           <div className="page-header__sub">
             Uprawnienia nadane na podstawie zrealizowanych wniosków
           </div>

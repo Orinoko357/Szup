@@ -25,10 +25,14 @@ def request_url(request_id: int, tab: str = "handle") -> str:
     return f"{APP_URL.rstrip('/')}/requests?tab={tab}&open={request_id}"
 
 
-def requester_url(request_id: int, requester_is_manager: bool | None) -> str:
-    """Link dla wnioskodawcy: kierownik → „Moje wnioski”, kadry → Kartoteka."""
+def requester_url(request_id: int, requester_is_manager: bool | None,
+                  requester_is_hr: bool | None = None) -> str:
+    """Link dla wnioskodawcy: kierownik → „Moje wnioski”, kadry → Kartoteka,
+    pozostali (np. superadmin bez tych ról) → strona główna — /hr wymaga roli HR."""
     if requester_is_manager:
         return request_url(request_id, "mine")
+    if requester_is_hr is False:
+        return APP_URL.rstrip('/')
     return f"{APP_URL.rstrip('/')}/hr"
 
 
@@ -152,15 +156,6 @@ def notify_selector_new_request(manager_email: str, request_id: int, worker_name
     }, from_name=from_name, from_email=from_email)
 
 
-def notify_higher_manager_request(manager_email: str, request_id: int, worker_name: str,
-                                   dept_name: str, selector_name: str) -> None:
-    _send_event("higher_manager_request", manager_email, {
-        "request_id": request_id, "worker_name": worker_name,
-        "dept_name": dept_name, "selector_name": selector_name,
-        "request_url": request_url(request_id, "handle"),
-    })
-
-
 def notify_it_request_approved(it_emails: list[str], request_id: int, worker_name: str,
                                  dept_name: str, manager_name: str,
                                  from_name: str | None = None,
@@ -208,7 +203,8 @@ def notify_request_completed(requester_email: str, request_id: int, worker_name:
                              from_name: str | None = None,
                              from_email: str | None = None,
                              denied_lines: list[str] | None = None,
-                             requester_is_manager: bool | None = None) -> None:
+                             requester_is_manager: bool | None = None,
+                             requester_is_hr: bool | None = None) -> None:
     # Sekcja z pozycjami, których NIE nadano (odmowa IT / kierownika nadrzędnego).
     denied_block = ""
     denied_suffix = ""
@@ -220,17 +216,18 @@ def notify_request_completed(requester_email: str, request_id: int, worker_name:
     _send_event("request_completed", requester_email, {
         "request_id": request_id, "worker_name": worker_name,
         "denied_block": denied_block, "denied_suffix": denied_suffix,
-        "request_url": requester_url(request_id, requester_is_manager),
+        "request_url": requester_url(request_id, requester_is_manager, requester_is_hr),
     }, from_name=from_name, from_email=from_email)
 
 
 def notify_request_rejected(requester_email: str, request_id: int,
                               worker_name: str, comment: str,
-                              requester_is_manager: bool | None = None) -> None:
+                              requester_is_manager: bool | None = None,
+                             requester_is_hr: bool | None = None) -> None:
     _send_event("request_rejected", requester_email, {
         "request_id": request_id, "worker_name": worker_name,
         "comment": comment or "(brak komentarza)",
-        "request_url": requester_url(request_id, requester_is_manager),
+        "request_url": requester_url(request_id, requester_is_manager, requester_is_hr),
     })
 
 

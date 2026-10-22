@@ -9,16 +9,7 @@
  *   posiada    → szary badge „posiada” (bez zmian)
  */
 
-// Data+godzina do tooltipów (kto i kiedy odmówił / zrealizował pozycję).
-function fmtDT(iso) {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (isNaN(d)) return ''
-  return d.toLocaleString('pl-PL', {
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  })
-}
+import { fmtDateTimeShort as fmtDT } from '../serverTime'
 
 // Tekst tooltipa badge'a: „Osoba — 12.10.2026, 14:30".
 function actorTitle(name, iso) {

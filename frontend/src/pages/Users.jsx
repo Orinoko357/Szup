@@ -6,27 +6,17 @@ import {
 import {
   listUsers, createUser, updateUser, deleteUser, resetUserPassword, unlockUser,
   listAllDepartments, listActiveUnits, autoAssignManagers,
-} from '../api'
+ errorMessage} from '../api'
 import { LdapUsersImportModal } from './Units'
 import { serverTs, serverNow, fmtDate } from '../serverTime'
-import { toast, confirmDialog, promptDialog } from '../components/ui/feedback'
-import { ROLE_LABEL } from '../labels'
+import { toast, promptDialog, ask } from '../components/ui/feedback'
+import { ROLE_META as ROLE_DICT } from '../labels'
+import { getUserRoles } from '../roles'
 
-// Potwierdzenie w oknie aplikacji (zamiast systemowego confirm). Operacje
-// usuwające / odbierające / nieodwracalne oznaczamy na czerwono.
-const ask = (message) => {
-  const danger = /usun|odebra|wygas|ostrze|nieodwracal/i.test(message)
-  return confirmDialog({
-    title: danger ? 'Potwierdź operację' : 'Potwierdź',
-    message, danger, confirmLabel: danger ? 'Tak, wykonaj' : 'Potwierdź',
-  })
-}
+// Okno dialogowe dostaje fokus po otwarciu (Escape i czytniki ekranu działają od razu).
+const focusDialog = el => { if (el && !el.contains(document.activeElement)) el.focus() }
 
-// Etykieta komórki: „Nazwa · Jednostka" jeśli znamy jednostkę.
-function deptLabel(d) {
-  if (!d) return ''
-  return d.unit_name ? `${d.name} · ${d.unit_name}` : d.name
-}
+
 
 
 /**
@@ -200,24 +190,16 @@ function DeptCombo({ depts = [], units = [], value, onChange, className = 'form-
   )
 }
 
-// Etykiety ról ze wspólnego słownika (labels.js) — te same nazwy co w belce.
-const roleLbl = (r) => { const t = ROLE_LABEL[r] || r; return t.charAt(0).toUpperCase() + t.slice(1) }
-const ROLES = [
-  { value: 'superadmin', label: roleLbl('superadmin'), badge: 'badge--error',   superadminOnly: true },
-  { value: 'admin',      label: roleLbl('admin'),      badge: 'badge--warning' },
-  { value: 'hr',         label: roleLbl('hr'),         badge: 'badge--info'    },
-  { value: 'manager',    label: roleLbl('manager'),    badge: 'badge--info'    },
-  { value: 'it_staff',   label: roleLbl('it_staff'),   badge: 'badge--success' },
-  { value: 'viewer',     label: roleLbl('viewer'),     badge: 'badge--neutral' },
-]
+// Etykiety i kolory ról ze wspólnego słownika (labels.js) — te same co w belce.
+const roleLbl = (r) => { const t = ROLE_DICT[r]?.label || r; return t.charAt(0).toUpperCase() + t.slice(1) }
+const ROLES = ['superadmin', 'admin', 'hr', 'manager', 'it_staff', 'viewer'].map(v => ({
+  value: v, label: roleLbl(v), badge: ROLE_DICT[v]?.badge || 'badge--neutral',
+  superadminOnly: v === 'superadmin',
+}))
 
 const ROLE_META = Object.fromEntries(ROLES.map(r => [r.value, r]))
 
-function currentUserRoles() {
-  try { return JSON.parse(localStorage.getItem('szup_user'))?.roles || [] }
-  catch { return [] }
-}
-const isSuperadmin = () => currentUserRoles().includes('superadmin')
+const isSuperadmin = () => getUserRoles().includes('superadmin')
 
 // Jakie role może przypisywać zalogowany użytkownik
 const assignableRoles = () => isSuperadmin() ? ROLES : ROLES.filter(r => !r.superadminOnly)
@@ -255,7 +237,7 @@ export default function Users() {
       + '(„kierownik", „dyrektor", „naczelnik")?\n\n'
       + 'Uzupełnione zostaną tylko komórki BEZ kierownika; przy kilku kandydatach '
       + 'komórka zostaje do ręcznej decyzji. Najpierw zaimportuj użytkowników z AD '
-      + '(stanowiska pobierają się przy imporcie).')) return
+      + '(stanowiska pobierają się przy imporcie).', { title: 'Potwierdź', confirmLabel: 'Przypisz kierowników' })) return
     setAutoBusy(true)
     try {
       const r = await autoAssignManagers({})
@@ -267,7 +249,7 @@ export default function Users() {
         + (d.details.length ? `\n\n${d.details.join('\n')}` : ''), { tone: 'info', timeout: 12000 })
       load()
     } catch (ex) {
-      toast(ex.response?.data?.detail || 'Nie udało się przypisać kierowników', { tone: 'error' })
+      toast(errorMessage(ex, 'Nie udało się przypisać kierowników'), { tone: 'error' })
     } finally { setAutoBusy(false) }
   }
 
@@ -367,7 +349,7 @@ export default function Users() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Użytkownicy</div>
+          <h1 className="page-header__title">Użytkownicy</h1>
           <div className="page-header__sub">Zarządzanie kontami i rolami w systemie SZUP</div>
         </div>
         <button className="btn btn--action" onClick={() => setShowAdd(v => !v)}>
@@ -458,9 +440,9 @@ export default function Users() {
                   {unitOpen ? <ChevronDown size={18} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />
                             : <ChevronRight size={18} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />}
                   <Building2 size={17} aria-hidden="true" style={{
-                    color: g.key === '_none' ? 'var(--color-text-muted)' : 'var(--color-navy)', flexShrink: 0 }} />
+                    color: g.key === '_none' ? 'var(--color-text-muted)' : 'var(--color-heading)', flexShrink: 0 }} />
                   <strong style={{ fontSize: 16,
-                                   color: g.key === '_none' ? 'var(--color-text-muted)' : 'var(--color-navy)' }}>
+                                   color: g.key === '_none' ? 'var(--color-text-muted)' : 'var(--color-heading)' }}>
                     {g.name}
                   </strong>
                   <span className="badge badge--neutral">{g.count}</span>
@@ -548,7 +530,7 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
       // zapis się udał, ale admin musi o tym wiedzieć.
       if (r.data?.warning) toast(r.data.warning, { tone: 'warning' })
       setEditDept(false); onChanged()
-    } catch (ex) { toast(ex.response?.data?.detail || 'Błąd przypisania komórki', { tone: 'error' }) }
+    } catch (ex) { toast(errorMessage(ex, 'Błąd przypisania komórki'), { tone: 'error' }) }
   }
 
   function toggleRole(rv) {
@@ -564,12 +546,18 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
       if (r.data?.warning) toast(r.data.warning, { tone: 'warning' })
       setEditRoles(false); onChanged()
     }
-    catch (ex) { toast(ex.response?.data?.detail || 'Błąd zmiany roli', { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Błąd zmiany roli'), { tone: 'error' }) }
   }
 
   async function toggleActive() {
-    try { await updateUser(u.id, { is_active: !u.is_active }); onChanged() }
-    catch (ex) { toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' }) }
+    if (u.is_active && !await ask(
+      `Dezaktywować konto „${u.username}”? Użytkownik nie zaloguje się do systemu.`,
+      { title: 'Dezaktywacja konta', confirmLabel: 'Dezaktywuj konto', danger: true })) return
+    try {
+      await updateUser(u.id, { is_active: !u.is_active }); onChanged()
+      toast(u.is_active ? `Dezaktywowano konto „${u.username}”` : `Aktywowano konto „${u.username}”`)
+    }
+    catch (ex) { toast(errorMessage(ex, 'Nie udało się zmienić statusu konta'), { tone: 'error' }) }
   }
 
   async function handleReset() {
@@ -580,18 +568,18 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
     })
     if (!pw) return
     try { await resetUserPassword(u.id, pw); onChanged(); toast(`Hasło użytkownika ${u.username} zostało zresetowane`) }
-    catch (ex) { toast(ex.response?.data?.detail || 'Błąd resetowania hasła', { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Błąd resetowania hasła'), { tone: 'error' }) }
   }
 
   async function handleUnlock() {
-    try { await unlockUser(u.id); onChanged() }
-    catch (ex) { toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' }) }
+    try { await unlockUser(u.id); onChanged(); toast(`Odblokowano konto „${u.username}”`) }
+    catch (ex) { toast(errorMessage(ex, 'Nie udało się odblokować konta'), { tone: 'error' }) }
   }
 
   async function handleDelete() {
-    if (!await ask(`Usunąć konto "${u.username}"?`)) return
+    if (!await ask(`Usunąć konto "${u.username}"?`, { title: 'Potwierdź operację', confirmLabel: 'Usuń konto', danger: true })) return
     try { await deleteUser(u.id); onChanged(); toast(`Usunięto konto „${u.username}”`) }
-    catch (ex) { toast(ex.response?.data?.detail || 'Błąd usuwania', { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Błąd usuwania'), { tone: 'error' }) }
   }
 
   return (
@@ -600,7 +588,7 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
       <td style={{ fontWeight: 600 }}>{u.full_name || '—'}</td>
       <td style={{ fontSize: 12 }}>
         {u.email
-          ? <a href={`mailto:${u.email}`} style={{ color: 'var(--color-primary)', textDecoration: 'none' }}>{u.email}</a>
+          ? <a href={`mailto:${u.email}`} style={{ color: 'var(--color-info-text)', textDecoration: 'none' }}>{u.email}</a>
           : <span style={{ color: 'var(--color-text-muted)' }}>—</span>}
       </td>
       <td>
@@ -613,12 +601,17 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
                 {r.label}
               </label>
             ))}
-            <button className="btn btn--primary btn--sm" onClick={saveRoles}>OK</button>
-            <button className="btn btn--ghost btn--sm" onClick={() => { setEditRoles(false); setSelectedRoles(u.roles || [u.role]) }}>×</button>
+            <button type="button" className="btn btn--primary btn--sm" onClick={saveRoles}
+                    aria-label={`Zapisz role użytkownika ${u.username}`}>Zapisz</button>
+            <button type="button" className="btn btn--ghost btn--sm" aria-label="Anuluj zmianę ról"
+                    onClick={() => { setEditRoles(false); setSelectedRoles(u.roles || [u.role]) }}>Anuluj</button>
           </div>
         ) : (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, cursor: 'pointer' }}
-               onClick={() => setEditRoles(true)} title="Kliknij aby zmienić role">
+          <button type="button" style={{ display: 'flex', flexWrap: 'wrap', gap: 3, cursor: 'pointer', border: 0,
+                                         background: 'transparent', padding: 4, font: 'inherit', color: 'inherit',
+                                         textAlign: 'left', minHeight: 32 }}
+               onClick={() => setEditRoles(true)} title="Kliknij, aby zmienić role"
+               aria-label={`Zmień role użytkownika ${u.username}`}>
             {(u.roles || [u.role]).map(rv => {
               const m = ROLE_META[rv]
               return m ? (
@@ -633,7 +626,7 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
                 HR (kadry)
               </span>
             )}
-          </div>
+          </button>
         )}
       </td>
       <td>
@@ -641,18 +634,22 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
           <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
             <DeptCombo depts={depts} units={units} value={deptId} onChange={setDeptId}
                        className="input input--sm" autoFocus />
-            <button className="btn btn--primary btn--sm" onClick={saveDept} title="Zapisz"><Check size={12} /></button>
-            <button className="btn btn--ghost btn--sm"
-                    onClick={() => { setEditDept(false); setDeptId(u.department_id || '') }} title="Anuluj"><X size={12} /></button>
+            <button type="button" className="btn btn--primary btn--sm" onClick={saveDept} title="Zapisz"
+                    aria-label="Zapisz komórkę">Zapisz</button>
+            <button type="button" className="btn btn--ghost btn--sm" aria-label="Anuluj zmianę komórki"
+                    onClick={() => { setEditDept(false); setDeptId(u.department_id || '') }} title="Anuluj">Anuluj</button>
           </div>
         ) : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12 }}
-               onClick={() => setEditDept(true)} title="Kliknij aby przypisać komórkę">
-            <Building2 size={13} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
+          <button type="button" style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12,
+                                         border: 0, background: 'transparent', padding: 4, font: 'inherit',
+                                         color: 'inherit', textAlign: 'left', minHeight: 32 }}
+               onClick={() => setEditDept(true)} title="Kliknij, aby przypisać komórkę"
+               aria-label={`Zmień komórkę użytkownika ${u.username}`}>
+            <Building2 size={13} aria-hidden="true" style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
             {u.department_name
               ? <span>{u.department_name}</span>
               : <span style={{ color: 'var(--color-text-muted)', fontStyle: 'italic' }}>nieprzypisany</span>}
-          </div>
+          </button>
         )}
       </td>
 
@@ -747,19 +744,21 @@ function UnitsAssignModal({ user: u, units = [], initial = [], onClose, onSaved 
       await updateUser(u.id, { unit_ids: ids })
       onSaved()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się zapisać jednostek'); setBusy(false)
+      setErr(errorMessage(ex, 'Nie udało się zapisać jednostek')); setBusy(false)
     }
   }
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal modal--sm">
-        <div className="modal__header">
-          <span className="modal__title">
+    <div className="modal-overlay" role="presentation" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Jednostki obsługiwane" tabIndex={-1} ref={focusDialog}
+           onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }} style={{ maxWidth: 520 }}>
+        <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-heading)', padding: '12px 12px 12px 20px', gap: 12 }}>
+          <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
             <Building2 size={15} style={{ marginRight: 8, verticalAlign: 'middle' }} />
             Jednostki obsługiwane — {u.full_name || u.username}
-          </span>
-          <button className="modal__close" onClick={onClose}>×</button>
+          </h2>
+          <button type="button" className="modal__close" aria-label="Zamknij" title="Zamknij" onClick={onClose}
+                  style={{ width: 44, height: 44, color: 'var(--color-text-muted)' }}>×</button>
         </div>
         <div className="modal__body">
           <p style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 12 }}>
@@ -840,17 +839,17 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
         <div className="form-row">
           <div className="form-group">
             <label className="form-label">Login *</label>
-            <input className="form-control" required value={form.username} onChange={e => set('username', e.target.value)} />
+            <input aria-label="Login" className="form-control" required value={form.username} onChange={e => set('username', e.target.value)} />
           </div>
           <div className="form-group">
             <label className="form-label">Imię i nazwisko</label>
-            <input className="form-control" value={form.full_name} onChange={e => set('full_name', e.target.value)} />
+            <input aria-label="Imię i nazwisko" className="form-control" value={form.full_name} onChange={e => set('full_name', e.target.value)} />
           </div>
         </div>
         <div className="form-row">
           <div className="form-group" style={{ flexBasis: '100%' }}>
             <label className="form-label">E-mail</label>
-            <input className="form-control" type="email" value={form.email}
+            <input aria-label="E-mail" className="form-control" type="email" value={form.email}
                    onChange={e => set('email', e.target.value)}
                    placeholder="np. j.kowalski@wodzislaw-slaski.pl" />
             <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
@@ -912,7 +911,7 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
         <div className="form-row">
           <div className="form-group">
             <label className="form-label">Typ konta</label>
-            <select className="form-control" value={form.auth_type} onChange={e => set('auth_type', e.target.value)}>
+            <select aria-label="Role" className="form-control" value={form.auth_type} onChange={e => set('auth_type', e.target.value)}>
               <option value="local">Lokalne</option>
               <option value="ldap">AD/LDAP</option>
             </select>
@@ -920,7 +919,7 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
           {form.auth_type === 'local' && (
             <div className="form-group">
               <label className="form-label">Hasło *</label>
-              <input className="form-control" type="password" required value={form.password}
+              <input aria-label="Hasło" className="form-control" type="password" required value={form.password}
                      onChange={e => set('password', e.target.value)} autoComplete="new-password" />
             </div>
           )}

@@ -59,7 +59,8 @@ EVENTS: dict[str, dict] = {
     },
     "higher_manager_request": {
         "label": "Wniosek — akceptacja kierownika wyższego rzędu",
-        "description": "Trafia do kierownika nadrzędnego po wyborze uprawnień przez kierownika komórki.",
+        "description": "(nieużywany — wysyłkę robi powiadomienie etapu „Wniosek wszedł w nowy etap”) "
+                       "Trafia do kierownika nadrzędnego po wyborze uprawnień przez kierownika komórki.",
         "macros": _COMMON + ["{selector_name}"],
         "subject": "[SZUP] Wniosek #{request_id} do akceptacji wyższego rzędu",
         "body": (

@@ -6,18 +6,10 @@ import {
 import {
   listRequestTypes, createRequestType, updateRequestType, deleteRequestType,
   listWorkflowTemplates,
-} from '../api'
-import { toast, confirmDialog } from '../components/ui/feedback'
+ errorMessage} from '../api'
+import { toast, ask } from '../components/ui/feedback'
+import Field from '../components/ui/Field'
 
-// Potwierdzenie w oknie aplikacji (zamiast systemowego confirm). Operacje
-// usuwające / odbierające / nieodwracalne oznaczamy na czerwono.
-const ask = (message) => {
-  const danger = /usun|odebra|wygas|ostrze|nieodwracal/i.test(message)
-  return confirmDialog({
-    title: danger ? 'Potwierdź operację' : 'Potwierdź',
-    message, danger, confirmLabel: danger ? 'Tak, wykonaj' : 'Potwierdź',
-  })
-}
 
 const ICON_MAP = {
   'user-plus':  UserPlus,
@@ -42,7 +34,7 @@ export default function RequestTypes() {
         listWorkflowTemplates({ is_active: true }),
       ])
       setItems(r.data); setTemplates(t.data)
-    } catch (ex) { setErr(ex.response?.data?.detail || 'Błąd ładowania') }
+    } catch (ex) { setErr(errorMessage(ex, 'Błąd ładowania')) }
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
@@ -51,7 +43,7 @@ export default function RequestTypes() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Typy wniosków</div>
+          <h1 className="page-header__title">Typy wniosków</h1>
           <div className="page-header__sub">
             Każdy typ wniosku ma przypisany szablon obiegu. HR/kierownik wybiera typ przy tworzeniu wniosku.
           </div>
@@ -111,9 +103,9 @@ export default function RequestTypes() {
 function TypeRow({ t, onEdit, onReload }) {
   const Icon = ICON_MAP[t.icon] || Package
   async function del() {
-    if (!await ask(`Usunąć typ wniosku "${t.name}"?`)) return
+    if (!await ask(`Usunąć typ wniosku "${t.name}"?`, { title: 'Potwierdź operację', confirmLabel: 'Usuń typ', danger: true })) return
     try { await deleteRequestType(t.id); onReload(); toast(`Usunięto typ wniosku „${t.name}”`) }
-    catch (ex) { toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Błąd'), { tone: 'error' }) }
   }
   return (
     <tr>
@@ -181,7 +173,7 @@ function TypeForm({ type, templates, onCancel, onSaved }) {
       if (isEdit) await updateRequestType(type.id, payload)
       else await createRequestType(payload)
       onSaved()
-    } catch (ex) { setErr(ex.response?.data?.detail || ex.message || 'Błąd zapisu') }
+    } catch (ex) { setErr(errorMessage(ex, 'Błąd zapisu')) }
     finally { setSaving(false) }
   }
 
@@ -193,20 +185,20 @@ function TypeForm({ type, templates, onCancel, onSaved }) {
         {isEdit ? 'Edycja typu wniosku' : 'Nowy typ wniosku'}
       </h2>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
-        <Field label="Nazwa *">
-          <input className="form-control" style={INP} value={form.name} onChange={e => setF('name', e.target.value)} />
+        <Field label="Nazwa" required>
+          <input className="form-control" style={{ minHeight: 44 }} value={form.name} onChange={e => setF('name', e.target.value)} />
         </Field>
         <Field label="Kod (skrót)">
-          <input className="form-control" style={INP} value={form.code} onChange={e => setF('code', e.target.value)} placeholder="np. NEW_EMP" />
+          <input className="form-control" style={{ minHeight: 44 }} value={form.code} onChange={e => setF('code', e.target.value)} placeholder="np. NEW_EMP" />
         </Field>
-        <Field label="Szablon obiegu *">
-          <select className="form-control" style={INP} value={form.workflow_template_id} onChange={e => setF('workflow_template_id', e.target.value)}>
+        <Field label="Szablon obiegu" required>
+          <select className="form-control" style={{ minHeight: 44 }} value={form.workflow_template_id} onChange={e => setF('workflow_template_id', e.target.value)}>
             <option value="">— wybierz —</option>
             {templates.map(t => <option key={t.id} value={t.id}>{t.name} (v{t.version})</option>)}
           </select>
         </Field>
         <Field label="Ikona">
-          <select className="form-control" style={INP} value={form.icon} onChange={e => setF('icon', e.target.value)}>
+          <select className="form-control" style={{ minHeight: 44 }} value={form.icon} onChange={e => setF('icon', e.target.value)}>
             {Object.keys(ICON_MAP).map(k => <option key={k} value={k}>{k}</option>)}
           </select>
         </Field>
@@ -233,14 +225,3 @@ function TypeForm({ type, templates, onCancel, onSaved }) {
   )
 }
 
-const INP = { minHeight: 44, fontSize: 14, fontWeight: 400, letterSpacing: 0, textTransform: 'none' }
-
-function Field({ label, children }) {
-  return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11, fontWeight: 700,
-                    letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--color-text-muted)' }}>
-      {label}
-      {children}
-    </label>
-  )
-}

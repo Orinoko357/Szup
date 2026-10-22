@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
-import { X, Check, Copy } from 'lucide-react'
-import { listSystems, listPermissions, copyPermissionGroup } from '../api'
+import { X, Check } from 'lucide-react'
+import { listSystems, listPermissions, copyPermissionGroup , errorMessage} from '../api'
 import { groupPerms } from './ItemFields'
+
+// Okno dialogowe dostaje fokus po otwarciu (Escape i czytniki ekranu działają od razu).
+const focusDialog = el => { if (el && !el.contains(document.activeElement)) el.focus() }
 
 /**
  * Kopiowanie JEDNEJ grupy uprawnień z innego programu do bieżącego.
@@ -67,14 +70,15 @@ export default function CopyGroupModal({ system, existingGroups = [], onClose, o
       }
       onDone()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się skopiować grupy')
+      setErr(errorMessage(ex, 'Nie udało się skopiować grupy'))
       setBusy(false)
     }
   }
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 620, width: '92vw' }}>
+    <div className="modal-overlay" role="presentation" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Kopiuj grupę uprawnień →" tabIndex={-1} ref={focusDialog}
+           onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }} style={{ maxWidth: 620, width: '92vw' }}>
         <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-heading)', padding: '12px 12px 12px 20px', gap: 12 }}>
           <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
             Kopiuj grupę uprawnień → {system.name}
@@ -91,7 +95,7 @@ export default function CopyGroupModal({ system, existingGroups = [], onClose, o
 
           <div className="form-group">
             <label className="form-label">Program źródłowy *</label>
-            <select className="form-control" value={sourceId}
+            <select aria-label="Program źródłowy" className="form-control" value={sourceId}
                     onChange={e => setSourceId(e.target.value)}>
               <option value="">— wybierz program —</option>
               {systems.map(s => (
@@ -107,7 +111,7 @@ export default function CopyGroupModal({ system, existingGroups = [], onClose, o
 
           <div className="form-group">
             <label className="form-label">Grupa do skopiowania *</label>
-            <select className="form-control" value={group} disabled={!sourceId || loadingGroups}
+            <select aria-label="Grupa do skopiowania" className="form-control" value={group} disabled={!sourceId || loadingGroups}
                     onChange={e => setGroup(e.target.value)}>
               {loadingGroups && <option value="">Ładowanie…</option>}
               {!loadingGroups && srcGroups.length === 0 && (
@@ -121,7 +125,7 @@ export default function CopyGroupModal({ system, existingGroups = [], onClose, o
 
           <div className="form-group">
             <label className="form-label">Nazwa grupy w tym programie</label>
-            <input className="form-control" list="szup-copy-target-groups"
+            <input aria-label="Nazwa grupy w tym programie" className="form-control" list="szup-copy-target-groups"
                    value={targetName} onChange={e => setTargetName(e.target.value)}
                    placeholder={group || 'domyślnie ta sama co źródłowa'} />
             <datalist id="szup-copy-target-groups">

@@ -30,18 +30,22 @@ export default function Requests() {
   const wanted = params.get('tab')
   const tab = tabs.some(t => t.id === wanted) ? wanted : tabs[0]?.id
   // ?open= odczytujemy raz i usuwamy z adresu, żeby odświeżenie nie otwierało ponownie.
-  // Trafia WYŁĄCZNIE do zakładki z adresu (openTab) i jest czyszczony po użyciu
+  // Trafia WYŁĄCZNIE do zakładki z adresu (open.tab) i jest czyszczony po użyciu
   // oraz przy zmianie zakładki — wcześniej ten sam wniosek otwierał się ponownie
   // (także w złym widoku) po przełączeniu zakładki.
-  const [openId, setOpenId] = useState(() => params.get('open'))
-  const [openTab] = useState(() => tab)
-  const consumeOpen = () => setOpenId(null)
+  // Reagujemy także na ZMIANĘ ?open= po zamontowaniu (wyszukiwarka Ctrl+K
+  // nawiguje, gdy jesteśmy już na /requests). `nonce` przemontowuje osadzony
+  // widok, żeby jego jednorazowa obsługa „open” zadziałała dla nowego numeru.
+  const [open, setOpen] = useState({ id: null, tab: null, nonce: 0 })
+  const consumeOpen = () => setOpen(o => ({ ...o, id: null }))
+  const urlOpen = params.get('open')
   useEffect(() => {
-    if (params.get('open')) {
-      const p = new URLSearchParams(params); p.delete('open')
-      setParams(p, { replace: true })
-    }
-  }, [])
+    if (!urlOpen) return
+    setOpen(o => ({ id: urlOpen, tab, nonce: o.nonce + 1 }))
+    const p = new URLSearchParams(params); p.delete('open')
+    setParams(p, { replace: true })
+  }, [urlOpen])  // eslint-disable-line
+  const openFor = (t) => (open.id && open.tab === t ? open.id : null)
 
   const [fullView, setFullView] = useState(false)
   const [counts, setCounts] = useState({})
@@ -58,7 +62,7 @@ export default function Requests() {
   useEffect(() => { loadCounts() }, [])
 
   const current = tabs.find(t => t.id === tab)
-  const pick = (id) => { setFullView(false); setOpenId(null); setParams({ tab: id }) }
+  const pick = (id) => { setFullView(false); consumeOpen(); setParams({ tab: id }) }
 
   // Nagłówek i zakładki ukrywane warunkowo (nie wczesnym return), żeby osadzone
   // widoki nie były przemontowywane i nie gubiły otwartego wniosku.
@@ -67,7 +71,7 @@ export default function Requests() {
       {!fullView && (
         <div className="page-header">
           <div>
-            <div className="page-header__title">Wnioski</div>
+            <h1 className="page-header__title">Wnioski</h1>
             <div className="page-header__sub">{current?.sub}</div>
           </div>
         </div>
@@ -84,11 +88,11 @@ export default function Requests() {
         </div>
       )}
       {(tab === 'handle' || tab === 'mine') && (
-        <Manager view={tab} openId={tab === openTab ? openId : null} onOpenConsumed={consumeOpen}
+        <Manager key={`m-${open.nonce}`} view={tab} openId={openFor(tab)} onOpenConsumed={consumeOpen}
                  onViewChange={setFullView} onChanged={loadCounts} />
       )}
       {tab === 'it' && (
-        <RequestsTab openId={tab === openTab ? openId : null} onOpenConsumed={consumeOpen}
+        <RequestsTab key={`it-${open.nonce}`} openId={openFor('it')} onOpenConsumed={consumeOpen}
                      onViewChange={setFullView} onChanged={loadCounts} />
       )}
       {tab === 'names' && <NameChangeQueue onChanged={loadCounts} />}

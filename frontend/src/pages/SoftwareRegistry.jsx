@@ -11,22 +11,13 @@ import {
   listActiveUnits, listVendors,
   setPermissionGroupState, renamePermissionGroup, deletePermissionGroup,
   setPermissionGroupOrder, assignPermissionSubgroup,
-} from '../api'
+ errorMessage} from '../api'
 import PermissionImportModal from '../components/PermissionImportModal'
 import PermissionGroupModal from '../components/PermissionGroupModal'
 import CopyGroupModal from '../components/CopyGroupModal'
 import { groupPerms, subgroupPerms, subgroupNames } from '../components/ItemFields'
-import { toast, confirmDialog } from '../components/ui/feedback'
+import { toast, ask } from '../components/ui/feedback'
 
-// Potwierdzenie w oknie aplikacji (zamiast systemowego confirm). Operacje
-// usuwające / odbierające / nieodwracalne oznaczamy na czerwono.
-const ask = (message) => {
-  const danger = /usun|odebra|wygas|ostrze|nieodwracal/i.test(message)
-  return confirmDialog({
-    title: danger ? 'Potwierdź operację' : 'Potwierdź',
-    message, danger, confirmLabel: danger ? 'Tak, wykonaj' : 'Potwierdź',
-  })
-}
 
 /**
  * Rejestr oprogramowania — osobna zakładka dla IT / admin.
@@ -89,7 +80,7 @@ function PermControlFields({ type, setType, options, setOptions, required, setRe
     <>
       <div className="form-group" style={{ margin: 0, minWidth: 190 }}>
         <label className="form-label">Sposób wyboru</label>
-        <select className="form-control" value={type} onChange={e => setType(e.target.value)}>
+        <select aria-label="Sposób wyboru" className="form-control" value={type} onChange={e => setType(e.target.value)}>
           {INPUT_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
       </div>
@@ -99,7 +90,7 @@ function PermControlFields({ type, setType, options, setOptions, required, setRe
           {INPUT_OPTION_TYPES.includes(type) && (
             <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 240 }}>
               <label className="form-label">Opcje do wyboru (jedna w wierszu)</label>
-              <textarea className="form-control" style={{ minHeight: 60, fontSize: 13 }}
+              <textarea aria-label="Opcje do wyboru (jedna w wierszu)" className="form-control" style={{ minHeight: 60, fontSize: 13 }}
                         value={options} onChange={e => setOptions(e.target.value)}
                         placeholder={['Odczyt', 'Zapis', 'Administracja'].join('\n')} />
             </div>
@@ -108,7 +99,7 @@ function PermControlFields({ type, setType, options, setOptions, required, setRe
           {setPrompt && (
             <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 220 }}>
               <label className="form-label">Podpowiedź (co wpisać/wybrać)</label>
-              <input className="form-control" style={{ fontSize: 13 }}
+              <input aria-label="Podpowiedź (co wpisać/wybrać)" className="form-control" style={{ fontSize: 13 }}
                      value={prompt} onChange={e => setPrompt(e.target.value)}
                      placeholder={type === 'text' ? 'np. Podaj login AD (jan.kowalski)'
                        : type === 'textarea' ? 'np. Wpisz rejestry/moduły do udostępnienia'
@@ -165,14 +156,14 @@ function PermRow({ p, onChanged, selected = false, onToggleSel }) {
       })
       setEditing(false); onChanged()
     } catch (ex) {
-      toast(ex.response?.data?.detail || 'Nie udało się zapisać zmian', { tone: 'error' })
+      toast(errorMessage(ex, 'Nie udało się zapisać zmian'), { tone: 'error' })
     } finally { setBusy(false) }
   }
 
   async function del() {
-    if (!await ask('Usunąć uprawnienie?')) return
+    if (!await ask('Usunąć uprawnienie?', { title: 'Potwierdź operację', confirmLabel: 'Usuń uprawnienie', danger: true })) return
     try { await deletePermission(p.id); onChanged(); toast('Usunięto uprawnienie') }
-    catch (ex) { toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Błąd'), { tone: 'error' }) }
   }
 
   if (editing) {
@@ -183,22 +174,22 @@ function PermRow({ p, onChanged, selected = false, onToggleSel }) {
                         alignItems: 'flex-end', padding: '6px 2px' }}>
             <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 170 }}>
               <label className="form-label">Nazwa uprawnienia</label>
-              <input className="form-control" value={name} autoFocus
+              <input aria-label="Nazwa uprawnienia" className="form-control" value={name} autoFocus
                      onChange={e => setName(e.target.value)} />
             </div>
             <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 150 }}>
               <label className="form-label">Opis</label>
-              <input className="form-control" value={desc}
+              <input aria-label="Opis" className="form-control" value={desc}
                      onChange={e => setDesc(e.target.value)} />
             </div>
             <div className="form-group" style={{ margin: 0, minWidth: 160 }}>
               <label className="form-label">Grupa</label>
-              <input className="form-control" list="szup-perm-groups" value={group}
+              <input aria-label="Grupa" className="form-control" list="szup-perm-groups" value={group}
                      onChange={e => setGroup(e.target.value)} placeholder="bez grupy" />
             </div>
             <div className="form-group" style={{ margin: 0, minWidth: 160 }}>
               <label className="form-label">Podgrupa</label>
-              <input className="form-control" list="szup-perm-subgroups" value={subgroup}
+              <input aria-label="Podgrupa" className="form-control" list="szup-perm-subgroups" value={subgroup}
                      onChange={e => setSubgroup(e.target.value)} placeholder="bez podgrupy" />
             </div>
             <PermControlFields type={type} setType={setType} options={opts} setOptions={setOpts}
@@ -235,7 +226,7 @@ function PermRow({ p, onChanged, selected = false, onToggleSel }) {
         )}
         {p.input_type && p.input_type !== 'none' && (
           <span className="badge" style={{ fontSize: 11, fontWeight: 700, marginLeft: 6, borderRadius: 4,
-                                           background: '#FEF3DC', color: '#8A6D1B' }}
+                                           background: 'var(--color-warning-bg)', color: 'var(--color-gold-dark)' }}
                 title={INPUT_TYPE_LABELS[p.input_type] || p.input_type}>
             {INPUT_BADGE_LABELS[p.input_type] || p.input_type}
             {(p.options || []).length > 0 && ` (${p.options.length})`}
@@ -293,7 +284,7 @@ function GroupAddPerm({ systemId, group, subgroup = '', label, onAdded }) {
       setName(''); setDesc(''); setType('none'); setOpts(''); setRequired(false); setPrompt('')
       onAdded()
     } catch (ex) {
-      toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' })
+      toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' })
     } finally { setBusy(false) }
   }
 
@@ -317,17 +308,17 @@ function GroupAddPerm({ systemId, group, subgroup = '', label, onAdded }) {
           <label className="form-label">
             Nowe uprawnienie{group ? ` w grupie „${group}"` : ' (bez grupy)'}
           </label>
-          <input className="form-control" value={name} autoFocus
+          <input aria-label="Nowe uprawnienie" className="form-control" value={name} autoFocus
                  onChange={e => setName(e.target.value)}
                  placeholder="np. Odczyt, 008 Krakowiaczek…" />
         </div>
         <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 150 }}>
           <label className="form-label">Opis</label>
-          <input className="form-control" value={desc} onChange={e => setDesc(e.target.value)} />
+          <input aria-label="Opis" className="form-control" value={desc} onChange={e => setDesc(e.target.value)} />
         </div>
         <div className="form-group" style={{ margin: 0, minWidth: 150 }}>
           <label className="form-label">Podgrupa (opcjonalnie)</label>
-          <input className="form-control" list="szup-perm-subgroups" value={sub}
+          <input aria-label="Podgrupa (opcjonalnie)" className="form-control" list="szup-perm-subgroups" value={sub}
                  onChange={e => setSub(e.target.value)} placeholder="bez podgrupy" />
         </div>
         <PermControlFields type={type} setType={setType} options={opts} setOptions={setOpts}
@@ -358,7 +349,7 @@ function BulkSubgroupBar({ systemId, selectedIds, onDone }) {
       await assignPermissionSubgroup(systemId, selectedIds, clear ? '' : sub.trim())
       setSub(''); onDone()
     } catch (ex) {
-      toast(ex.response?.data?.detail || 'Nie udało się przypisać podgrupy', { tone: 'error' })
+      toast(errorMessage(ex, 'Nie udało się przypisać podgrupy'), { tone: 'error' })
     } finally { setBusy(false) }
   }
   return (
@@ -393,7 +384,7 @@ function BulkSubgroupBar({ systemId, selectedIds, onDone }) {
  * „ogólnodostępne" (dostępne we wszystkich jednostkach).
  */
 function SoftwareGroup({ title, subtitle, count, tone = 'unit', children }) {
-  const color = tone === 'general' ? 'var(--color-navy)'
+  const color = tone === 'general' ? 'var(--color-heading)'
     : tone === 'orphan' ? 'var(--color-error)'
     : 'var(--color-text)'
   const Icon = tone === 'unit' ? Building2 : Package
@@ -525,7 +516,8 @@ export default function SoftwareRegistry() {
     const targets = systems.filter(s => selected.has(s.id))
     if (targets.length === 0) return
     if (!await ask(
-      `${label} dla ${targets.length} zaznaczonych programów?\n\n${warning}`
+      `${label} dla ${targets.length} zaznaczonych programów?\n\n${warning}`,
+      { title: 'Operacja zbiorcza', confirmLabel: label }
     )) return
 
     setBulkBusy(true)
@@ -535,7 +527,7 @@ export default function SoftwareRegistry() {
         await fn(s)
         ok.push(s.name)
       } catch (ex) {
-        failed.push(`${s.name}: ${ex.response?.data?.detail || 'błąd'}`)
+        failed.push(`${s.name}: ${errorMessage(ex, 'błąd')}`)
       }
     }
     setBulkBusy(false)
@@ -601,7 +593,7 @@ export default function SoftwareRegistry() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Oprogramowanie</div>
+          <h1 className="page-header__title">Oprogramowanie</h1>
           <div className="page-header__sub">
             Systemy IT, ich uprawnienia i dostępność dla jednostek organizacyjnych
           </div>
@@ -891,7 +883,7 @@ function AddSystemForm({ units, vendors = [], allSystems = [], onCancel, onSaved
       }
       onSaved()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Błąd zapisu')
+      setErr(errorMessage(ex, 'Błąd zapisu'))
     } finally { setSaving(false) }
   }
 
@@ -901,12 +893,12 @@ function AddSystemForm({ units, vendors = [], allSystems = [], onCancel, onSaved
         <div className="form-row">
           <div className="form-group">
             <label className="form-label">Nazwa oprogramowania *</label>
-            <input className="form-control" required value={name}
+            <input aria-label="Nazwa oprogramowania" className="form-control" required value={name}
                    onChange={e => setName(e.target.value)} autoFocus />
           </div>
           <div className="form-group">
             <label className="form-label">Opis</label>
-            <input className="form-control" value={desc}
+            <input aria-label="Opis" className="form-control" value={desc}
                    onChange={e => setDesc(e.target.value)} />
           </div>
         </div>
@@ -1001,7 +993,7 @@ function VendorField({ vendors, value, onChange }) {
   return (
     <div className="form-group">
       <label className="form-label">Dostawca / producent</label>
-      <select className="form-control" style={{ maxWidth: 420 }}
+      <select aria-label="Dostawca / producent" className="form-control" style={{ maxWidth: 420 }}
               value={value} onChange={e => onChange(e.target.value)}>
         <option value="">— nie przypisano —</option>
         {vendors.map(v => (
@@ -1150,7 +1142,8 @@ function SystemRow({ system: s, units, vendors = [], allSystems = [], selected =
     if (!await ask(
       `Ustawić domyślną definicję uprawnień dla „${s.name}"?\n\n` +
       'Wnioskodawca (kierownik) będzie wpisywał „Zakres uprawnień" — ' +
-      'pole opisowe, obowiązkowe.'
+      'pole opisowe, obowiązkowe.',
+      { title: 'Domyślne uprawnienia', confirmLabel: 'Ustaw domyślne' }
     )) return
     setSettingDefault(true)
     try {
@@ -1159,7 +1152,7 @@ function SystemRow({ system: s, units, vendors = [], allSystems = [], selected =
             + (r.data.details || []).join('\n'))
       onReload()
     } catch (ex) {
-      toast(ex.response?.data?.detail || 'Nie udało się ustawić', { tone: 'error' })
+      toast(errorMessage(ex, 'Nie udało się ustawić'), { tone: 'error' })
     } finally { setSettingDefault(false) }
   }
 
@@ -1173,13 +1166,13 @@ function SystemRow({ system: s, units, vendors = [], allSystems = [], selected =
   }
 
   async function del() {
-    if (!await ask(`Usunąć oprogramowanie „${s.name}"?`)) return
+    if (!await ask(`Usunąć oprogramowanie „${s.name}"?`, { title: 'Potwierdź operację', confirmLabel: 'Usuń oprogramowanie', danger: true })) return
     try {
       await deleteSystem(s.id)
       onReload()
       toast(`Usunięto oprogramowanie „${s.name}”`)
     } catch (ex) {
-      toast(ex.response?.data?.detail || 'Nie można usunąć', { tone: 'error' })
+      toast(errorMessage(ex, 'Nie można usunąć'), { tone: 'error' })
     }
   }
 
@@ -1343,13 +1336,13 @@ function EditSystemForm({ system: s, units, vendors = [], onCancel, onSaved }) {
       await updateSystem(s.id, payload)
       onSaved()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Błąd zapisu')
+      setErr(errorMessage(ex, 'Błąd zapisu'))
     } finally { setSaving(false) }
   }
 
   return (
     <form onSubmit={submit} style={{
-      background: 'var(--color-bg-subtle)', padding: 12, borderRadius: 6,
+      background: 'var(--bg-secondary)', padding: 12, borderRadius: 6,
       marginTop: 8,
     }}>
       <div className="form-row">
@@ -1360,7 +1353,7 @@ function EditSystemForm({ system: s, units, vendors = [], onCancel, onSaved }) {
         </div>
         <div className="form-group">
           <label className="form-label">Opis</label>
-          <input className="form-control" value={desc}
+          <input aria-label="Opis" className="form-control" value={desc}
                  onChange={e => setDesc(e.target.value)} />
         </div>
       </div>
@@ -1470,7 +1463,7 @@ function PermissionsPanel({ system: s }) {
       await setPermissionGroupState(s.id, group, active)
       load()
     } catch (ex) {
-      toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' })
+      toast(errorMessage(ex, 'Błąd'), { tone: 'error' })
     }
   }
 
@@ -1482,7 +1475,7 @@ function PermissionsPanel({ system: s }) {
       setRenaming(null)
       load()
     } catch (ex) {
-      toast(ex.response?.data?.detail || 'Nie udało się zmienić nazwy grupy', { tone: 'error' })
+      toast(errorMessage(ex, 'Nie udało się zmienić nazwy grupy'), { tone: 'error' })
     }
   }
 
@@ -1495,14 +1488,15 @@ function PermissionsPanel({ system: s }) {
     if (i < 0 || j < 0 || j >= names.length) return
     ;[names[i], names[j]] = [names[j], names[i]]
     try { await setPermissionGroupOrder(s.id, names); load() }
-    catch (ex) { toast(ex.response?.data?.detail || 'Nie udało się zmienić kolejności grup', { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Nie udało się zmienić kolejności grup'), { tone: 'error' }) }
   }
 
   async function removeGroup(group, count) {
     if (!await ask(
       `Usunąć grupę „${group}" (${count} pozycji)?\n\n`
       + 'Uprawnienia użyte już we wnioskach nie zostaną usunięte — '
-      + 'zostaną wygaszone, żeby nie zerwać ewidencji.'
+      + 'zostaną wygaszone, żeby nie zerwać ewidencji.',
+      { title: 'Usunąć grupę?', confirmLabel: 'Usuń grupę', danger: true }
     )) return
     try {
       const r = await deletePermissionGroup(s.id, group)
@@ -1512,7 +1506,7 @@ function PermissionsPanel({ system: s }) {
               + `Zachowano (użyte we wnioskach): ${r.data.skipped}`, { tone: 'info' })
       }
     } catch (ex) {
-      toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' })
+      toast(errorMessage(ex, 'Błąd'), { tone: 'error' })
     }
   }
 

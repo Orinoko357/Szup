@@ -1,15 +1,29 @@
-import { LogOut, KeyRound } from 'lucide-react'
+import { LogOut, KeyRound, Menu } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { logout as apiLogout, changePassword } from '../../api'
 import { toast } from '../ui/feedback'
 import GlobalSearch from '../GlobalSearch'
+import { getCurrentUser, getUserRoles } from '../../roles'
+import { ROLE_LABEL } from '../../labels'
+import { setNavOpen } from './Sidebar'
+
+// Inicjały do awatara (np. „Jan Kowalski” → „JK”).
+export function initials(name) {
+  return (name || '?').split(/\s+/).map(s => s[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
+}
 
 export default function Header() {
   const navigate = useNavigate()
-  const userRaw = localStorage.getItem('szup_user')
-  const user = userRaw ? JSON.parse(userRaw) : null
+  const user = getCurrentUser()
   const [showPw, setShowPw] = useState(false)
+  // Stan szuflady menu (wąskie ekrany) — synchronizowany z paskiem bocznym.
+  const [navOpen, setNavOpenState] = useState(false)
+  useEffect(() => {
+    const onNav = (e) => setNavOpenState(!!e.detail?.open)
+    window.addEventListener('szup:nav', onNav)
+    return () => window.removeEventListener('szup:nav', onNav)
+  }, [])
 
   async function handleLogout() {
     try { await apiLogout() } catch { /* ignore */ }
@@ -18,88 +32,48 @@ export default function Header() {
     navigate('/login')
   }
 
-  const initials = (user?.full_name || user?.username || '?')
-    .split(/\s+/).map(s => s[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
-  const roles = Array.isArray(user?.roles) ? user.roles : (user?.role ? [user.role] : [])
-  const roleLabels = roles.map(r => ROLE_MAP[r]?.[1] || r).join(', ')
+  const avatar = initials(user?.full_name || user?.username)
+  const roleLabels = getUserRoles().map(r => ROLE_LABEL[r] || r).join(', ')
 
   return (
-    // v3.0 — belka wg projektu: nazwa urzędu, użytkownik (inicjały + login
-    // + role) jako jeden blok, „Hasło” (konta lokalne) i „Wyloguj” jako
-    // przyciski tekstowe z ikoną.
-    <header className="app-header" style={{ minHeight: 56, padding: '8px 32px', gap: 12, flexWrap: 'wrap' }}>
-      <span className="app-header__org" style={{ fontSize: 14, color: 'var(--color-text-muted)' }}>
+    // Belka: [Menu — tylko wąskie ekrany] nazwa urzędu, wyszukiwarka,
+    // użytkownik (inicjały + login + role), „Hasło” (konta lokalne), „Wyloguj”.
+    <header className="app-header">
+      <button type="button" className="szup-hdr-btn app-header__menu" aria-label="Menu"
+              aria-controls="app-sidebar" aria-expanded={navOpen}
+              onClick={() => setNavOpen(!navOpen)}>
+        <Menu size={20} aria-hidden="true" />
+      </button>
+      <span className="app-header__org">
         Urząd Miasta Wodzisławia Śląskiego
       </span>
       <div className="app-header__spacer" />
       <GlobalSearch />
-      <div className="app-header__user" style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, minHeight: 44 }}>
-        <span className="app-header__avatar" aria-hidden="true"
-              style={{ width: 30, height: 30, fontSize: 11, fontWeight: 800 }}>{initials}</span>
-        <span>
-          <strong style={{ color: 'var(--color-heading)', fontWeight: 700 }}>{user?.username || 'Użytkownik'}</strong>
-          {roleLabels && (
-            <span style={{ color: 'var(--color-text-muted)', fontWeight: 400 }}> · {roleLabels}</span>
-          )}
+      <div className="app-header__user">
+        <span className="app-header__avatar" aria-hidden="true">{avatar}</span>
+        <span className="app-header__who">
+          <strong>{user?.username || 'Użytkownik'}</strong>
+          {roleLabels && <span> · {roleLabels}</span>}
         </span>
       </div>
       {user?.auth_type === 'local' && (
-        <button type="button" className="szup-hdr-btn" onClick={() => setShowPw(true)} title="Zmień hasło">
+        <button type="button" className="szup-hdr-btn" onClick={() => setShowPw(true)}
+                title="Zmień hasło" aria-label="Zmień hasło">
           <KeyRound size={15} aria-hidden="true" />
-          Hasło
+          <span className="szup-hdr-btn__text">Hasło</span>
         </button>
       )}
-      <button type="button" className="szup-hdr-btn" onClick={handleLogout} title="Wyloguj">
+      <button type="button" className="szup-hdr-btn" onClick={handleLogout}
+              title="Wyloguj" aria-label="Wyloguj">
         <LogOut size={15} aria-hidden="true" />
-        Wyloguj
+        <span className="szup-hdr-btn__text">Wyloguj</span>
       </button>
 
       {showPw && <ChangePasswordModal onClose={() => setShowPw(false)} />}
-      {/* Style przycisków belki w klasie (nie inline), żeby działał :hover i :focus. */}
-      <style>{HEADER_CSS}</style>
     </header>
   )
 }
 
-const HEADER_CSS = `
-.szup-hdr-btn {
-  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 10px;
-  border: 0; border-radius: 6px; background: transparent; cursor: pointer;
-  font: 600 13px var(--font-base); color: var(--color-text-muted);
-  transition: background .15s, color .15s;
-}
-.szup-hdr-btn:hover, .szup-hdr-btn:focus-visible {
-  color: var(--color-heading); background: var(--color-table-head); outline: none;
-}
-.szup-hdr-btn:focus-visible { box-shadow: 0 0 0 2px var(--color-gold); }
-`
-
-const ROLE_MAP = {
-  superadmin: ['badge--error',   'superadmin'],
-  admin:      ['badge--warning', 'admin'],
-  it_staff:   ['badge--info',    'IT'],
-  manager:    ['badge--neutral', 'kierownik'],
-  hr:         ['badge--success', 'HR'],
-  viewer:     ['badge--neutral', 'przeglądający'],
-}
-
-function RoleBadges({ roles }) {
-  if (!roles?.length) return null
-  return (
-    <>
-      {roles.map(role => {
-        const entry = ROLE_MAP[role]
-        if (!entry) return null
-        const [cls, label] = entry
-        return (
-          <span key={role} className={`badge ${cls}`} style={{ fontSize: 10, marginLeft: 4 }}>
-            {label}
-          </span>
-        )
-      })}
-    </>
-  )
-}
 
 function ChangePasswordModal({ onClose, forced = false }) {
   const [current, setCurrent] = useState('')

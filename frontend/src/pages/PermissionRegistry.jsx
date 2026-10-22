@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   RefreshCw, Download, Search, X, FileText, PlayCircle,
 } from 'lucide-react'
@@ -6,9 +7,11 @@ import {
   listGrantedRegistry, grantedRegistryCsvUrl, getDeclaration,
   listActiveUnits, listSystems,
   listSnapshots, getSnapshot, snapshotCsvUrl, runSnapshot,
-} from '../api'
+ errorMessage} from '../api'
 import { fmtDate } from '../serverTime'
 import { toast } from '../components/ui/feedback'
+import Modal from '../components/ui/Modal'
+import { getUserRoles, hasAnyRole } from '../roles'
 
 /**
  * Rejestr uprawnień — dwie zakładki:
@@ -18,19 +21,13 @@ import { toast } from '../components/ui/feedback'
 export default function PermissionRegistry() {
   const [mode, setMode] = useState('current')
 
-  const isAdmin = (() => {
-    try {
-      const u = JSON.parse(localStorage.getItem('szup_user') || '{}')
-      const roles = Array.isArray(u.roles) ? u.roles : (u.role ? [u.role] : [])
-      return roles.includes('admin') || roles.includes('superadmin')
-    } catch { return false }
-  })()
+  const isAdmin = hasAnyRole(getUserRoles(), ['admin', 'superadmin'])
 
   return (
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Rejestr uprawnień</div>
+          <h1 className="page-header__title">Rejestr uprawnień</h1>
           <div className="page-header__sub">
             Nadane uprawnienia i historyczne migawki stanu — do audytu (NIS2 / KSC / RODO)
           </div>
@@ -60,35 +57,21 @@ export default function PermissionRegistry() {
 function DeclarationDetail({ detail, onClose }) {
   if (!detail) return null
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 760, width: '92vw' }}>
-        <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-heading)', padding: '12px 12px 12px 20px', gap: 12 }}>
-          <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
-            Oświadczenie — {detail.reference_code}
-          </h2>
-          <button type="button" onClick={onClose} aria-label="Zamknij" title="Zamknij"
-                  style={{ width: 44, height: 44, display: 'grid', placeItems: 'center', border: 0, borderRadius: 8,
-                           background: 'transparent', color: 'var(--color-text-muted)', cursor: 'pointer', flexShrink: 0 }}>
-            <X size={18} />
-          </button>
-        </div>
-        <div className="modal__body" style={{ maxHeight: '72vh', overflowY: 'auto' }}>
-          <div style={{ fontSize: 12.5, color: 'var(--color-text-muted)', marginBottom: 10 }}>
-            Pracownik: <strong style={{ color: 'var(--color-text)' }}>{detail.worker_name}</strong>{' · '}
-            Wniosek #{detail.request_id}{' · '}
-            Złożono: <strong style={{ color: 'var(--color-text)' }}>{detail.declared_by_name}</strong>,
-            {' '}{detail.declared_date}
-          </div>
-          <div style={{
-            fontSize: 12.5, lineHeight: 1.55, whiteSpace: 'pre-wrap',
-            border: '1px solid var(--color-border)', borderRadius: 6,
-            padding: '12px 14px', background: 'var(--bg-secondary)',
-          }}>
-            {detail.declaration_text}
-          </div>
-        </div>
+    <Modal title={`Oświadczenie — ${detail.reference_code}`} onClose={onClose} width={760}>
+      <div style={{ fontSize: 12.5, color: 'var(--color-text-muted)', marginBottom: 10 }}>
+        Pracownik: <strong style={{ color: 'var(--color-text)' }}>{detail.worker_name}</strong>{' · '}
+        Wniosek #{detail.request_id}{' · '}
+        Złożono: <strong style={{ color: 'var(--color-text)' }}>{detail.declared_by_name}</strong>,
+        {' '}{detail.declared_date}
       </div>
-    </div>
+      <div style={{
+        fontSize: 12.5, lineHeight: 1.55, whiteSpace: 'pre-wrap',
+        border: '1px solid var(--color-border)', borderRadius: 6,
+        padding: '12px 14px', background: 'var(--bg-secondary)',
+      }}>
+        {detail.declaration_text}
+      </div>
+    </Modal>
   )
 }
 
@@ -120,11 +103,21 @@ function CurrentRegistry() {
   }
 
   useEffect(() => {
-    listActiveUnits().then(r => setUnits(r.data)).catch(() => {})
-    listSystems().then(r => setSystems(r.data)).catch(() => {})
+    listActiveUnits().then(r => setUnits(r.data))
+      .catch(ex => toast(errorMessage(ex, 'Nie udało się wczytać listy jednostek'), { tone: 'error' }))
+    listSystems().then(r => setSystems(r.data))
+      .catch(ex => toast(errorMessage(ex, 'Nie udało się wczytać listy systemów'), { tone: 'error' }))
   }, [])
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load() }, [f.unit_id, f.system_id, f.only_with_declaration])
+
+  // Ponowne wyszukanie z wyszukiwarki globalnej na tej samej stronie (?q=…)
+  // zmienia filtr i odświeża listę.
+  const [searchParams] = useSearchParams()
+  const urlQ = searchParams.get('q') || ''
+  useEffect(() => {
+    if (urlQ && urlQ !== f.q) setF(prev => ({ ...prev, q: urlQ }))
+  }, [urlQ])
+  useEffect(() => { if (urlQ && f.q === urlQ) load() }, [f.q === urlQ ? urlQ : null])
 
   const hasFilter = f.unit_id || f.system_id || f.q.trim() || f.only_with_declaration
 
@@ -212,7 +205,8 @@ function CurrentRegistry() {
                     {r.reference_code ? (
                       <button className="btn btn--ghost btn--sm" style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
                               title="Podgląd oświadczenia"
-                              onClick={() => getDeclaration(r.reference_code).then(x => setDetail(x.data)).catch(() => {})}>
+                              onClick={() => getDeclaration(r.reference_code).then(x => setDetail(x.data))
+                                .catch(ex => toast(errorMessage(ex, 'Nie udało się wczytać oświadczenia'), { tone: 'error' }))}>
                         <FileText size={11} /> {r.reference_code}
                       </button>
                     ) : '—'}
@@ -248,14 +242,14 @@ function SnapshotsRegistry({ isAdmin }) {
     } finally { setLoading(false) }
   }
 
-  useEffect(() => { loadList(true) }, [])   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadList(true) }, [])
 
   async function loadSnap(d, query = '') {
     if (!d) { setSnap(null); return }
     const r = await getSnapshot(d, query.trim() ? { q: query.trim() } : {})
     setSnap(r.data)
   }
-  useEffect(() => { loadSnap(date, q) }, [date])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadSnap(date, q) }, [date])
 
   async function generateNow() {
     setBusy(true)
@@ -264,7 +258,7 @@ function SnapshotsRegistry({ isAdmin }) {
       await loadList()
       setDate(r.data.snapshot_date)
     } catch (ex) {
-      toast(ex.response?.data?.detail || 'Nie udało się wygenerować migawki', { tone: 'error' })
+      toast(errorMessage(ex, 'Nie udało się wygenerować migawki'), { tone: 'error' })
     } finally { setBusy(false) }
   }
 

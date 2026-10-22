@@ -5,19 +5,13 @@ import {
 import {
   listVendors, createVendor, updateVendor, deleteVendor,
   listContracts, addContract, deleteContract,
-} from '../api'
+ errorMessage} from '../api'
 import { fmtDate } from '../serverTime'
-import { toast, confirmDialog } from '../components/ui/feedback'
+import { toast, ask } from '../components/ui/feedback'
 
-// Potwierdzenie w oknie aplikacji (zamiast systemowego confirm). Operacje
-// usuwające / odbierające / nieodwracalne oznaczamy na czerwono.
-const ask = (message) => {
-  const danger = /usun|odebra|wygas|ostrze|nieodwracal/i.test(message)
-  return confirmDialog({
-    title: danger ? 'Potwierdź operację' : 'Potwierdź',
-    message, danger, confirmLabel: danger ? 'Tak, wykonaj' : 'Potwierdź',
-  })
-}
+// Okno dialogowe dostaje fokus po otwarciu (Escape i czytniki ekranu działają od razu).
+const focusDialog = el => { if (el && !el.contains(document.activeElement)) el.focus() }
+
 
 /**
  * Słownik dostawców oprogramowania.
@@ -55,7 +49,7 @@ export default function Vendors() {
       const r = await listVendors()
       setVendors(r.data)
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się pobrać listy dostawców')
+      setErr(errorMessage(ex, 'Nie udało się pobrać listy dostawców'))
     } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
@@ -66,7 +60,7 @@ export default function Vendors() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Dostawcy i umowy</div>
+          <h1 className="page-header__title">Dostawcy i umowy</h1>
           <div className="page-header__sub">
             Producenci, dane kontaktowe i umowy serwisowe
           </div>
@@ -160,7 +154,7 @@ function VendorForm({ vendor, onCancel, onSaved }) {
       toast(vendor ? `Zapisano zmiany: ${payload.name}` : `Dodano dostawcę: ${payload.name}`)
       onSaved()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Błąd zapisu')
+      setErr(errorMessage(ex, 'Błąd zapisu'))
     } finally { setSaving(false) }
   }
 
@@ -223,9 +217,9 @@ function VendorRow({ vendor: v, onReload }) {
   const [contractsOpen, setContractsOpen] = useState(false)
 
   async function del() {
-    if (!await ask(`Usunąć dostawcę „${v.name}"? Jego umowy serwisowe też zostaną usunięte.`)) return
+    if (!await ask(`Usunąć dostawcę „${v.name}"? Jego umowy serwisowe też zostaną usunięte.`, { title: 'Potwierdź operację', confirmLabel: 'Usuń dostawcę', danger: true })) return
     try { await deleteVendor(v.id); onReload(); toast(`Usunięto dostawcę „${v.name}”`) }
-    catch (ex) { toast(ex.response?.data?.detail || 'Nie można usunąć', { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Nie można usunąć'), { tone: 'error' }) }
   }
 
   const addr = [v.address, [v.postal_code, v.city].filter(Boolean).join(' ')]
@@ -329,7 +323,7 @@ function ContractsModal({ vendor, onClose, onChanged }) {
       const r = await listContracts(vendor.id)
       setRows(r.data)
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się pobrać umów')
+      setErr(errorMessage(ex, 'Nie udało się pobrać umów'))
     } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [vendor.id])
@@ -347,19 +341,20 @@ function ContractsModal({ vendor, onClose, onChanged }) {
       setForm({ contract_number: '', valid_from: '', valid_to: '', description: '' })
       await load(); onChanged?.()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się dodać umowy')
+      setErr(errorMessage(ex, 'Nie udało się dodać umowy'))
     } finally { setBusy(false) }
   }
 
   async function onDelete(row) {
-    if (!await ask('Usunąć tę umowę serwisową?')) return
+    if (!await ask('Usunąć tę umowę serwisową?', { title: 'Potwierdź operację', confirmLabel: 'Usuń umowę', danger: true })) return
     try { await deleteContract(row.id); await load(); onChanged?.(); toast('Usunięto umowę serwisową') }
-    catch (ex) { toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Błąd'), { tone: 'error' }) }
   }
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" style={{ maxWidth: 820 }}>
+    <div className="modal-overlay" role="presentation" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Umowy serwisowe" tabIndex={-1} ref={focusDialog}
+           onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }} style={{ maxWidth: 820 }}>
         <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-heading)', padding: '12px 12px 12px 20px', gap: 12 }}>
           <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
             Umowy serwisowe — {vendor.name}
@@ -386,20 +381,20 @@ function ContractsModal({ vendor, onClose, onChanged }) {
             }}>
               <div>
                 <label className="form-label" style={{ fontSize: 11 }}>Numer umowy</label>
-                <input className="form-control" style={{ fontSize: 13 }}
+                <input aria-label="Numer umowy" className="form-control" style={{ fontSize: 13 }}
                        value={form.contract_number}
                        onChange={e => set('contract_number', e.target.value)}
                        placeholder="np. UM/2026/14" />
               </div>
               <div>
                 <label className="form-label" style={{ fontSize: 11 }}>Od</label>
-                <input className="form-control" type="date" style={{ fontSize: 13 }}
+                <input aria-label="Od" className="form-control" type="date" style={{ fontSize: 13 }}
                        value={form.valid_from}
                        onChange={e => set('valid_from', e.target.value)} />
               </div>
               <div>
                 <label className="form-label" style={{ fontSize: 11 }}>Do *</label>
-                <input className="form-control" type="date" style={{ fontSize: 13 }}
+                <input aria-label="Do" className="form-control" type="date" style={{ fontSize: 13 }}
                        value={form.valid_to}
                        onChange={e => set('valid_to', e.target.value)} />
               </div>
@@ -420,6 +415,7 @@ function ContractsModal({ vendor, onClose, onChanged }) {
             </div>
           </div>
 
+          <div style={{ overflowX: 'auto' }}>
           <table className="data-table" style={{ fontSize: 14, border: '1px solid var(--color-border)' }}>
             <thead>
               <tr>
@@ -436,6 +432,7 @@ function ContractsModal({ vendor, onClose, onChanged }) {
               ) : rows.map(c => <ContractRow key={c.id} c={c} onDelete={onDelete} />)}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     </div>

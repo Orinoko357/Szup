@@ -1,6 +1,9 @@
 import { useState } from 'react'
-import { Upload, X, Check, ClipboardPaste, FileSpreadsheet, AlertTriangle } from 'lucide-react'
-import { previewPermissionImport, commitPermissionImport } from '../api'
+import { Upload, X, Check, ClipboardPaste, AlertTriangle } from 'lucide-react'
+import { previewPermissionImport, commitPermissionImport , errorMessage} from '../api'
+
+// Okno dialogowe dostaje fokus po otwarciu (Escape i czytniki ekranu działają od razu).
+const focusDialog = el => { if (el && !el.contains(document.activeElement)) el.focus() }
 
 /**
  * Import listy uprawnień dla oprogramowania — z pliku (CSV / TSV / Excel / PDF)
@@ -69,7 +72,7 @@ export default function PermissionImportModal({ system, onClose, onDone }) {
       })))
       return true
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się odczytać pliku')
+      setErr(errorMessage(ex, 'Nie udało się odczytać pliku'))
       return false
     } finally {
       setBusy(false)
@@ -115,7 +118,7 @@ export default function PermissionImportModal({ system, onClose, onDone }) {
       setResult(r.data)
       setStep(4)
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się zapisać uprawnień')
+      setErr(errorMessage(ex, 'Nie udało się zapisać uprawnień'))
     } finally {
       setBusy(false)
     }
@@ -127,8 +130,9 @@ export default function PermissionImportModal({ system, onClose, onDone }) {
     0, existingInGroup - items.filter(i => i.use && i.status !== 'new').length)
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 900, width: '92vw' }}>
+    <div className="modal-overlay" role="presentation" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Import uprawnień" tabIndex={-1} ref={focusDialog}
+           onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }} style={{ maxWidth: 900, width: '92vw' }}>
         <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-heading)', padding: '12px 12px 12px 20px', gap: 12 }}>
           <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
             Import uprawnień — {system.name}
@@ -147,7 +151,7 @@ export default function PermissionImportModal({ system, onClose, onDone }) {
             <>
               <div className="form-group">
                 <label className="form-label">Plik z listą uprawnień</label>
-                <input type="file" className="form-control"
+                <input aria-label="Plik z listą uprawnień" type="file" className="form-control"
                        accept=".csv,.txt,.tsv,.xls,.xlsx,.xlsm,.pdf"
                        onChange={e => { setFile(e.target.files?.[0] || null); setPasted('') }} />
                 <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
@@ -180,7 +184,7 @@ export default function PermissionImportModal({ system, onClose, onDone }) {
             <>
               <div className="form-group">
                 <label className="form-label">Nazwa grupy uprawnień</label>
-                <input className="form-control" style={{ maxWidth: 460 }}
+                <input aria-label="Nazwa grupy uprawnień" className="form-control" style={{ maxWidth: 460 }}
                        value={group} onChange={e => setGroup(e.target.value)}
                        placeholder="np. Rejestry opłat" />
                 <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
@@ -193,6 +197,7 @@ export default function PermissionImportModal({ system, onClose, onDone }) {
               </div>
 
               <div className="form-label" style={{ marginTop: 12 }}>Kolumny</div>
+              <div style={{ overflowX: 'auto' }}>
               <table className="data-table" style={{ marginBottom: 12 }}>
                 <thead>
                   <tr>
@@ -221,6 +226,7 @@ export default function PermissionImportModal({ system, onClose, onDone }) {
                   ))}
                 </tbody>
               </table>
+              </div>
 
               <div className="alert alert--info" style={{ fontSize: 12 }}>
                 Podgląd złożonych nazw:
@@ -257,6 +263,7 @@ export default function PermissionImportModal({ system, onClose, onDone }) {
                 </button>
               </div>
 
+              <div style={{ overflowX: 'auto' }}>
               <table className="data-table">
                 <thead>
                   <tr>
@@ -300,6 +307,7 @@ export default function PermissionImportModal({ system, onClose, onDone }) {
                   ))}
                 </tbody>
               </table>
+              </div>
 
               <label style={{
                 display: 'flex', alignItems: 'center', gap: 8,

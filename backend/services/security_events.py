@@ -43,10 +43,4 @@ def emit(
         _log.warning("SecurityEvent emit failed (%s): %s", event_type, exc)
 
 
-def emit_standalone(**kwargs) -> None:
-    from database import engine as db_engine
-    try:
-        with Session(db_engine) as s:
-            emit(s, commit=True, **kwargs)
-    except Exception as exc:
-        _log.warning("SecurityEvent standalone emit failed: %s", exc)
+

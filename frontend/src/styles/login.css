@@ -132,7 +132,7 @@
 }
 .wl-classic.is-open { max-height: 640px; opacity: 1; }
 .wl-classic--static { max-height: none; opacity: 1; overflow: visible; }
-.wl-classic form, .wl-form { display: flex; flex-direction: column; gap: 14px; }
+.wl-classic form { display: flex; flex-direction: column; gap: 14px; }
 
 /* Pola */
 .wl-field { display: flex; flex-direction: column; gap: 6px; }

@@ -24,7 +24,7 @@ from services.auth_service import hash_password, validate_password_strength
 from services.auth_service import get_current_user
 from services.permissions import (
     require_admin, require_manager, managed_dept_ids, hr_scoped_unit_ids,
-    users_with_role, unit_manager_dept_ids,
+    users_with_role, unit_manager_dept_ids, manager_scope_ids,
 )
 
 router = APIRouter()
@@ -320,10 +320,12 @@ def user_permissions(
     if not target:
         raise HTTPException(404, "Pracownik nie istnieje")
     if current_user.id != user_id and not has_role(current_user, "superadmin", "admin"):
-        direct_ids, escalated_ids = managed_dept_ids(session, current_user)
-        # Kierownik CAŁEJ jednostki widzi uprawnienia każdego pracownika swojej jednostki.
-        unit_ids = unit_manager_dept_ids(session, current_user)
-        if target.department_id not in {*direct_ids, *escalated_ids, *unit_ids}:
+        # Zakres kierownika + przełożonego (poddrzewo, cała jednostka dyrektora) —
+        # spójnie z zakresem wniosków; inaczej przełożony nie dokończy wyboru
+        # uprawnień dla pracownika podległej komórki (403).
+        scope = manager_scope_ids(session, current_user)
+        scope.update(unit_manager_dept_ids(session, current_user))
+        if target.department_id not in scope:
             raise HTTPException(status.HTTP_403_FORBIDDEN,
                 "Brak dostępu do uprawnień tego pracownika")
     return _effective_permissions(session, user_id)
@@ -372,8 +374,7 @@ def users_by_department(
         allowed = False
         # Ścieżka kierownika — zakres wydziałów.
         if has_role(current_user, "manager"):
-            direct_ids, escalated_ids = managed_dept_ids(session, current_user)
-            if department_id in {*direct_ids, *escalated_ids}:
+            if department_id in manager_scope_ids(session, current_user):
                 allowed = True
         # Ścieżka HR (rola lub komórka kadrowa) — zakres jednostek (unit).
         if not allowed and hr_cap:
@@ -407,8 +408,7 @@ def users_by_department(
     # zarządza (bezpieczeństwo); HR (zakres po jednostce) i superadmin — całe poddrzewo.
     if not has_role(current_user, "superadmin") and has_role(current_user, "manager") \
             and not hr_cap:
-        direct_ids, escalated_ids = managed_dept_ids(session, current_user)
-        managed = {*direct_ids, *escalated_ids}
+        managed = manager_scope_ids(session, current_user)
         subtree_ids = [d for d in subtree_ids if d in managed]
 
     dept_by_id = {d.id: d for d in all_depts}
@@ -460,8 +460,7 @@ def users_search(
     allowed_unit_ids = None
     if not has_role(current_user, "superadmin"):
         if has_role(current_user, "manager") and not hr_cap:
-            direct_ids, escalated_ids = managed_dept_ids(session, current_user)
-            allowed_dept_ids = {*direct_ids, *escalated_ids}
+            allowed_dept_ids = manager_scope_ids(session, current_user)
         else:
             allowed_unit_ids = hr_scoped_unit_ids(session, current_user)  # None = wszystkie
 

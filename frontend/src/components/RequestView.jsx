@@ -13,8 +13,8 @@ import { useEffect, useState } from 'react'
 import { Check } from 'lucide-react'
 import { getRequestWorkflow } from '../api'
 import { getUserRoles } from '../roles'
-import { serverTs } from '../serverTime'
-import { daysSince, waitText } from '../labels'
+import { serverTs, fmtDateTimeShort } from '../serverTime'
+import { daysSince, waitText, kindLabel as kindLabelOf, nodeLabel, statusLabel } from '../labels'
 
 /** v3.1 — perspektywa dla osób z kilkoma rolami: „jako kierownik” / „jako IT”…
  *  Zwraca null, gdy użytkownik pełni tylko jedną funkcję operacyjną. */
@@ -47,17 +47,11 @@ const NODE_WHO = {
   higher_manager_approve: 'Kierownik nadrzędny', it_execute: 'IT',
 }
 
-function fmtDT(iso) {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return isNaN(d) ? '' : d.toLocaleString('pl-PL', {
-    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
-}
-
+// Kolory odznaki rodzaju — tokeny motywu (działają w trybie ciemnym).
 const KIND_TONE = {
-  grant:  { bg: '#FEF3DC', fg: '#8A6D1B', bd: '#E6C34D' },   // zatrudnienie
-  revoke: { bg: '#FBE4E2', fg: '#9A3227', bd: '#E7A79F' },   // odejście
-  change: { bg: '#E6EEF9', fg: '#2B5591', bd: '#B9CDE8' },   // zmiana
+  grant:  { bg: 'var(--color-warning-bg)', fg: 'var(--color-gold-dark)',   bd: 'var(--color-gold)' },    // zatrudnienie
+  revoke: { bg: 'var(--color-error-bg)',   fg: 'var(--color-error-text)',  bd: 'var(--color-error)' },   // odejście
+  change: { bg: 'var(--color-info-bg)',    fg: 'var(--color-info-text)',   bd: 'var(--color-info)' },    // zmiana
 }
 
 export function KindBadge({ kind = 'grant', label }) {
@@ -67,8 +61,14 @@ export function KindBadge({ kind = 'grant', label }) {
       display: 'inline-block', padding: '2px 8px', borderRadius: 4,
       background: t.bg, color: t.fg, border: `1px solid ${t.bd}`,
       fontSize: 10, fontWeight: 800, letterSpacing: '.07em', textTransform: 'uppercase',
-    }}>{label}</span>
+    }}>{label || kindLabelOf(kind)}</span>
   )
+}
+
+/** Odznaka rodzaju wniosku w listach (nieznany rodzaj → zatrudnienie). */
+export function KindPill({ kind }) {
+  const k = ['revoke', 'change'].includes(kind) ? kind : 'grant'
+  return <KindBadge kind={k} label={kindLabelOf(kind)} />
 }
 
 /** Pełna nazwa komórki: „KOD · opis z AD” (np. „INF · Biuro Informatyki”);
@@ -136,8 +136,8 @@ function StepItem({ step }) {
   const isDone = state === 'done'
   const isSkipped = state === 'skipped'
   // v3.0: zakończone kroki z delikatnym zielonym tłem (wg projektu).
-  const bg = isCurrent ? '#FEF6E3' : isDone ? 'var(--color-success-bg)' : 'var(--color-card)'
-  const bd = isCurrent ? '#E6C34D' : isDone ? '#CFE3D0'
+  const bg = isCurrent ? 'var(--color-warning-bg)' : isDone ? 'var(--color-success-bg)' : 'var(--color-card)'
+  const bd = isCurrent ? 'var(--color-gold)' : isDone ? 'var(--color-border)'
     : isSkipped ? 'var(--color-border-strong, var(--color-border))' : 'var(--color-border)'
   return (
     <li style={{
@@ -148,8 +148,8 @@ function StepItem({ step }) {
       <span style={{
         flexShrink: 0, width: 22, height: 22, borderRadius: '50%',
         display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 800, boxSizing: 'border-box',
-        background: isDone ? 'var(--color-success)' : isCurrent ? 'var(--color-navy)' : 'transparent',
-        color: (isDone || isCurrent) ? '#fff' : 'var(--color-text-muted)',
+        background: isDone ? 'var(--color-success)' : isCurrent ? 'var(--color-heading)' : 'transparent',
+        color: isDone ? '#fff' : isCurrent ? 'var(--color-card)' : 'var(--color-text-muted)',
         border: (isDone || isCurrent) ? 'none' : '1.5px solid var(--color-border-strong, var(--color-border))',
       }}>
         {isDone ? <Check size={13} /> : isSkipped ? '–' : n}
@@ -157,7 +157,7 @@ function StepItem({ step }) {
       <div style={{ lineHeight: 1.25, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 700,
                       textDecoration: isSkipped ? 'line-through' : 'none',
-                      color: isSkipped ? 'var(--color-text-muted)' : isCurrent ? 'var(--color-navy)' : 'var(--color-text)' }}>
+                      color: isSkipped ? 'var(--color-text-muted)' : isCurrent ? 'var(--color-heading)' : 'var(--color-text)' }}>
           {label}
         </div>
         <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>{caption}</div>
@@ -212,8 +212,8 @@ export function buildWorkflowSteps({ sent, nodeType, status, requiresHigher, kin
     { n: 1, label: 'Zgłoszenie',       caption: 'Kadry / HR',             state: st(1) },
     { n: 2, label: step2Label,         caption: 'Kierownik komórki',      state: st(2) },
     { n: 3, label: 'Akceptacja wyższa', caption: requiresHigher ? 'Kierownik nadrzędny' : 'Pominięta',  state: st(3) },
-    { n: 4, label: 'Realizacja',       caption: 'Biuro Informatyki',      state: st(4) },
-    { n: 5, label: 'Zakończony',       caption: 'Powiadomienie HR',       state: st(5) },
+    { n: 4, label: nodeLabel('it_execute'), caption: 'Biuro Informatyki',  state: st(4) },
+    { n: 5, label: statusLabel('completed'), caption: 'Powiadomienie HR',  state: st(5) },
   ]
 }
 
@@ -256,7 +256,7 @@ function HistoryBox({ items = [], requestId, createdBy }) {
   let rows = items
   if (requestId && steps) {
     rows = steps.map(s => {
-      const sub = fmtDT(s.created_at)
+      const sub = fmtDateTimeShort(s.created_at)
       // Kroki systemowe silnika obiegu — opisane po ludzku, bez surowych nazw akcji.
       if (s.action === 'auto_advance' && s.node_type === 'start') {
         return { text: `${createdBy || 'Kadry / HR'} złożył(a) wniosek`, sub }

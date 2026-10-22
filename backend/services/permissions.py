@@ -150,11 +150,13 @@ def managed_unit_ids(session, user: "User") -> list[int]:
 
 
 def unit_manager_dept_ids(session, user: "User") -> list[int]:
-    """Wszystkie komórki jednostek, których user jest kierownikiem — do PODGLĄDU
-    uprawnień i WNIOSKOWANIA za pracowników (NIE do akceptacji/realizacji).
+    """Wszystkie komórki jednostek, których user jest kierownikiem (dyrektor
+    jednostki) — podgląd uprawnień i wnioskowanie za pracowników.
 
-    Świadomie osobno od `managed_dept_ids`: kierownik jednostki nie staje się
-    kierownikiem komórek w obiegu — akceptują nadal kierownicy komórek.
+    Osobno od `managed_dept_ids` (nie czyni go kierownikiem komórek), ale wg
+    reguły „przełożonego” (`is_superior_for` / `superior_dept_ids`) dyrektor
+    jednostki może też wykonać każdy krok kierowniczy w obiegu — np. dokończyć
+    wniosek, który utknął u kierownika komórki.
     """
     uids = managed_unit_ids(session, user)
     if not uids:
@@ -194,6 +196,37 @@ def superior_dept_ids(session, user: "User") -> list[int]:
             out.add(cur)
             stack.extend(children.get(cur, []))
     return sorted(out)
+
+
+def _cached(session, key: str, fn):
+    """Cache wyniku w obrębie jednej sesji (= jednego żądania HTTP)."""
+    info = getattr(session, "info", None)
+    if info is None:
+        return fn()
+    store = info.setdefault("_perm_cache", {})
+    if key not in store:
+        store[key] = fn()
+    return store[key]
+
+
+def manager_scope(session, user: "User") -> tuple[list[int], list[int]]:
+    """Pełny zakres kierownika: (direct_ids, escalated_ids ∪ komórki przełożonego).
+
+    Komórki, w których user jest PRZEŁOŻONYM (poddrzewo swoich komórek i komórki
+    jednostki, którą kieruje), dokładamy do drugiej listy — przełożony widzi
+    i może dokończyć każdy wniosek z podległych komórek. Wynik cache'owany
+    na czas żądania (wywołuje go m.in. każdy _check_access)."""
+    def compute():
+        direct_ids, escalated_ids = managed_dept_ids(session, user)
+        extra = set(superior_dept_ids(session, user)) - set(direct_ids)
+        return list(direct_ids), sorted(set(escalated_ids) | extra)
+    return _cached(session, f"scope:{user.id}", compute)
+
+
+def manager_scope_ids(session, user: "User") -> set[int]:
+    """Zbiór wszystkich komórek z zakresu kierownika/przełożonego (do filtrów)."""
+    d, e = manager_scope(session, user)
+    return {*d, *e}
 
 
 def is_superior_for(session, user: "User", dept, *, include_self: bool = True) -> bool:

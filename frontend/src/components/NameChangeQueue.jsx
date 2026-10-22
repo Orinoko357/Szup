@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { RefreshCw, UserPen, X } from 'lucide-react'
-import { listNameChanges, resolveNameChange } from '../api'
+import { listNameChanges, resolveNameChange, errorMessage } from '../api'
 import { fmtDate } from '../serverTime'
 import { NAME_CHANGE_STATUS } from '../labels'
 import { toast } from './ui/feedback'
+import Segmented from './ui/Segmented'
 
 // Wspólny słownik statusów zmian nazwiska (labels.js).
 const STATUS = Object.fromEntries(Object.entries(NAME_CHANGE_STATUS).map(([k, v]) => [k, [v.badge, v.label]]))
@@ -18,6 +19,7 @@ export default function NameChangeQueue({ onChanged } = {}) {
   async function load() {
     setLoading(true)
     try { setRows((await listNameChanges(filter === 'all' ? '' : filter)).data) }
+    catch (ex) { setRows([]); toast(errorMessage(ex, 'Nie udało się pobrać zgłoszeń'), { tone: 'error' }) }
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [filter])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -25,19 +27,8 @@ export default function NameChangeQueue({ onChanged } = {}) {
   return (
     <>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-        {/* Filtr jako przełącznik segmentowy (wg projektu). */}
-        <div role="group" aria-label="Filtr" style={{ display: 'inline-flex', padding: 3, gap: 2, borderRadius: 8,
-                                                      background: 'var(--color-neutral-bg)' }}>
-          {[['pending', 'Oczekujące'], ['all', 'Wszystkie']].map(([v, l]) => (
-            <button key={v} type="button" aria-pressed={filter === v} onClick={() => setFilter(v)}
-                    style={{
-                      minHeight: 36, padding: '0 14px', border: 0, borderRadius: 6, cursor: 'pointer',
-                      font: 'inherit', fontSize: 13, fontWeight: filter === v ? 700 : 600,
-                      background: filter === v ? 'var(--color-card)' : 'transparent',
-                      color: filter === v ? 'var(--color-heading)' : 'var(--color-text-muted)',
-                    }}>{l}</button>
-          ))}
-        </div>
+        <Segmented ariaLabel="Filtr zgłoszeń" value={filter} onChange={setFilter}
+                   options={[{ value: 'pending', label: 'Oczekujące' }, { value: 'all', label: 'Wszystkie' }]} />
         <button className="btn btn--ghost btn--sm" style={{ marginLeft: 'auto' }}
                 onClick={load} disabled={loading}>
           <RefreshCw size={14} /> Odśwież
@@ -123,7 +114,7 @@ function ResolveModal({ req, onClose, onDone }) {
         : `Odrzucono zgłoszenie zmiany nazwiska (${req.username}).`)
       onDone()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Błąd operacji'); setBusy(false)
+      setErr(errorMessage(ex, 'Nie udało się rozpatrzyć zgłoszenia')); setBusy(false)
     }
   }
 
@@ -161,7 +152,7 @@ function ResolveModal({ req, onClose, onDone }) {
 
           <label style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 44, fontSize: 14, cursor: 'pointer' }}>
             <input type="checkbox" checked={changeLogin} onChange={e => setChangeLogin(e.target.checked)}
-                   style={{ width: 18, height: 18, margin: 0, accentColor: 'var(--color-navy)' }} />
+                   style={{ width: 18, height: 18, margin: 0, accentColor: 'var(--color-heading)' }} />
             Zmień też login użytkownika (opcjonalnie)
           </label>
           {changeLogin && (

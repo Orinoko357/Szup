@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { RefreshCw, CheckCircle } from 'lucide-react'
-import { workflowDashboard, vendorContractAlerts, securityEventsSummary } from '../api'
+import { workflowDashboard, vendorContractAlerts, securityEventsSummary, errorMessage } from '../api'
 import { serverNow, serverTs, fmtDateTime } from '../serverTime'
 import { deptFull } from '../components/RequestView'
 import { getUserRoles, hasAnyRole } from '../roles'
-import { nodeLabel, daysSince, waitText } from '../labels'
+import { nodeLabel, daysSince, waitText, NODE_TONE, SEVERITY_LABEL } from '../labels'
 import AdminChecklist from '../components/AdminChecklist'
 
 /**
@@ -17,13 +17,6 @@ import AdminChecklist from '../components/AdminChecklist'
  * Bez skrótów do stron z paska bocznego (nic się nie dubluje z nawigacją).
  * Dane: GET /api/requests/dashboard (+ istniejące endpointy alertów).
  */
-const NODE_TONE = {
-  select_permissions:     'badge--warning',
-  manager_approve:        'badge--warning',
-  higher_manager_approve: 'badge--warning',
-  it_execute:             'badge--info',
-}
-
 // „Czeka” = czas na BIEŻĄCYM etapie (step_since), awaryjnie od złożenia wniosku.
 function waitsLabel(p) {
   const d = serverTs(p.step_since || p.created_at)
@@ -67,7 +60,7 @@ export default function Dashboard() {
       setContracts(c?.data || null)
       setSecurity(s?.data || null)
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się załadować pulpitu')
+      setErr(errorMessage(ex, 'Nie udało się załadować pulpitu'))
     } finally {
       setLoading(false)
     }
@@ -92,7 +85,9 @@ export default function Dashboard() {
       out.push({
         tone: serious > 0 ? 'err' : 'warn', to: '/security', link: 'Bezpieczeństwo',
         title: `Otwarte zdarzenia bezpieczeństwa: ${security.open_total}`,
-        text: serious > 0 ? `w tym istotności high/critical: ${serious}` : 'do przejrzenia',
+        text: serious > 0
+          ? `w tym o istotności ${SEVERITY_LABEL.high}/${SEVERITY_LABEL.critical}: ${serious}`
+          : 'do przejrzenia',
       })
     }
     return out
@@ -119,13 +114,22 @@ export default function Dashboard() {
   }, [data, filter])
 
   const totalWaiting = (data?.pending_approvals_count || 0) + (data?.pending_names_count || 0)
+  // Backend zwraca najwyżej 50 najdłużej czekających — gdy spraw jest więcej,
+  // mówimy o tym wprost i odsyłamy do pełnej listy.
+  const serverShown = data?.pending_approvals_list?.length || 0
+  const truncated = (data?.pending_approvals_count || 0) > serverShown
+  const activeTile = tiles.find(t => t.id === filter)
+  const tileHidden = activeTile && filter !== 'names' && (activeTile.count || 0) > list.length
+  const fullTab = filter === 'execute' ? 'it'
+    : (filter === 'prepare' || filter === 'approve') ? 'handle'
+    : (data?.show_execute && !data?.show_prepare ? 'it' : 'handle')
   const hasQueue = tiles.length > 0
 
   return (
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Pulpit</div>
+          <h1 className="page-header__title">Pulpit</h1>
           <div className="page-header__sub">Sprawy czekające na Twoje działanie</div>
         </div>
         <button className="btn btn--ghost" style={{ minHeight: 44, fontSize: 14, background: 'var(--color-card)' }}
@@ -274,7 +278,15 @@ export default function Dashboard() {
             </div>
           )}
           <div style={{ padding: '10px 18px 14px', fontSize: 12, color: 'var(--color-text-muted)' }}>
-            Najdłużej czekające najpierw · pełne listy w „Wnioskach”.
+            {(truncated || tileHidden) ? (
+              <>
+                Pokazano {list.length} z {activeTile && filter !== 'names' ? activeTile.count : data.pending_approvals_count}
+                {' '}(najdłużej czekające) — pełna lista w{' '}
+                <Link to={`/requests?tab=${fullTab}`} style={{ color: 'var(--color-gold-dark)', fontWeight: 700 }}>
+                  „Wnioskach”
+                </Link>.
+              </>
+            ) : 'Najdłużej czekające najpierw · pełne listy w „Wnioskach”.'}
           </div>
         </section>
       )}

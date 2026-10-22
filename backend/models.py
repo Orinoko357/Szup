@@ -327,7 +327,7 @@ class AccessRequest(SQLModel, table=True):
     work_until: Optional[date] = None
     # Dowiązanie do konta pracownika (opcjonalne — zachowujemy kompatybilność
     # z istniejącymi rekordami HR, gdzie pracownik jest tylko wpisem tekstowym).
-    # Używane do agregacji uprawnień w widoku „Moja struktura".
+    # Używane do agregacji uprawnień w zakładce „Struktura” (Moi pracownicy).
     worker_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
 
     unit_id: int = Field(foreign_key="unit.id")

@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
+import Segmented from '../components/ui/Segmented'
 import { RefreshCw, Check, X, ListChecks, Search } from 'lucide-react'
-import { listRequests, workflowAction, listSystems, listPermissions, userPermissions, denyRequestItem } from '../api'
+import {
+  listRequests, getRequest, workflowAction, listSystems, listPermissions, userPermissions, denyRequestItem,
+  errorMessage,
+} from '../api'
 import { fmtDate, serverTs } from '../serverTime'
 import RequestViewShell, {
-  buildWorkflowSteps, Section, WorkerCard, deptFull, KindBadge, perspectiveLabel, waitingText,
+  buildWorkflowSteps, Section, WorkerCard, deptFull, KindBadge, KindPill, perspectiveLabel, waitingText,
 } from '../components/RequestView'
 import { statusLabel, statusBadge, nodeLabel, kindLabel, daysSince, waitText } from '../labels'
 import { toast, confirmDialog } from '../components/ui/feedback'
-import { ReviewDialog, describeKeys } from '../components/ChangeSummary'
+import { ReviewDialog, describeKeys, diffSelection } from '../components/ChangeSummary'
 import CopyFromColleague, { buildCopiedSelection } from '../components/CopyFromColleague'
 import DeclarationModal from '../components/DeclarationModal'
 import PermissionChanges, {
@@ -21,8 +25,6 @@ import PermInput, {
 } from '../components/ItemFields'
 
 const MANAGER_NODES = ['select_permissions', 'manager_approve', 'higher_manager_approve']
-// Odznaka rodzaju wniosku (zatrudnienie / odejście / zmiana) — wspólny słownik.
-const kindPill = (k) => <KindBadge kind={['revoke', 'change'].includes(k) ? k : 'grant'} label={kindLabel(k)} />
 
 // Postęp realizacji pozycji NADANIA — do pokazania w „Moich wnioskach".
 function grantProgressOf(r) {
@@ -49,8 +51,10 @@ export default function Manager({ view, openId, onOpenConsumed, onViewChange, on
     if (!silent) setLoading(true)
     setErr(null)
     try {
+      // „Do obsługi” — tylko wnioski w toku (active): bez tego przy dużej historii
+      // limit listy ucinał najstarsze oczekujące, które pokazuje pulpit.
       const [rMgr, rMine] = await Promise.all([
-        listRequests({ scope: 'manager' }),
+        listRequests({ scope: 'manager', active: true }),
         listRequests({ scope: 'mine' }),
       ])
       setManagerReqs(rMgr.data || [])
@@ -63,11 +67,15 @@ export default function Manager({ view, openId, onOpenConsumed, onViewChange, on
         openedRef.current = true
         const hit = all.find(x => x.id === Number(openId))
         if (hit) setOpenReq(hit)
-        else toast(`Wniosek #${openId} nie jest dostępny w Twoim zakresie albo został już obsłużony.`, { tone: 'info' })
+        else {
+          // Spoza załadowanych list (np. zakończony) — dociągnij pojedynczo (podgląd).
+          try { setOpenReq((await getRequest(openId)).data) }
+          catch { toast(`Wniosek #${openId} nie jest dostępny w Twoim zakresie albo został już obsłużony.`, { tone: 'info' }) }
+        }
         onOpenConsumed?.()
       }
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Błąd ładowania')
+      setErr(errorMessage(ex, 'Nie udało się pobrać wniosków'))
     } finally {
       if (!silent) setLoading(false)
     }
@@ -137,7 +145,7 @@ function HandleTable({ rows, onOpen }) {
             <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
             <td>
               <div style={{ fontWeight: 700 }}>{r.worker_name}</div>
-              {kindPill(r.kind)}
+              <KindPill kind={r.kind} />
             </td>
             <td style={{ color: 'var(--color-text-muted)' }}>{r.worker_position || '—'}</td>
             <td>{r.items?.length || 0}</td>
@@ -206,7 +214,7 @@ function MineTable({ rows, onOpen }) {
               <td>
                 <div style={{ fontWeight: 700 }}>{r.worker_name}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
-                  {kindPill(r.kind)}
+                  <KindPill kind={r.kind} />
                   <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
                     {r.items?.length || 0} uprawnień
                   </span>
@@ -219,9 +227,8 @@ function MineTable({ rows, onOpen }) {
               </td>
               <td style={{ fontSize: 12 }}>
                 <span style={{ color: 'var(--color-text-muted)' }}>
-                  {r.status === 'completed' ? 'Zakończony'
-                    : r.status === 'rejected' ? 'Odrzucony'
-                    : nodeLabel(r.current_node_type, '—')}
+                  {/* Stan końcowy pokazuje już kolumna „Status” — tu bez powtórzenia. */}
+                  {['completed', 'rejected'].includes(r.status) ? '—' : nodeLabel(r.current_node_type, '—')}
                 </span>
                 {inIt && p.total > 0 && (
                   <span style={{ marginLeft: 8, display: 'inline-flex', gap: 8 }}>
@@ -302,7 +309,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       setDenials(prev => { const n = { ...prev }; delete n[id]; return n })
       onRefresh?.()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się zapisać odmowy')
+      setErr(errorMessage(ex, 'Nie udało się zapisać odmowy'))
     } finally { setDenyBusy(null) }
   }
   async function removeDeny(id) {
@@ -313,12 +320,16 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       if (upd) setItems(prev => prev.map(it => (it.id === id ? { ...it, ...upd } : it)))
       onRefresh?.()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się cofnąć odmowy')
+      setErr(errorMessage(ex, 'Nie udało się cofnąć odmowy'))
     } finally { setDenyBusy(null) }
   }
   const [busy, setBusy]       = useState(false)
   const [err, setErr]         = useState(null)
   const [loading, setLoading] = useState(isSelect)
+  // Migawka zaznaczenia po załadowaniu — do ostrzeżenia o niezapisanych zmianach.
+  const initialSel = useRef(null)
+  const selKey = () => JSON.stringify([[...picked].sort(), fieldValues])
+  useEffect(() => { if (!loading) initialSel.current = selKey() }, [loading])  // eslint-disable-line
   // Oświadczenie wnioskującego — gdy backend zażąda go (428), pokazujemy modal
   // z jego treścią i ponawiamy akcję z podpisem. `declPending` = akcja do ponowienia.
   const [declText, setDeclText] = useState('')
@@ -475,9 +486,8 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     }
     return item
   }
-  // Dyf stanu docelowego (dla nadania/zmiany).
-  const toGrant  = [...picked].filter(k => !held.has(k))
-  const toRevoke = [...held].filter(k => !picked.has(k))
+  // Dyf stanu docelowego (dla nadania/zmiany) — wspólny helper (ChangeSummary).
+  const { toGrant, toRevoke, scopeChanged } = diffSelection(picked, held, permsBySys, fieldValues, heldValues)
   const changeCount = toGrant.length + toRevoke.length
 
   // Predykat filtra widoku (zakładki: wszystkie / posiadane / tylko zmiany).
@@ -498,18 +508,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       p => (p.permission_name || '').toLowerCase().includes(_sq))
   }
 
-  // Uprawnienia POSIADANE, którym zmieniono wartość kontrolki (np. inny zakres
-  // rejestrów). Traktujemy je jak ponowne nadanie z nową wartością — inaczej
-  // nie dałoby się zmienić samego zakresu bez odbierania i nadawania od nowa.
-  const scopeChanged = [...picked].filter(k => {
-    if (!held.has(k)) return false
-    const [sid, pid] = k.split(':').map(Number)
-    const p = (permsBySys[sid] || []).find(x => x.id === pid)
-    if (!p || (p.input_type || 'none') === 'none') return false
-    const now = (fieldValues[k] || {})[p.permission_name] || ''
-    const before = (heldValues[k] || {})[p.permission_name] || ''
-    return now !== before
-  })
+  // (scopeChanged — posiadane z nową wartością pola; liczone w diffSelection.)
 
   // Sprawdź pola obowiązkowe nadawanych pozycji (backend waliduje to samo,
   // ale lepiej powiedzieć od razu, niż po odrzuconym zapisie).
@@ -570,7 +569,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
         setBusy(false)
         return
       }
-      setErr((typeof det === 'string' ? det : det?.message) || 'Błąd operacji')
+      setErr(errorMessage(ex, 'Nie udało się wykonać operacji'))
       setReviewOpen(false)
       setBusy(false)
       // 409 = krok wykonała już inna osoba (np. przełożony) — odśwież dane
@@ -581,6 +580,19 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
 
   // v3.1 — wysłanie wyboru idzie przez krok PODSUMOWANIA (ReviewDialog).
   const [reviewOpen, setReviewOpen] = useState(false)
+
+  // „Anuluj” / „Wróć” — pytamy tylko, gdy coś zmieniono (wybór, pola, odmowy, komentarz).
+  async function guardedClose() {
+    const dirty = (isSelect || isDecision) && (
+      comment.trim() !== '' || Object.keys(denials).length > 0
+      || (isSelect && initialSel.current != null && initialSel.current !== selKey()))
+    if (dirty && !(await confirmDialog({
+      title: 'Porzucić zmiany?',
+      message: 'Wprowadzone zaznaczenia i uwagi nie zostały wysłane i zostaną utracone.',
+      confirmLabel: 'Porzuć zmiany', danger: true,
+    }))) return
+    onClose()
+  }
 
   async function submit(action) {
     if (action === 'reject') {
@@ -622,11 +634,11 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
 
   // Kopiowanie uprawnień od współpracownika → nowy stan docelowy.
   function copyFrom(perms) {
-    const res = buildCopiedSelection(perms, systems, permsBySys)
+    const res = buildCopiedSelection(perms, permsBySys, picked, fieldValues)
     setPicked(res.keys)
-    setFieldValues(prev => ({ ...prev, ...res.values }))
-    setPermFilter('changes')
-    return { count: res.keys.size, skippedAdmin: res.skippedAdmin, skippedUnavailable: res.skippedUnavailable }
+    setFieldValues(res.values)
+    if (res.added) setPermFilter('changes')
+    return { count: res.added, skippedAdmin: res.skippedAdmin, skippedUnavailable: res.skippedUnavailable }
   }
 
   // Wiersze podsumowania.
@@ -668,7 +680,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       perspective={(isSelect || isDecision) ? perspectiveLabel(r.current_node_type) : null}
       waiting={!(isSelect || isDecision) ? waitingText(r) : null}
       title={title} subtitle={_subtitle}
-      backLabel="← Wróć do listy" onBack={onClose}
+      backLabel="← Wróć do listy" onBack={guardedClose}
       steps={_steps} summary={_summary} historyRequestId={r.id}
       historyCreatedBy={r.created_by_name}
       footerLeft={isSelect && !loading
@@ -678,7 +690,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                 {' · '}<strong style={{ color: 'var(--color-error-text)' }}>−{toRevoke.length}</strong> odebrania</>)
         : null}
       footerActions={<>
-        <button className="btn btn--ghost" onClick={onClose} disabled={busy}>
+        <button className="btn btn--ghost" onClick={guardedClose} disabled={busy}>
           {(isSelect || isDecision) ? 'Anuluj' : 'Zamknij'}
         </button>
         {(isSelect || isDecision) && (
@@ -758,26 +770,12 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
               {!loading && !isRevoke && systems.length > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10,
                               flexWrap: 'wrap', marginBottom: 10 }}>
-                  <div role="group" aria-label="Filtr" style={{ display: 'inline-flex', padding: 3, gap: 2,
-                                borderRadius: 8, background: 'var(--color-neutral-bg)' }}>
-                    {[
-                      { id: 'all',     label: 'Wszystkie' },
-                      { id: 'held',    label: 'Posiadane' },
-                      { id: 'changes', label: `Tylko zmiany${changeCount ? ' · ' + changeCount : ''}` },
-                    ].map(t => (
-                      <button key={t.id} type="button" aria-pressed={permFilter === t.id}
-                              onClick={() => setPermFilter(t.id)}
-                              style={{
-                                border: 'none', cursor: 'pointer', fontSize: 13, minHeight: 36,
-                                padding: '0 14px', borderRadius: 6, font: 'inherit',
-                                fontWeight: permFilter === t.id ? 700 : 600,
-                                background: permFilter === t.id ? 'var(--color-card)' : 'transparent',
-                                color: permFilter === t.id ? 'var(--color-heading)' : 'var(--color-text-muted)',
-                              }}>
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
+                  <Segmented ariaLabel="Filtr uprawnień" value={permFilter} onChange={setPermFilter}
+                             options={[
+                               { value: 'all',     label: 'Wszystkie' },
+                               { value: 'held',    label: 'Posiadane' },
+                               { value: 'changes', label: 'Tylko zmiany', count: changeCount || null },
+                             ]} />
                   <div style={{ position: 'relative', flex: '1 1 240px', minWidth: 160 }}>
                     <Search size={15} aria-hidden="true" style={{
                       position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)',

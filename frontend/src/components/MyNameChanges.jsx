@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
-import { UserPen, X, Check } from 'lucide-react'
-import { myNameChanges, createNameChange } from '../api'
+import { UserPen, Check } from 'lucide-react'
+import { myNameChanges, createNameChange, errorMessage } from '../api'
+import { getCurrentUser } from '../roles'
+import Modal from './ui/Modal'
 import { fmtDate } from '../serverTime'
 import { NAME_CHANGE_STATUS } from '../labels'
 import { toast } from './ui/feedback'
@@ -17,15 +19,14 @@ export default function MyNameChanges() {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
 
-  const currentName = (() => {
-    try {
-      const u = JSON.parse(localStorage.getItem('szup_user') || '{}')
-      return u.full_name || u.username || ''
-    } catch { return '' }
-  })()
+  const me = getCurrentUser()
+  const currentName = me.full_name || me.username || ''
+  const [loadErr, setLoadErr] = useState(null)
 
   async function load() {
-    try { setRows((await myNameChanges()).data) } catch { /* ignore */ }
+    setLoadErr(null)
+    try { setRows((await myNameChanges()).data) }
+    catch (ex) { setLoadErr(errorMessage(ex, 'Nie udało się wczytać zgłoszeń zmiany nazwiska')) }
   }
   useEffect(() => { load() }, [])
 
@@ -40,7 +41,7 @@ export default function MyNameChanges() {
       toast('Wysłano zgłoszenie zmiany nazwiska do IT.')
       load()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się wysłać zgłoszenia')
+      setErr(errorMessage(ex, 'Nie udało się wysłać zgłoszenia'))
     } finally { setBusy(false) }
   }
 
@@ -66,6 +67,9 @@ export default function MyNameChanges() {
         </button>
       </div>
 
+      {loadErr && (
+        <div className="alert alert--error" role="alert" style={{ margin: 14 }}>{loadErr}</div>
+      )}
       {rows.length > 0 && (
         <div style={{ overflowX: 'auto' }}>
         <table className="data-table" style={{ minWidth: 640 }}>
@@ -97,34 +101,26 @@ export default function MyNameChanges() {
       )}
 
       {open && (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setOpen(false)}>
-          <div className="modal" style={{ maxWidth: 520, width: '92vw' }}>
-            <div className="modal__header">
-              <div><UserPen size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} /> Zgłoszenie zmiany nazwiska</div>
-              <button className="btn btn--ghost btn--sm" aria-label="Zamknij" onClick={() => setOpen(false)}><X size={14} /></button>
-            </div>
-            <div className="modal__body">
-              {err && <div className="alert alert--error mb-4">{err}</div>}
-              <div className="form-group">
-                <label className="form-label">Nowe imię i nazwisko *</label>
-                <input className="form-control" autoFocus value={name}
-                       onChange={e => setName(e.target.value)}
-                       placeholder="np. Joanna Nowak" />
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
-                Zgłoszenie trafia bezpośrednio do IT. Zmianę nazwiska wprowadzi
-                pracownik IT; może przy okazji zmienić Twój login (wtedy trzeba
-                zalogować się nowym loginem).
-              </div>
-            </div>
-            <div className="modal__footer" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button className="btn btn--ghost btn--sm" onClick={() => setOpen(false)} disabled={busy}>Anuluj</button>
-              <button className="btn btn--primary btn--sm" onClick={submit} disabled={busy}>
-                <Check size={13} /> {busy ? 'Wysyłanie…' : 'Wyślij zgłoszenie'}
-              </button>
-            </div>
+        <Modal title="Zgłoszenie zmiany nazwiska" onClose={() => !busy && setOpen(false)} width={520}
+               footer={<>
+                 <button className="btn btn--ghost" onClick={() => setOpen(false)} disabled={busy}>Anuluj</button>
+                 <button className="btn btn--action" onClick={submit} disabled={busy}>
+                   <Check size={14} /> {busy ? 'Wysyłanie…' : 'Wyślij zgłoszenie'}
+                 </button>
+               </>}>
+          {err && <div className="alert alert--error mb-4">{err}</div>}
+          <div className="form-group">
+            <label className="form-label" htmlFor="nc-new-name">Nowe imię i nazwisko *</label>
+            <input id="nc-new-name" className="form-control" autoFocus value={name}
+                   onChange={e => setName(e.target.value)}
+                   placeholder="np. Joanna Nowak" />
           </div>
-        </div>
+          <div className="form-hint">
+            Zgłoszenie trafia bezpośrednio do IT. Zmianę nazwiska wprowadzi
+            pracownik IT; może przy okazji zmienić Twój login (wtedy trzeba
+            zalogować się nowym loginem).
+          </div>
+        </Modal>
       )}
     </section>
   )

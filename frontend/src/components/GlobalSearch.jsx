@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Search, FileText, User, X, ClipboardList } from 'lucide-react'
-import { searchUsers, listUsers, listRequests, getRequest } from '../api'
+import { searchUsers, listUsers, listRequests, getRequest, errorMessage } from '../api'
 import { getUserRoles, hasAnyRole } from '../roles'
 import { statusLabel } from '../labels'
 
@@ -29,6 +29,7 @@ export default function GlobalSearch() {
   const [people, setPeople] = useState([])
   const [byNumber, setByNumber] = useState(null)
   const [busy, setBusy]     = useState(false)
+  const [searchErr, setSearchErr] = useState(null)
   const reqCache   = useRef(null)   // wnioski w zakresie — pobierane raz na otwarcie
   const usersCache = useRef(null)   // admin: lista użytkowników
   const inputRef   = useRef(null)
@@ -48,7 +49,7 @@ export default function GlobalSearch() {
 
   function openSearch() {
     lastFocus.current = document.activeElement
-    setQ(''); setPeople([]); setByNumber(null); setActive(0)
+    setQ(''); setPeople([]); setByNumber(null); setActive(0); setSearchErr(null)
     reqCache.current = null
     setOpen(true)
   }
@@ -64,7 +65,7 @@ export default function GlobalSearch() {
     if (!open || !canSeeRequests || reqCache.current) return
     const params = (!isManager && !isIT && isHR) ? { scope: 'mine' } : {}
     listRequests(params).then(r => { reqCache.current = r.data || []; setActive(a => a) })
-      .catch(() => { reqCache.current = [] })
+      .catch(ex => { reqCache.current = []; setSearchErr(errorMessage(ex, 'Nie udało się wczytać wniosków')) })
   }, [open])
 
   // Wyszukiwanie osób / wniosku po numerze (debounce).
@@ -83,11 +84,15 @@ export default function GlobalSearch() {
 
         if (term.length >= 2 && !/^#?\d+$/.test(term)) {
           if (canSearchUsers) {
-            const r = await searchUsers(term).catch(() => ({ data: [] }))
+            const r = await searchUsers(term).catch(ex => {
+              setSearchErr(errorMessage(ex, 'Wyszukiwanie osób nie powiodło się')); return { data: [] }
+            })
             setPeople((r.data || []).slice(0, 8))
           } else if (isAdmin) {
             if (!usersCache.current) {
-              const r = await listUsers().catch(() => ({ data: [] }))
+              const r = await listUsers().catch(ex => {
+                setSearchErr(errorMessage(ex, 'Nie udało się wczytać użytkowników')); return { data: [] }
+              })
               usersCache.current = r.data || []
             }
             const f = fold(term)
@@ -101,10 +106,14 @@ export default function GlobalSearch() {
     return () => clearTimeout(t)
   }, [q, open])
 
+  // Dokąd prowadzi wniosek: krok kierowniczy, na którym użytkownik może działać
+  // → „Do obsługi”; dla IT wszystko inne → „Realizacja IT” (tam dociągany jest
+  // każdy wniosek); sam kierownik → „Do obsługi”; samo HR → Kartoteka.
   function requestTarget(r) {
     if (!isManager && !isIT) return '/hr'
-    const toIT = isIT && (r.status === 'pending_it' || r.current_node_type === 'it_execute' || !isManager)
-    return `/requests?tab=${toIT ? 'it' : 'handle'}&open=${r.id}`
+    const managerStep = MANAGER_NODES.includes(r.current_node_type) && r.can_act !== false
+    const tab = (isManager && (managerStep || !isIT)) ? 'handle' : 'it'
+    return `/requests?tab=${tab}&open=${r.id}`
   }
   function personTarget(p) {
     const name = encodeURIComponent(p.full_name || p.username || '')
@@ -229,6 +238,9 @@ export default function GlobalSearch() {
               })}
             </ul>
 
+            {searchErr && (
+              <div role="alert" className="alert alert--error" style={{ margin: '8px 12px 0' }}>{searchErr}</div>
+            )}
             {results.length === 0 && (
               <div role="status" style={{ padding: '18px 16px', fontSize: 14, color: 'var(--color-text-muted)' }}>
                 {busy ? 'Szukam…'
@@ -249,6 +261,8 @@ export default function GlobalSearch() {
     </>
   )
 }
+
+const MANAGER_NODES = ['select_permissions', 'manager_approve', 'higher_manager_approve']
 
 function fold(s) {
   return (s || '').toLowerCase().replace(/ł/g, 'l').normalize('NFKD').replace(/[̀-ͯ]/g, '')

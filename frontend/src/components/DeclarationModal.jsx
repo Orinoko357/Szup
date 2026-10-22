@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { X, ShieldAlert } from 'lucide-react'
 import { getDeclarationText } from '../api'
+import { getCurrentUser } from '../roles'
 
 /**
  * Oświadczenie wnioskującego — pokazywane w chwili, gdy akcja kieruje wniosek
@@ -14,12 +15,18 @@ import { getDeclarationText } from '../api'
  * `text` można podać z góry (np. z odpowiedzi 428); gdy brak — pobieramy
  * aktualną treść z `/settings/declaration-text`.
  */
-/** Imię i nazwisko zalogowanego użytkownika (z tokena w localStorage). */
+/** Imię i nazwisko zalogowanego użytkownika (z sesji). */
 function currentUserName() {
-  try {
-    const u = JSON.parse(localStorage.getItem('szup_user') || '{}')
-    return u.full_name || u.username || ''
-  } catch { return '' }
+  const u = getCurrentUser()
+  return u.full_name || u.username || ''
+}
+
+/** Dzisiejsza data LOKALNA w formacie RRRR-MM-DD (toISOString dawałby datę UTC —
+ *  między północą a 1–2 w nocy wczorajszą). */
+function localToday() {
+  const d = new Date()
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
 export default function DeclarationModal({
@@ -30,7 +37,7 @@ export default function DeclarationModal({
   // Domyślnie podpisuje osoba, która wywołała okno — z możliwością poprawy.
   const [name, setName] = useState(defaultName || currentUserName())
   // Dziś, w formacie RRRR-MM-DD (wartość <input type="date">).
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [date, setDate] = useState(localToday)
 
   useEffect(() => {
     if (textProp) return
@@ -60,7 +67,7 @@ export default function DeclarationModal({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '18px 22px',
                       borderBottom: '1px solid var(--color-border)' }}>
-          <span aria-hidden="true" style={{ width: 38, height: 38, borderRadius: 10, background: '#FEF3DC',
+          <span aria-hidden="true" style={{ width: 38, height: 38, borderRadius: 10, background: 'var(--color-warning-bg)',
                                             color: 'var(--color-gold-dark)', display: 'grid', placeItems: 'center' }}>
             <ShieldAlert size={20} />
           </span>

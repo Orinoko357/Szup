@@ -1,36 +1,34 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Copy, Search, X } from 'lucide-react'
-import { listMyWorkers, userPermissions } from '../api'
+import { listMyWorkers, userPermissions, errorMessage } from '../api'
 import { toast } from './ui/feedback'
 
 /**
  * v3.1 — „Skopiuj uprawnienia od współpracownika”: kierownik wybiera osobę
- * ze swojego zespołu, a stan docelowy wniosku przyjmuje JEJ obecne uprawnienia
- * (+ wartości pól). Wyłącznie frontend — istniejące endpointy (my-workers,
- * /users/{id}/permissions, oba z kontrolą zakresu kierownika).
+ * ze swojego zespołu, a do stanu docelowego wniosku DOKŁADAMY jej obecne
+ * uprawnienia (+ wartości pól). Wyłącznie frontend — istniejące endpointy
+ * (my-workers, /users/{id}/permissions, oba z kontrolą zakresu kierownika).
  */
 
-/** Złóż stan docelowy z uprawnień współpracownika. Pomija pozycje niedostępne
- *  w tej jednostce oraz uprawnienia administracyjne (zawsze świadoma decyzja). */
-export function buildCopiedSelection(colleaguePerms, systems, permsBySys) {
-  const keys = new Set()
-  const values = {}
-  let skippedAdmin = 0, skippedUnavailable = 0
+/** Dołóż uprawnienia współpracownika do bieżącego zaznaczenia.
+ *  Wynik = bieżące zaznaczenie ∪ uprawnienia kolegi — NIC nie jest odbierane
+ *  (także własne uprawnienia administracyjne i spoza jednostki pracownika
+ *  zostają). Pomijamy: pozycje niedostępne w tej jednostce, wycofane
+ *  (is_active === false) oraz uprawnienia administracyjne (świadoma decyzja). */
+export function buildCopiedSelection(colleaguePerms, permsBySys, basePicked = new Set(), baseValues = {}) {
+  const keys = new Set(basePicked)
+  const values = { ...baseValues }
+  let added = 0, skippedAdmin = 0, skippedUnavailable = 0
   for (const p of colleaguePerms || []) {
     const k = `${p.system_id}:${p.permission_id}`
     const def = (permsBySys?.[p.system_id] || []).find(x => x.id === p.permission_id)
-    if (!def) { skippedUnavailable++; continue }
+    if (!def || def.is_active === false) { skippedUnavailable++; continue }
     if (def.is_admin_option) { skippedAdmin++; continue }
-    keys.add(k)
+    if (keys.has(k)) continue      // już zaznaczone — zostawiamy jego wartości
+    keys.add(k); added++
     if (p.custom_values && Object.keys(p.custom_values).length) values[k] = { ...p.custom_values }
   }
-  // Programy „domyślnie zaznaczone” — jak przy otwarciu wniosku.
-  for (const s of (systems || []).filter(x => x.default_checked)) {
-    for (const p of (permsBySys?.[s.id] || [])) {
-      if (!p.is_admin_option) keys.add(`${s.id}:${p.id}`)
-    }
-  }
-  return { keys, values, skippedAdmin, skippedUnavailable }
+  return { keys, values, added, skippedAdmin, skippedUnavailable }
 }
 
 export default function CopyFromColleague({ excludeUserId, onCopy, disabled }) {
@@ -65,11 +63,14 @@ export default function CopyFromColleague({ excludeUserId, onCopy, disabled }) {
       setOpen(false)
       const extra = []
       if (res?.skippedAdmin) extra.push(`pominięto uprawnienia administracyjne: ${res.skippedAdmin}`)
-      if (res?.skippedUnavailable) extra.push(`niedostępne w tej jednostce: ${res.skippedUnavailable}`)
-      toast(`Skopiowano ${res?.count ?? perms.length} uprawnień od ${w.full_name || w.username} — sprawdź przed wysłaniem.`
-            + (extra.length ? `\n(${extra.join('; ')})` : ''), { tone: 'info', timeout: 7000 })
-    } catch {
-      setErr('Nie udało się pobrać uprawnień tej osoby')
+      if (res?.skippedUnavailable) extra.push(`niedostępne lub wycofane: ${res.skippedUnavailable}`)
+      const who = w.full_name || w.username
+      toast((res?.count
+              ? `Dodano ${res.count} uprawnień od ${who}. Obecne uprawnienia pracownika pozostają bez zmian — sprawdź przed wysłaniem.`
+              : `${who} nie ma uprawnień, których brakuje temu pracownikowi.`)
+            + (extra.length ? `\n(${extra.join('; ')})` : ''), { tone: 'info', timeout: 8000 })
+    } catch (ex) {
+      setErr(errorMessage(ex, 'Nie udało się pobrać uprawnień tej osoby'))
     } finally { setBusyId(null) }
   }
 
@@ -95,8 +96,8 @@ export default function CopyFromColleague({ excludeUserId, onCopy, disabled }) {
                   Skopiuj uprawnienia od współpracownika
                 </h2>
                 <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--color-text-muted)' }}>
-                  Zaznaczenie przyjmie obecne uprawnienia wybranej osoby. Przed wysłaniem możesz je zmienić.
-                  Uprawnienia administracyjne nie są kopiowane.
+                  Do zaznaczenia zostaną dodane obecne uprawnienia wybranej osoby — nic nie zostanie odebrane.
+                  Przed wysłaniem możesz je zmienić. Uprawnienia administracyjne nie są kopiowane.
                 </p>
               </div>
               <button type="button" aria-label="Zamknij" onClick={() => setOpen(false)}

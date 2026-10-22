@@ -56,6 +56,7 @@ from models import (
     has_role,
 )
 
+from services.after_commit import defer   # powiadomienia dopiero po commicie
 _log = logging.getLogger("szup.workflow")
 
 
@@ -602,35 +603,48 @@ def _actor_sender(actor_user: Optional[User]) -> tuple[Optional[str], Optional[s
 
 def _addressee_for_node(session: Session, node: dict, request: AccessRequest,
                         dept: Optional[Department]) -> list[str]:
-    """Zwraca listę adresów e-mail osób, którym należy powiadomić o wejściu
-    w dany węzeł. Puste jeśli nie potrafimy znaleźć adresata."""
+    """Adresy e-mail osób, które trzeba powiadomić o wejściu w dany węzeł.
+
+    Spójnie z `waiting_for_label`: samodzielne stanowisko / komórka bez kierownika
+    (także komórka NADRZĘDNA przy akceptacji wyższej) → najbliższy kierownik wyżej.
+    Powiadamiamy też zastępców odpowiedzialnej komórki — mogą działać na równi
+    z kierownikiem. Puste, jeśli nie potrafimy znaleźć adresata."""
+    from services.permissions import effective_manager_dept
+    from models import DepartmentDeputy
+
+    def _responsible(d):
+        if d and (getattr(d, "kind", None) == "standalone" or not d.manager_user_id):
+            return effective_manager_dept(session, d) or d
+        return d
+
     ntype = node["type"]
-    ids: list[int] = []
+    resp = None
     if ntype in ("manager_approve", "select_permissions"):
-        # Samodzielne stanowisko / komórka bez kierownika → powiadamiamy
-        # najbliższego kierownika wyżej.
-        resp = dept
-        if dept and (getattr(dept, "kind", None) == "standalone" or not dept.manager_user_id):
-            from services.permissions import effective_manager_dept
-            resp = effective_manager_dept(session, dept) or dept
-        if resp and resp.manager_user_id:
-            ids.append(resp.manager_user_id)
+        resp = _responsible(dept)
     elif ntype == "higher_manager_approve":
-        parent = None
-        if dept and dept.parent_dept_id:
-            parent = session.get(Department, dept.parent_dept_id)
-        if parent and parent.manager_user_id:
-            ids.append(parent.manager_user_id)
+        parent = session.get(Department, dept.parent_dept_id) if dept and dept.parent_dept_id else None
+        resp = _responsible(parent)
     elif ntype == "it_execute":
         # Realizacja IT: powiadamiamy WYŁĄCZNIE skrzynkę helpdesku
         # (patrz `_notify_helpdesk`) — bez imiennych maili do pracowników IT,
         # bo zgłoszenie zakłada się w systemie helpdesku, nie u poszczególnych osób.
         return []
+    if not resp:
+        return []
 
-    emails = []
+    ids: list[int] = []
+    if resp.manager_user_id:
+        ids.append(resp.manager_user_id)
+    for uid in session.exec(
+        select(DepartmentDeputy.user_id).where(DepartmentDeputy.department_id == resp.id)
+    ).all():
+        if uid not in ids:
+            ids.append(uid)
+
+    emails: list[str] = []
     for uid in ids:
         u = session.get(User, uid)
-        if u and u.email:
+        if u and u.is_active and u.email and u.email not in emails:
             emails.append(u.email)
     return emails
 
@@ -729,14 +743,13 @@ def _notify_helpdesk(session: Session, request: AccessRequest,
 
         import threading
         from services.email_alerts import notify_helpdesk_new_request
-        threading.Thread(
-            target=notify_helpdesk_new_request, daemon=True, kwargs={
+        defer(session, notify_helpdesk_new_request, **{
                 "request_id": request.id,
                 "worker_name": request.worker_name,
                 "manager_name": manager_name,
                 "kind": getattr(request, "kind", "grant") or "grant",
                 "from_name": s_name, "from_email": s_email,
-            }).start()
+            })
     except Exception as exc:
         _log.warning("Powiadomienie helpdesku nie zostało wysłane: %s", exc)
 
@@ -762,8 +775,7 @@ def _notify_stage(session: Session, request: AccessRequest, node: dict,
         import threading
         from services.email_alerts import notify_workflow_stage
         for e in emails:
-            threading.Thread(
-                target=notify_workflow_stage, daemon=True, kwargs={
+            defer(session, notify_workflow_stage, **{
                     "to_address": e,
                     "request_id": request.id,
                     "worker_name": request.worker_name,
@@ -771,7 +783,7 @@ def _notify_stage(session: Session, request: AccessRequest, node: dict,
                     "stage_label": node.get("label") or node["type"],
                     "node_type": node["type"],
                     "from_name": s_name, "from_email": s_email,
-                }).start()
+                })
     except Exception as exc:
         _log.warning("Powiadomienie o etapie obiegu nie zostało wysłane: %s", exc)
 
@@ -816,8 +828,8 @@ def _notify_request_completed(session: Session, request: AccessRequest,
             denied_lines.append(label)
         import threading
         from services.email_alerts import notify_request_completed
-        threading.Thread(
-            target=notify_request_completed, daemon=True, kwargs={
+        from services.permissions import user_is_hr
+        defer(session, notify_request_completed, **{
                 "requester_email": u.email,
                 "request_id": request.id,
                 "worker_name": request.worker_name,
@@ -825,7 +837,8 @@ def _notify_request_completed(session: Session, request: AccessRequest,
                 "denied_lines": denied_lines,
                 # Link w mailu: kierownik → „Moje wnioski”, kadry → Kartoteka.
                 "requester_is_manager": has_role(u, "manager"),
-            }).start()
+                "requester_is_hr": user_is_hr(session, u),
+            })
     except Exception as exc:
         _log.warning("Powiadomienie o zakończeniu wniosku nie wysłane: %s", exc)
 
@@ -844,20 +857,21 @@ def _notify_request_rejected(session: Session, request: AccessRequest,
             targets.append(step.actor_user_id)
         import threading
         from services.email_alerts import notify_request_rejected
+        from services.permissions import user_is_hr
         for uid in targets:
             if actor_user and uid == actor_user.id:
                 continue   # odrzucający nie dostaje maila o własnej decyzji
             u = session.get(User, uid)
             if not u or not u.email:
                 continue
-            threading.Thread(
-                target=notify_request_rejected, daemon=True, kwargs={
+            defer(session, notify_request_rejected, **{
                     "requester_email": u.email,
                     "request_id": request.id,
                     "worker_name": request.worker_name,
                     "comment": comment or "",
                     "requester_is_manager": has_role(u, "manager"),
-                }).start()
+                    "requester_is_hr": user_is_hr(session, u),
+                })
     except Exception as exc:
         _log.warning("Powiadomienie o odrzuceniu wniosku nie wysłane: %s", exc)
 

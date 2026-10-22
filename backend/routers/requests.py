@@ -24,7 +24,7 @@ from models import (
 from services.auth_service import get_current_user
 from services.permissions import (
     require_hr, require_it_staff,
-    is_admin, managed_dept_ids, hr_scoped_unit_ids, unit_manager_dept_ids, superior_dept_ids,
+    is_admin, managed_dept_ids, hr_scoped_unit_ids, unit_manager_dept_ids, manager_scope,
 )
 
 _log = logging.getLogger("szup.requests")
@@ -40,13 +40,9 @@ STEP_ALREADY_DONE_MSG = ("Ten krok został już wykonany przez inną osobę (np.
 
 
 def _managed_dept_ids(session: Session, user: User) -> tuple[list[int], list[int]]:
-    """Zakres wniosków kierownika: managed_dept_ids + komórki, w których jest
-    PRZEŁOŻONYM (poddrzewo swoich komórek i komórki jednostki, którą kieruje) —
-    przełożony widzi i może dokończyć każdy wniosek z podległych komórek.
-    Komórki „przełożonego” dokładamy do drugiej listy (escalated)."""
-    direct_ids, escalated_ids = managed_dept_ids(session, user)
-    extra = set(superior_dept_ids(session, user)) - set(direct_ids)
-    return direct_ids, sorted(set(escalated_ids) | extra)
+    """Zakres wniosków kierownika (z komórkami przełożonego) — patrz
+    services.permissions.manager_scope (cache na czas żądania)."""
+    return manager_scope(session, user)
 
 
 def _validate_items_scope(session: Session, unit_id: int, items) -> None:
@@ -308,6 +304,9 @@ def _serialize_request(r: AccessRequest, items: list, session: Session | None = 
                     cur_node = find_node(json.loads(inst.template_snapshot), inst.current_node_id)
                 except Exception:
                     cur_node = None
+                # Zapamiętaj instancję i węzeł — list_requests użyje ich ponownie
+                # (can_act) zamiast drugi raz pobierać instancję i parsować graf.
+                session.info.setdefault("_wf_rows", {})[r.id] = (inst, cur_node)
                 try:
                     waiting_for = waiting_for_label(
                         session, cur_node, r,
@@ -438,11 +437,6 @@ def _item_kind(item, request_kind: str) -> str:
     return "revoke" if request_kind == "revoke" else "grant"
 
 
-def _dept_name(session: Session, dept_id: int) -> str:
-    d = session.get(Department, dept_id)
-    return d.name if d else str(dept_id)
-
-
 def _user_email(session: Session, user_id: Optional[int]) -> Optional[str]:
     if not user_id:
         return None
@@ -521,6 +515,7 @@ def list_requests(
     scope: Optional[str] = Query(None, description="manager|it — wymuś perspektywę roli"),
     limit: int = Query(200, le=1000),
     offset: int = 0,
+    active: bool = Query(False, description="true = tylko wnioski w toku (bez zakończonych/odrzuconych)"),
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -557,6 +552,11 @@ def list_requests(
 
     if status_filter:
         stmt = stmt.where(AccessRequest.status == status_filter)
+    if active:
+        # „Do obsługi” — bez historii; inaczej limit 200 najnowszych mógł wyciąć
+        # najstarszy oczekujący wniosek (widoczny na pulpicie).
+        stmt = stmt.where(col(AccessRequest.status).notin_(
+            [RequestStatus.completed, RequestStatus.rejected]))
 
     stmt = stmt.order_by(col(AccessRequest.created_at).desc()).limit(limit).offset(offset)
     rows = session.exec(stmt).all()
@@ -571,18 +571,24 @@ def list_requests(
         from services.workflow import can_act, find_node
         import json as _json
         by_id = {r.id: r for r in rows}
+        cached = session.info.get("_wf_rows", {})
         for row in out:
             r = by_id[row["id"]]
             node_type, act = None, False
-            inst = session.exec(
-                select(WorkflowInstance).where(WorkflowInstance.request_id == r.id)
-            ).first()
+            if r.id in cached:
+                # Instancja i węzeł już wczytane w _serialize_request.
+                inst, node = cached[r.id]
+            else:
+                inst = session.exec(
+                    select(WorkflowInstance).where(WorkflowInstance.request_id == r.id)
+                ).first()
+                node = None
+                if inst and inst.status == WorkflowInstanceStatus.active and inst.current_node_id:
+                    try:
+                        node = find_node(_json.loads(inst.template_snapshot), inst.current_node_id)
+                    except Exception:
+                        node = None
             if inst and inst.status == WorkflowInstanceStatus.active and inst.current_node_id:
-                try:
-                    graph = _json.loads(inst.template_snapshot)
-                    node = find_node(graph, inst.current_node_id)
-                except Exception:
-                    node = None
                 if node:
                     node_type = node.get("type")
                     dept = session.get(Department, r.department_id) if r.department_id else None
@@ -599,7 +605,8 @@ def my_scope(
     session: Session = Depends(get_session),
 ):
     """
-    Zwraca flagi określające zakładki dostępne w panelu kierownika:
+    Flagi zakresu kierownika (obecnie nieużywane przez frontend — strona
+    „Wnioski” dobiera zakładki wg ról; endpoint zostaje dla zgodności API):
       - can_select  — użytkownik jest bezpośrednim kierownikiem co najmniej
                       jednego wydziału z flagą 2-stopniową (wybiera uprawnienia
                       dla swoich pracowników, zatwierdza kierownik nadrzędny).
@@ -614,7 +621,8 @@ def my_scope(
     if not has_role(current_user, "manager"):
         return {"can_select": False, "can_approve": False}
 
-    direct_ids, escalated_ids = _managed_dept_ids(session, current_user)
+    # Oryginalny zakres (bez komórek „przełożonego”) — flagi opisują rolę w obiegu.
+    direct_ids, escalated_ids = managed_dept_ids(session, current_user)
     # flaga na wydziałach bezpośrednich (czy jest w nich 2-stopniowy?)
     direct_depts = []
     if direct_ids:
@@ -733,8 +741,9 @@ def workflow_dashboard(
         #    2-stopniowe) — kierownik I stopnia nie akceptuje,
         #  - realizacja: tylko pracownik IT.
         "show_prepare": bool(all_managed),
-        # + gdy w kolejce są akceptacje (np. osobny krok akceptacji kierownika).
-        "show_approve": bool(escalated_ids) or pending_approve > 0,
+        # Z ORYGINALNYCH komórek 2-stopniowych (bez komórek „przełożonego”,
+        # które ma każdy kierownik z podkomórkami) + gdy w kolejce są akceptacje.
+        "show_approve": bool(managed_dept_ids(session, user)[1]) or pending_approve > 0,
         "show_execute": has_role(user, "it_staff"),
     }
 
@@ -1199,6 +1208,10 @@ def stats_summary(
 
 def _check_access(user: User, r: AccessRequest, session: Session) -> None:
     if is_admin(user) or has_role(user, "it_staff"):
+        return
+    # Twórca zawsze widzi swój wniosek (np. kierownik Wydziału Kadr składający
+    # zgłoszenie dla komórki spoza swojego zakresu kierowniczego).
+    if r.created_by_id == user.id:
         return
     if has_role(user, "manager"):
         direct_ids, escalated_ids = _managed_dept_ids(session, user)

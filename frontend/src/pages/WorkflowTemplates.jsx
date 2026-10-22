@@ -1,25 +1,17 @@
 import { useEffect, useState } from 'react'
 import {
   GitBranch, Plus, Save, X, Trash2, RefreshCw, LayoutList,
-  Play, ListChecks, UserCheck, Crown, Wrench, Flag,
   ChevronUp, ChevronDown, AlertTriangle,
 } from 'lucide-react'
 import {
   listWorkflowTemplates, createWorkflowTemplate, updateWorkflowTemplate,
   deleteWorkflowTemplate, getWorkflowTemplate,
-} from '../api'
+ errorMessage} from '../api'
 import { fmtDateTime } from '../serverTime'
-import { toast, confirmDialog } from '../components/ui/feedback'
+import { toast, ask } from '../components/ui/feedback'
+import Field from '../components/ui/Field'
+import { NODE_LABEL } from '../labels'
 
-// Potwierdzenie w oknie aplikacji (zamiast systemowego confirm). Operacje
-// usuwające / odbierające / nieodwracalne oznaczamy na czerwono.
-const ask = (message) => {
-  const danger = /usun|odebra|wygas|ostrze|nieodwracal/i.test(message)
-  return confirmDialog({
-    title: danger ? 'Potwierdź operację' : 'Potwierdź',
-    message, danger, confirmLabel: danger ? 'Tak, wykonaj' : 'Potwierdź',
-  })
-}
 
 /**
  * Liniowy edytor obiegu wniosków.
@@ -29,15 +21,6 @@ const ask = (message) => {
  * w kolejności (góra→dół); połączenia tworzą się automatycznie. „Zgłoszenie"
  * (start) jest zawsze pierwsze, „Zakończenie" (end) zawsze ostatnie.
  */
-
-const NODE_ICONS = {
-  start: Play,
-  select_permissions: ListChecks,
-  manager_approve: UserCheck,
-  higher_manager_approve: Crown,
-  it_execute: Wrench,
-  end: Flag,
-}
 
 // Kolor akcentu kafelka (lewy pasek) — tokeny design systemu WODS.
 const NODE_ACCENT = {
@@ -53,22 +36,22 @@ const NODE_ACCENT = {
 const STEP_CATALOG = [
   {
     type: 'select_permissions',
-    label: 'Wybór uprawnień i zatwierdzenie (kierownik)',
+    label: NODE_LABEL.select_permissions,
     hint: 'Kierownik referatu/biura wybiera systemy i uprawnienia dla pracownika — wybór jest jednocześnie zatwierdzeniem.',
   },
   {
     type: 'higher_manager_approve',
-    label: 'Akceptacja kierownika wyższego rzędu',
+    label: NODE_LABEL.higher_manager_approve,
     hint: 'Kierownik wydziału nadrzędnego. Pomijany automatycznie, gdy komórka nie ma flagi „wymaga akceptacji wyższego rzędu".',
   },
   {
     type: 'it_execute',
-    label: 'Realizacja przez IT',
+    label: NODE_LABEL.it_execute,
     hint: 'Pracownik Biura Informatyki realizuje wniosek technicznie i potwierdza wykonanie.',
   },
   {
     type: 'manager_approve',
-    label: 'Osobna akceptacja kierownika (opcjonalna)',
+    label: `${NODE_LABEL.manager_approve} (opcjonalna)`,
     hint: 'Dodatkowy krok akceptacji przez kierownika — użyj tylko, gdy wybór uprawnień robi kto inny niż zatwierdzający.',
   },
 ]
@@ -145,7 +128,7 @@ export default function WorkflowTemplates() {
     try {
       const r = await listWorkflowTemplates({})
       setItems(r.data)
-    } catch (ex) { setErr(ex.response?.data?.detail || 'Błąd ładowania') }
+    } catch (ex) { setErr(errorMessage(ex, 'Błąd ładowania')) }
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
@@ -165,7 +148,7 @@ export default function WorkflowTemplates() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Szablony obiegu wniosków</div>
+          <h1 className="page-header__title">Szablony obiegu</h1>
           <div className="page-header__sub">
             Ułóż kroki obiegu w kolejności — połączenia tworzą się automatycznie
           </div>
@@ -204,9 +187,9 @@ function TemplateCard({ tpl, onEdit, onReload }) {
   let graph = null
   try { graph = JSON.parse(tpl.graph_json) } catch {}
   async function del() {
-    if (!await ask(`Usunąć szablon "${tpl.name}"?`)) return
+    if (!await ask(`Usunąć szablon "${tpl.name}"?`, { title: 'Potwierdź operację', confirmLabel: 'Usuń szablon', danger: true })) return
     try { await deleteWorkflowTemplate(tpl.id); onReload(); toast(`Usunięto szablon „${tpl.name}”`) }
-    catch (ex) { toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Błąd'), { tone: 'error' }) }
   }
   return (
     <section className="card" style={{ padding: '18px 20px', opacity: tpl.is_active ? 1 : 0.8 }}>
@@ -320,7 +303,7 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
     if (!meta.name.trim()) { setErr('Podaj nazwę szablonu'); return }
     if (middle.length === 0) { setErr('Dodaj przynajmniej jeden krok między zgłoszeniem a zakończeniem'); return }
     if (!middle.some(s => s.type === 'it_execute')) {
-      if (!await ask('Obieg nie ma kroku „Realizacja przez IT" — wniosek zakończy się bez realizacji technicznej. Zapisać mimo to?')) return
+      if (!await ask('Obieg nie ma kroku „Realizacja IT" — wniosek zakończy się bez realizacji technicznej. Zapisać mimo to?', { title: 'Brak kroku IT', confirmLabel: 'Zapisz mimo to' })) return
     }
     setSaving(true)
     try {
@@ -335,7 +318,7 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
       else await createWorkflowTemplate(payload)
       onSaved()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || ex.message || 'Błąd zapisu')
+      setErr(errorMessage(ex, 'Błąd zapisu'))
     } finally { setSaving(false) }
   }
 
@@ -347,9 +330,9 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">
+          <h1 className="page-header__title">
             {isEdit ? `Edycja: ${meta.name || 'szablon'}` : 'Nowy szablon obiegu'}
-          </div>
+          </h1>
           <div className="page-header__sub">
             Kroki wykonują się po kolei z góry na dół. Zgłoszenie i zakończenie są stałe.
           </div>
@@ -373,22 +356,22 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
       {/* Metadane */}
       <section aria-label="Dane szablonu" className="card" style={{ padding: '18px 20px', marginBottom: 18, display: 'grid',
                                      gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
-        <Field label="Nazwa *">
-          <input className="form-control" style={INP} value={meta.name}
+        <Field label="Nazwa" required>
+          <input className="form-control" style={{ minHeight: 44 }} value={meta.name}
                  onChange={e => setMeta(m => ({ ...m, name: e.target.value }))} />
         </Field>
         <Field label="Opis">
-          <input className="form-control" style={INP} value={meta.description}
+          <input className="form-control" style={{ minHeight: 44 }} value={meta.description}
                  onChange={e => setMeta(m => ({ ...m, description: e.target.value }))} />
         </Field>
-        <Field label="Stan">
-          <span className="form-check" style={{ minHeight: 44, fontSize: 14, fontWeight: 400, letterSpacing: 0,
-                                                 textTransform: 'none', color: 'var(--color-text)' }}>
+        <div className="form-group">
+          <span className="form-label">Stan</span>
+          <label className="form-check" style={{ minHeight: 44, fontSize: 14, color: 'var(--color-text)' }}>
             <input type="checkbox" checked={meta.is_active} style={{ width: 18, height: 18 }}
                    onChange={e => setMeta(m => ({ ...m, is_active: e.target.checked }))} />
             Aktywny — dostępny do wyboru
-          </span>
-        </Field>
+          </label>
+        </div>
       </section>
 
       {/* Lista kroków */}
@@ -433,7 +416,7 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
         <label style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, flex: '1 1 360px',
                         fontSize: 14, fontWeight: 700, color: 'var(--color-heading)' }}>
           Dodaj krok:
-          <select className="form-control" style={{ ...INP, flex: 1 }}
+          <select className="form-control" style={{ minHeight: 44, flex: 1 }}
                   value={addType} onChange={e => setAddType(e.target.value)}>
             {STEP_CATALOG.map(s => <option key={s.type} value={s.type}>{s.label}</option>)}
           </select>
@@ -507,14 +490,4 @@ function Arrow() {
   )
 }
 
-function Field({ label, children }) {
-  return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11, fontWeight: 700,
-                    letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--color-text-muted)' }}>
-      {label}
-      {children}
-    </label>
-  )
-}
 
-const INP = { minHeight: 44, fontSize: 14, fontWeight: 400, letterSpacing: 0, textTransform: 'none' }

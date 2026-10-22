@@ -1,17 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import Structure from './Structure'
 import { Users, RefreshCw, FilePlus, Search, ListChecks, Send, ChevronDown, ChevronRight } from 'lucide-react'
 import {
-  listMyWorkers, listSystems, listPermissions, createRequest, listRequestTypes,
+  listMyWorkers, listSystems, listPermissions, createRequest, listRequestTypes, errorMessage,
 } from '../api'
 import {
   permChangeState, changeStyle, ChangeBadge,
 } from '../components/PermissionChanges'
 import DeclarationModal from '../components/DeclarationModal'
 import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard, deptFull } from '../components/RequestView'
-import { toast } from '../components/ui/feedback'
-import { ReviewDialog, describeKeys } from '../components/ChangeSummary'
+import { toast, confirmDialog } from '../components/ui/feedback'
+import { ReviewDialog, describeKeys, diffSelection } from '../components/ChangeSummary'
 import CopyFromColleague, { buildCopiedSelection } from '../components/CopyFromColleague'
 import PermInput, {
   permInput, missingRequiredFields, splitAdminPerm, AdminPermRow,
@@ -33,7 +33,7 @@ export default function MyTeam() {
     <>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Moi pracownicy</div>
+          <h1 className="page-header__title">Moi pracownicy</h1>
           <div className="page-header__sub">{SUB[tab]}</div>
         </div>
         <button className="btn btn--ghost" onClick={onRefresh} disabled={loading}>
@@ -61,7 +61,10 @@ function WorkersTab({ renderHeader }) {
   const [loading, setLoading] = useState(true)
   const [err, setErr]         = useState(null)
   // ?q= — wejście z wyszukiwarki globalnej (Ctrl+K) od razu filtruje listę.
-  const [search, setSearch]   = useState(() => new URLSearchParams(window.location.search).get('q') || '')
+  const [params] = useSearchParams()
+  const [search, setSearch]   = useState(() => params.get('q') || '')
+  // Ponowne wyszukanie z Ctrl+K, gdy jesteśmy już na tej stronie.
+  useEffect(() => { const q = params.get('q'); if (q != null) setSearch(q) }, [params])
   const [requestFor, setRequestFor] = useState(null)
   const [expanded, setExpanded] = useState(() => new Set())
 
@@ -79,7 +82,7 @@ function WorkersTab({ renderHeader }) {
       const r = await listMyWorkers()
       setWorkers(r.data)
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się pobrać listy pracowników')
+      setErr(errorMessage(ex, 'Nie udało się pobrać listy pracowników'))
     } finally {
       setLoading(false)
     }
@@ -257,6 +260,10 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
   const [busy, setBusy]             = useState(false)
   const [err, setErr]               = useState(null)
   const [loading, setLoading]       = useState(true)
+  // Migawka zaznaczenia po załadowaniu — do ostrzeżenia o niezapisanych zmianach.
+  const initialSel = useRef(null)
+  const selKey = () => JSON.stringify([[...picked].sort(), fieldValues])
+  useEffect(() => { if (!loading) initialSel.current = selKey() }, [loading])  // eslint-disable-line
   const [requestTypeId, setRequestTypeId] = useState(null)
   // Oświadczenie wnioskującego (428-driven): treść + pozycje do ponowienia.
   const [declText, setDeclText] = useState('')
@@ -323,21 +330,10 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
     })()
   }, [w.unit_id])
 
-  // Stan docelowy → dyf względem tego, co pracownik ma obecnie.
-  const toGrant  = useMemo(() => [...picked].filter(k => !held.has(k)), [picked, held])
-  const toRevoke = useMemo(() => [...held].filter(k => !picked.has(k)), [picked, held])
-
-  // Posiadane pozycje, którym zmieniono ZAKRES (pola) — traktujemy jak ponowne
-  // nadanie z nowym zakresem, żeby dało się zmienić sam zakres.
-  const scopeChanged = useMemo(() => [...picked].filter(k => {
-    if (!held.has(k)) return false
-    const [sid, pid] = k.split(':').map(Number)
-    const p = (permsBySys[sid] || []).find(x => x.id === pid)
-    if (!p || (p.input_type || 'none') === 'none') return false
-    const now = (fieldValues[k] || {})[p.permission_name] || ''
-    const before = (heldValues[k] || {})[p.permission_name] || ''
-    return now !== before
-  }), [picked, held, permsBySys, fieldValues, heldValues])
+  // Stan docelowy → dyf względem tego, co pracownik ma obecnie (wspólny helper).
+  const { toGrant, toRevoke, scopeChanged } = useMemo(
+    () => diffSelection(picked, held, permsBySys, fieldValues, heldValues),
+    [picked, held, permsBySys, fieldValues, heldValues])
 
   const noChange = toGrant.length === 0 && toRevoke.length === 0 && scopeChanged.length === 0
 
@@ -389,7 +385,18 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
   // Wspólny język zmian (ten sam co u kierownika i w IT).
   const permState  = (key) => permChangeState(key, held, picked)
   const stateStyle = changeStyle
-  const StateBadge = ChangeBadge
+
+  // „Anuluj” / „Wróć” — pytamy tylko, gdy coś zmieniono względem stanu po załadowaniu.
+  async function guardedClose() {
+    const dirty = comment.trim() !== ''
+      || (initialSel.current != null && initialSel.current !== selKey())
+    if (dirty && !(await confirmDialog({
+      title: 'Porzucić zmiany?',
+      message: 'Zaznaczone uprawnienia i komentarz nie zostały wysłane i zostaną utracone.',
+      confirmLabel: 'Porzuć zmiany', danger: true,
+    }))) return
+    onClose()
+  }
 
   async function submit() {
     if (noChange) {
@@ -473,17 +480,17 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
         setBusy(false)
         return
       }
-      setErr((typeof det === 'string' ? det : det?.message) || 'Błąd składania wniosku')
+      setErr(errorMessage(ex, 'Nie udało się złożyć wniosku'))
       setBusy(false)
     }
   }
 
   // Kopiowanie uprawnień od współpracownika → nowy stan docelowy.
   function copyFrom(perms) {
-    const res = buildCopiedSelection(perms, systems, permsBySys)
+    const res = buildCopiedSelection(perms, permsBySys, picked, fieldValues)
     setPicked(res.keys)
-    setFieldValues(prev => ({ ...prev, ...res.values }))
-    return { count: res.keys.size, skippedAdmin: res.skippedAdmin, skippedUnavailable: res.skippedUnavailable }
+    setFieldValues(res.values)
+    return { count: res.added, skippedAdmin: res.skippedAdmin, skippedUnavailable: res.skippedUnavailable }
   }
 
   const _steps = buildWorkflowSteps({
@@ -504,12 +511,12 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
       statusText="Nowy wniosek · nie wysłany"
       title={`Wniosek o uprawnienia — ${w.full_name || w.username}`}
       subtitle="Zaznacz stan docelowy uprawnień — po wysłaniu wniosek trafi do kierownika nadrzędnego lub do IT."
-      backLabel="← Wróć do moich pracowników" onBack={onClose}
+      backLabel="← Wróć do moich pracowników" onBack={guardedClose}
       steps={_steps} summary={_summary} history={[]}
       footerLeft={<><strong style={{ color: 'var(--color-success-text)' }}>+{toGrant.length + scopeChanged.length}</strong> nadania
         {' · '}<strong style={{ color: 'var(--color-error-text)' }}>−{toRevoke.length}</strong> odebrania</>}
       footerActions={<>
-        <button className="btn btn--ghost" onClick={onClose} disabled={busy}>Anuluj</button>
+        <button className="btn btn--ghost" onClick={guardedClose} disabled={busy}>Anuluj</button>
         <button className="btn btn--success" onClick={submit} disabled={busy || loading || noChange}>
           <Send size={13} /> Sprawdź i wyślij
         </button>
@@ -571,13 +578,13 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
                             domyślne
                           </span>
                         )}
-                        <StateBadge st={permState(key)} />
+                        <ChangeBadge st={permState(key)} />
                       </>}
                     >
                       <AdminPermRow
                         perm={admin} checked={picked.has(adminKey)} indent={0}
                         onToggle={() => togglePerm(s.id, admin.id)}
-                        extra={<StateBadge st={permState(adminKey)} />}
+                        extra={<ChangeBadge st={permState(adminKey)} />}
                         disabled={!picked.has(key) && !(adminKey && picked.has(adminKey))}
                       />
                     </SystemBlock>
@@ -667,7 +674,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
                                 textDecoration: permState(key) === 'revoke' ? 'line-through' : 'none',
                                 color: permState(key) === 'revoke' ? 'var(--color-error-text)' : 'inherit',
                               }}>{p.permission_name}</span>
-                              <StateBadge st={permState(key)} />
+                              <ChangeBadge st={permState(key)} />
                               {p.is_active === false && (
                                 <span className="badge badge--warning" style={{ fontSize: 11 }}
                                       title="Pozycja wycofana w systemie źródłowym">
@@ -693,7 +700,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
                         <AdminPermRow
                           perm={admin} checked={picked.has(adminKey)} indent={0}
                           onToggle={() => togglePerm(s.id, admin.id)}
-                          extra={<StateBadge st={permState(adminKey)} />}
+                          extra={<ChangeBadge st={permState(adminKey)} />}
                           disabled={!(selHere > 0 || (gated && openSys.has(s.id)))
                                     && !(adminKey && picked.has(adminKey))}
                         />

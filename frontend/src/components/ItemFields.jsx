@@ -96,11 +96,11 @@ export function SystemBlock({
   // Akcent (v3.0, wg projektu): wewnętrzny pasek po lewej + kolor obramowania —
   // zielony dla nadania, czerwony dla odebrania, granatowy dla zaznaczonego programu.
   const accentStyle = accent === 'grant'
-    ? { borderColor: '#CFE3D0', boxShadow: 'inset 3px 0 0 var(--color-success)' }
+    ? { borderColor: 'var(--color-success)', boxShadow: 'inset 3px 0 0 var(--color-success)' }
     : accent === 'revoke'
-    ? { borderColor: '#E7A79F', boxShadow: 'inset 3px 0 0 var(--color-error)', background: 'var(--color-error-bg)' }
+    ? { borderColor: 'var(--color-error)', boxShadow: 'inset 3px 0 0 var(--color-error)', background: 'var(--color-error-bg)' }
     : (checked || indeterminate)
-    ? { boxShadow: 'inset 3px 0 0 var(--color-navy)' }
+    ? { boxShadow: 'inset 3px 0 0 var(--color-heading)' }
     : {}
 
   // Program z listą uprawnień NIE ma zbiorczego checkboxa — zaznaczanie jest
@@ -120,7 +120,7 @@ export function SystemBlock({
       }}>
         {showCheckbox && (
           <input ref={box} type="checkbox" checked={checked} onChange={onToggle}
-                 style={{ width: 18, height: 18, flexShrink: 0, accentColor: 'var(--color-navy)' }} />
+                 style={{ width: 18, height: 18, flexShrink: 0, accentColor: 'var(--color-heading)' }} />
         )}
         <span style={{ color: 'var(--color-text)' }}>{name}</span>
         <span style={{ flex: 1 }} />

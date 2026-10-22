@@ -2,31 +2,29 @@ import { useEffect, useRef, useState } from 'react'
 import { Wrench, RefreshCw, CheckCircle, Link2, UserPlus, Plus } from 'lucide-react'
 import {
   listRequests, workflowAction, linkRequestWorker, listItStaff, assignRequest,
-  listSystems, denyRequestItem, fulfillRequestItem, getRequest, getMe,
+  listSystems, denyRequestItem, fulfillRequestItem, getRequest, getMe, errorMessage,
 } from '../api'
-
-/** Kierownik IT = osoba mająca JEDNOCZEŚNIE rolę „manager" i „it_staff".
- *  TYLKO ona może przekazywać wnioski (admin/superadmin — nie).
- *  Może też zrealizować wniosek sama, bez przekazywania. */
-function useIsItManager() {
-  const raw = localStorage.getItem('szup_user')
-  const u = raw ? JSON.parse(raw) : null
-  const roles = Array.isArray(u?.roles) ? u.roles : (u?.role ? [u.role] : [])
-  return roles.includes('manager') && roles.includes('it_staff')
-}
 import { fmtDate, serverTs } from '../serverTime'
+import { getUserRoles } from '../roles'
+import Segmented from '../components/ui/Segmented'
 import RequestViewShell, {
-  buildWorkflowSteps, Section, WorkerCard, deptFull, KindBadge, perspectiveLabel, waitingText,
+  buildWorkflowSteps, Section, WorkerCard, deptFull, KindPill, perspectiveLabel, waitingText,
 } from '../components/RequestView'
 import PermissionChanges from '../components/PermissionChanges'
 import AddPermissionsPicker from '../components/AddPermissionsPicker'
 import { statusLabel, statusBadge, kindLabel, daysSince, waitText } from '../labels'
+
+/** Kierownik IT = osoba mająca JEDNOCZEŚNIE rolę „manager" i „it_staff".
+ *  TYLKO ona może przekazywać wnioski (admin/superadmin — nie).
+ *  Może też zrealizować wniosek sama, bez przekazywania. */
+function isItManager() {
+  const roles = getUserRoles()
+  return roles.includes('manager') && roles.includes('it_staff')
+}
 import { toast, confirmDialog } from '../components/ui/feedback'
 import {
   missingRequiredFields, adminGrantNames, confirmAdminRights, ADMIN_CONFIRM_ABORTED,
 } from '../components/ItemFields'
-
-const kindPill = (k) => <KindBadge kind={['revoke', 'change'].includes(k) ? k : 'grant'} label={kindLabel(k)} />
 
 // Lista realizacji IT (zakładka „Realizacja IT” strony Wnioski).
 export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged }) {
@@ -61,6 +59,9 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
         onOpenConsumed?.()
       }
       return r.data
+    } catch (ex) {
+      toast(errorMessage(ex, 'Nie udało się pobrać wniosków'), { tone: 'error' })
+      return []
     } finally { if (!silent) setLoading(false) }
   }
 
@@ -104,34 +105,21 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
 
   return (
     <>
-      {/* Filtr jako przełącznik segmentowy (wg projektu). */}
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-        <div role="group" aria-label="Filtr statusu" style={{ display: 'inline-flex', padding: 3, gap: 2, borderRadius: 8,
-                                                      background: 'var(--color-neutral-bg)' }}>
-          {[['pending_it','Do realizacji'],['all','Wszystkie']].map(([v,l]) => (
-            <button key={v} type="button" aria-pressed={filter===v} onClick={() => setFilter(v)}
-                    style={{
-                      minHeight: 36, padding: '0 14px', border: 0, borderRadius: 6, cursor: 'pointer',
-                      font: 'inherit', fontSize: 13, fontWeight: filter===v ? 700 : 600,
-                      background: filter===v ? 'var(--color-card)' : 'transparent',
-                      color: filter===v ? 'var(--color-heading)' : 'var(--color-text-muted)',
-                    }}>{l}</button>
-          ))}
-        </div>
+        <Segmented ariaLabel="Filtr statusu" value={filter} onChange={setFilter}
+                   options={[{ value: 'pending_it', label: 'Do realizacji' }, { value: 'all', label: 'Wszystkie' }]} />
         {filter === 'pending_it' && (
-          <div role="group" aria-label="Kto realizuje" style={{ display: 'inline-flex', padding: 3, gap: 2, borderRadius: 8,
-                                                        background: 'var(--color-neutral-bg)' }}>
-            {[['all','Wszystkie'],['mine','Moje'],['unassigned','Nieprzypisane']].map(([v,l]) => (
-              <button key={v} type="button" aria-pressed={who===v} onClick={() => setWho(v)}
-                      style={{
-                        minHeight: 36, padding: '0 14px', border: 0, borderRadius: 6, cursor: 'pointer',
-                        font: 'inherit', fontSize: 13, fontWeight: who===v ? 700 : 600,
-                        background: who===v ? 'var(--color-card)' : 'transparent',
-                        color: who===v ? 'var(--color-heading)' : 'var(--color-text-muted)',
-                      }}>{l} ({counts[v]})</button>
-            ))}
-          </div>
+          <Segmented ariaLabel="Kto realizuje" value={who} onChange={setWho}
+                     options={[
+                       { value: 'all',        label: 'Wszystkie',     count: counts.all },
+                       { value: 'mine',       label: 'Moje',          count: counts.mine },
+                       { value: 'unassigned', label: 'Nieprzypisane', count: counts.unassigned },
+                     ]} />
         )}
+        <button className="btn btn--ghost btn--sm" style={{ marginLeft: 'auto' }}
+                onClick={() => { load(); onChanged?.() }} disabled={loading}>
+          <RefreshCw size={14} aria-hidden="true" /> Odśwież
+        </button>
       </div>
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {loading ? <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Ładowanie…</div> : shown.length === 0 ? (
@@ -157,7 +145,7 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
                   <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
                   <td>
                     <div style={{ fontWeight: 700 }}>{r.worker_name}</div>
-                    {kindPill(r.kind)}
+                    <KindPill kind={r.kind} />
                   </td>
                   <td>{deptFull(r.department_name, r.department_description)}</td>
                   <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{r.unit_name || '—'}</td>
@@ -238,7 +226,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     get pending() { return this.total - this.done - this.denied },
   }
 
-  const isItManager = useIsItManager()
+  const isItManager = isItManager()
   const [comment, setComment]       = useState('')
   const [adUsername, setAdUsername] = useState(() => (needsAd ? _guessAdUsername(r) : ''))
   // Szkice odmów (otwarte pola komentarza): { [item_id]: komentarz }.
@@ -263,7 +251,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       setDenials(prev => { const n = { ...prev }; delete n[id]; return n })
       onRefresh?.()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się zapisać odmowy')
+      setErr(errorMessage(ex, 'Nie udało się zapisać odmowy'))
     } finally { setDenyBusy(null) }
   }
   async function removeDeny(id) {
@@ -274,7 +262,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       if (upd) setItems(prev => prev.map(it => (it.id === id ? { ...it, ...upd } : it)))
       onRefresh?.()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się cofnąć odmowy')
+      setErr(errorMessage(ex, 'Nie udało się cofnąć odmowy'))
     } finally { setDenyBusy(null) }
   }
   // Realizacja etapowa: odhaczenie / cofnięcie pojedynczej pozycji przez IT.
@@ -286,8 +274,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       if (upd) setItems(prev => prev.map(it => (it.id === id ? { ...it, ...upd } : it)))
       onRefresh?.()
     } catch (ex) {
-      setErr(ex.response?.data?.detail
-        || (done ? 'Nie udało się odhaczyć pozycji' : 'Nie udało się cofnąć realizacji'))
+      setErr(errorMessage(ex, done ? 'Nie udało się odhaczyć pozycji' : 'Nie udało się cofnąć realizacji'))
     } finally { setDenyBusy(null) }
   }
   const [busy, setBusy] = useState(false)
@@ -342,7 +329,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                      : `Wniosek #${r.id} jest teraz nieprzypisany.`)
       onDone()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się przekazać wniosku'); setBusy(false)
+      setErr(errorMessage(ex, 'Nie udało się przekazać wniosku')); setBusy(false)
     }
   }
 
@@ -401,7 +388,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       await workflowAction(r.id, extra)
       onDone({ realizedId: r.id })
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Błąd'); setBusy(false)
+      setErr(errorMessage(ex, 'Nie udało się potwierdzić realizacji')); setBusy(false)
       if (ex.response?.status === 409) onRefresh?.()
     }
   }
@@ -415,8 +402,23 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       toast(`Dowiązano konto ${u} do wniosku #${r.id}.`)
       onDone()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Błąd'); setBusy(false)
+      setErr(errorMessage(ex, 'Nie udało się dowiązać konta')); setBusy(false)
     }
+  }
+
+  // „Anuluj” / „Wróć” — decyzje „Zrobione/Odmów” zapisują się od razu; ostrzegamy
+  // tylko o tym, co jeszcze NIE trafiło do bazy (komentarz, szkice odmów,
+  // dołożone uprawnienia, wpisany login).
+  async function guardedClose() {
+    const dirty = comment.trim() !== '' || Object.keys(denials).length > 0 || addPicked.size > 0
+      || (needsAd && adUsername.trim() !== _guessAdUsername(r))
+    if (dirty && !(await confirmDialog({
+      title: 'Porzucić zmiany?',
+      message: 'Komentarz, rozpoczęte odmowy lub dołożone uprawnienia nie zostały zapisane i zostaną utracone. '
+        + 'Decyzje „Zrobione” i zapisane odmowy pozostają.',
+      confirmLabel: 'Porzuć zmiany', danger: true,
+    }))) return
+    onClose()
   }
 
   // v3.1 — skróty klawiaturowe realizacji: Z = zrobione, O = odmów,
@@ -500,7 +502,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       waiting={!canRealize ? waitingText(r) : null}
       statusText={`Wniosek #${r.id}${r.created_at ? ` · złożony ${fmtDate(r.created_at)}` : ''}`} title={title}
       subtitle="Wykonaj zmiany w systemach i oznacz każdą pozycję — decyzje zapisują się od razu."
-      backLabel="← Wróć do listy" onBack={onClose}
+      backLabel="← Wróć do listy" onBack={guardedClose}
       steps={_steps} summary={_summary} historyRequestId={r.id}
       historyCreatedBy={r.created_by_name}
       footerLeft={canRealize && grantProgress.total > 0
@@ -509,7 +511,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
             : 'Wszystkie pozycje mają decyzję')
         : null}
       footerActions={<>
-        <button className="btn btn--ghost" onClick={onClose} disabled={busy}>
+        <button className="btn btn--ghost" onClick={guardedClose} disabled={busy}>
           {canRealize || canLink ? 'Anuluj' : 'Zamknij'}
         </button>
         {canRealize && (

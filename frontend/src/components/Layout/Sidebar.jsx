@@ -52,9 +52,29 @@ const navSections = [
   },
 ]
 
+// Szuflada menu na wąskich ekranach (< 900 px): przycisk „Menu” w belce
+// i pasek komunikują się zdarzeniem `szup:nav` ({ open }).
+export function setNavOpen(open) {
+  window.dispatchEvent(new CustomEvent('szup:nav', { detail: { open } }))
+}
+
 export default function Sidebar() {
   const userRoles = getUserRoles()
   const { pathname } = useLocation()
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  useEffect(() => {
+    const onNav = (e) => setDrawerOpen(!!e.detail?.open)
+    window.addEventListener('szup:nav', onNav)
+    return () => window.removeEventListener('szup:nav', onNav)
+  }, [])
+  // Zamknij szufladę po przejściu na inny ekran i klawiszem Escape.
+  useEffect(() => { if (drawerOpen) setNavOpen(false) }, [pathname])
+  useEffect(() => {
+    if (!drawerOpen) return
+    const onKey = (e) => { if (e.key === 'Escape') setNavOpen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [drawerOpen])
   // Zwijana grupa: domyślnie zwinięta, rozwinięta gdy jesteśmy na jej ekranie.
   const [openOverride, setOpenOverride] = useState({})
   // Po przejściu na inny ekran zapominamy ręczne zwinięcie — sekcja z aktywną
@@ -62,7 +82,10 @@ export default function Sidebar() {
   useEffect(() => { setOpenOverride({}) }, [pathname])
 
   return (
-    <aside className="app-sidebar">
+    <>
+    <div className={`sidebar-overlay${drawerOpen ? ' is-open' : ''}`} aria-hidden="true"
+         onClick={() => setNavOpen(false)} />
+    <aside id="app-sidebar" className={`app-sidebar${drawerOpen ? ' is-open' : ''}`}>
       <NavLink to="/" className="sidebar-brand">
         <WodsLogo size={32} onNavy />
         <div className="sidebar-brand__text">
@@ -106,7 +129,8 @@ export default function Sidebar() {
         })}
       </nav>
 
-      <div className="sidebar-footer">v3.1 · NIS2/KSC</div>
+      <div className="sidebar-footer">v3.2 · NIS2/KSC</div>
     </aside>
+    </>
   )
 }

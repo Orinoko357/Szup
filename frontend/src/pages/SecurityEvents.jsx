@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, Check, RefreshCw } from 'lucide-react'
-import { listSecurityEvents, securityEventsSummary, resolveSecurityEvent } from '../api'
+import { Check, RefreshCw, Trash2 } from 'lucide-react'
+import { listSecurityEvents, securityEventsSummary, resolveSecurityEvent, deleteSecurityEvents, errorMessage } from '../api'
+import DeleteLogsModal from '../components/DeleteLogsModal'
 import { fmtDateTime } from '../serverTime'
 import { toast, promptDialog } from '../components/ui/feedback'
 import { SEVERITY_LABEL } from '../labels'
@@ -30,6 +31,7 @@ const TILE_VAL = { display: 'block', fontSize: 28, fontWeight: 800, color: 'var(
 export default function SecurityEvents() {
   const [rows, setRows] = useState([])
   const [sum, setSum] = useState(null)
+  const [showDelete, setShowDelete] = useState(false)
   const [onlyOpen, setOnlyOpen] = useState(true)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState(null)
@@ -43,7 +45,7 @@ export default function SecurityEvents() {
       setRows(a.data)
       setSum(s.data)
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Błąd odczytu')
+      setErr(errorMessage(ex, 'Błąd odczytu'))
     } finally {
       setLoading(false)
     }
@@ -58,14 +60,14 @@ export default function SecurityEvents() {
     })
     if (note === null) return   // Anuluj
     try { await resolveSecurityEvent(id, note); load(); toast('Zdarzenie oznaczone jako rozwiązane') }
-    catch (ex) { toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Błąd'), { tone: 'error' }) }
   }
 
   return (
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Zdarzenia bezpieczeństwa</div>
+          <h1 className="page-header__title">Bezpieczeństwo</h1>
           <div className="page-header__sub">
             Istotne zdarzenia wymagające reakcji (NIS2 / KSC). Po obsłużeniu zaznacz jako zakończone.
           </div>
@@ -103,7 +105,21 @@ export default function SecurityEvents() {
           <button className="btn btn--ghost btn--sm" onClick={load} disabled={loading}>
             <RefreshCw size={13} /> Odśwież
           </button>
+          <button className="btn btn--danger btn--sm" onClick={() => setShowDelete(true)}>
+            <Trash2 size={13} aria-hidden="true" /> Usuń zdarzenia…
+          </button>
         </div>
+        {showDelete && (
+          <DeleteLogsModal title="Usuń zdarzenia bezpieczeństwa" what="zdarzeń"
+            modes={[
+              { value: 'resolved', label: 'Tylko rozwiązane', hint: 'Otwarte zdarzenia zostają.' },
+              { value: 'before', label: 'Starsze niż wybrana data', needsDate: true },
+              { value: 'all', label: 'Wszystkie zdarzenia', hint: 'Także otwarte.' },
+            ]}
+            onDelete={({ mode, before, password }) => deleteSecurityEvents({
+              mode, password, before: before ? `${before}T00:00:00` : null })}
+            onClose={() => setShowDelete(false)} onDone={load} />
+        )}
         <div style={{ overflowX: 'auto' }}>
           <table className="data-table" style={{ minWidth: 1000 }}>
             <thead>

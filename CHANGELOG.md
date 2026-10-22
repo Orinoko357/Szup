@@ -6,6 +6,39 @@ Wersjonowanie: [Semantic Versioning](https://semver.org/lang/pl/).
 
 ## [Unreleased]
 
+## [3.2.0] — 2026-10-22
+
+Porządki po audycie 3.1 (spójność, logika, czystość) + nowe funkcje administratora.
+
+### Dodano
+- Usuwanie wpisów audit logu i zdarzeń bezpieczeństwa przez administratora
+  (wszystkie / starsze niż data / wg filtra / tylko rozwiązane), z potwierdzeniem
+  hasłem i „USUŃ”; ślad operacji zostaje w logu. Świadome odstępstwo od „append-only”.
+- „Przejdź” przy komórkach bez kierownika otwiera Jednostki z filtrem
+  `?filter=no_manager` (tylko komórki bez kierownika).
+- Menu w szufladzie na telefonie (poniżej 900 px), formularze w jednej kolumnie.
+- Ostrzeżenie „Porzucić zmiany?” przy wyjściu z niezapisanego wniosku/formularza.
+
+### Naprawiono
+- Przełożony / dyrektor jednostki może załadować uprawnienia pracownika podległej
+  komórki (wcześniej 403 blokowało wybór uprawnień).
+- „Do obsługi” ładuje tylko wnioski w toku (bez limitu 200 najnowszych); „Otwórz”
+  dociąga wniosek spoza listy; wyszukiwarka otwiera wniosek także na stronie „Wnioski”.
+- „Kopiuj od współpracownika” nie odbiera obecnych uprawnień i pomija wycofane.
+- Godziny w historii i przy pozycjach wniosku (UTC → czas lokalny).
+- E-maile wysyłane dopiero po zapisie zmian (nie przy wycofanej operacji);
+  powiadomienia etapów także do zastępców; adresat akceptacji wyższej spójny z „Czeka na”.
+- Twórca widzi swój wniosek także spoza zakresu kierowniczego.
+- Ustawienia: błąd wczytania blokuje zapis (nie nadpisze konfiguracji wartościami domyślnymi).
+- Tryb ciemny: odznaki rodzaju wniosku, etapy obiegu, pozostałe twarde kolory.
+- Lista kontrolna: rzetelniejsze sprawdzenia i szybsze zapytania.
+
+### Zmieniono
+- Wspólne komponenty: przełącznik filtrów, okno dialogowe, pole formularza,
+  potwierdzenia i komunikaty błędów (błędy walidacji czytelne zamiast „[object Object]”).
+- Tytuły stron zgodne z menu, jeden słownik ról, etykiety pól powiązane z polami.
+- Usunięty martwy kod i nieużywane style; zależność `reactflow`.
+
 ## [3.1.0] — 2026-10-22
 
 Intuicyjność wg analizy UX: prowadzenie od zadania, jeden język, mniej zgadywania.

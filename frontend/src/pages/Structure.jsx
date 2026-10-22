@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import {
-  Network, RefreshCw, ChevronRight, ChevronDown,
+  Network, ChevronRight, ChevronDown,
   Building2, User, ShieldCheck, Users, Crown,
 } from 'lucide-react'
-import { getMySubtree } from '../api'
+import { getMySubtree, errorMessage } from '../api'
 import { fmtDate } from '../serverTime'
 import { KindBadge, kindMeta } from './Units'
 
+// Zakładka „Struktura” strony „Moi pracownicy” — nagłówek i zakładki dostarcza
+// strona-rodzic przez `renderHeader(onRefresh, loading)` (wymagane).
 export default function Structure({ renderHeader }) {
   const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(true)
@@ -18,7 +20,7 @@ export default function Structure({ renderHeader }) {
       const r = await getMySubtree()
       setData(r.data)
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się pobrać struktury')
+      setErr(errorMessage(ex, 'Nie udało się pobrać struktury'))
     } finally {
       setLoading(false)
     }
@@ -29,20 +31,7 @@ export default function Structure({ renderHeader }) {
 
   return (
     <div>
-      {renderHeader ? renderHeader(load, loading) : (
-      <div className="page-header">
-        <div>
-          <div className="page-header__title">Moja struktura</div>
-          <div className="page-header__sub">
-            Podgląd wydziałów podrzędnych, ich kierowników i pracowników wraz
-            z nadanymi uprawnieniami
-          </div>
-        </div>
-        <button className="btn btn--ghost btn--sm" onClick={load} disabled={loading}>
-          <RefreshCw size={14} /> Odśwież
-        </button>
-      </div>
-      )}
+      {renderHeader(load, loading)}
 
       {err && <div className="alert alert--error mb-4">{err}</div>}
 

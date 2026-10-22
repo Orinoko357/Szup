@@ -26,6 +26,7 @@ import { getAuthStatus } from './api'
 import useIdleLogout from './hooks/useIdleLogout'
 import { ChangePasswordModal } from './components/Layout/Header'
 import { syncServerTime } from './serverTime'
+import { getCurrentUser, getUserRoles } from './roles'
 
 function DarkModeToggle() {
   const [dark, setDark] = useState(() => {
@@ -49,8 +50,9 @@ function DarkModeToggle() {
 }
 
 // v3.0 — stare adresy (zakładki w przeglądarce, linki z e-maili) prowadzą
-// do nowych miejsc: „Wnioski” i „Do realizacji” są jedną stroną /requests,
-// „Moja struktura” to zakładka „Moich pracowników”.
+// do nowych miejsc: dawne „Wnioski” kierownika i kolejka IT są jedną stroną
+// /requests, „Moja struktura” to zakładka „Moich pracowników”.
+// Przekierowania trzymać do v4.0 (stare linki w skrzynkach użytkowników).
 function LegacyRedirect({ to }) {
   const { search } = useLocation()
   const tab = new URLSearchParams(search).get('tab')
@@ -129,10 +131,7 @@ function AuthGate() {
     )
   }
 
-  const userRaw = localStorage.getItem('szup_user')
-  const mustChangePw = (() => {
-    try { return !!JSON.parse(userRaw || '{}').must_change_password } catch { return false }
-  })()
+  const mustChangePw = !!getCurrentUser().must_change_password
 
   if (mustChangePw) {
     return (
@@ -154,12 +153,7 @@ function AuthGate() {
     )
   }
 
-  const roles = (() => {
-    try {
-      const u = JSON.parse(userRaw || '{}')
-      return Array.isArray(u.roles) ? u.roles : (u.role ? [u.role] : [])
-    } catch { return [] }
-  })()
+  const roles = getUserRoles()
 
   // Rozdział ról (Wariant A — czysty rozdział obowiązków):
   //  administrator KONFIGURUJE system, pracownik IT REALIZUJE wnioski.

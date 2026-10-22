@@ -7,6 +7,29 @@ import { Check, X } from 'lucide-react'
  * Używany w kroku wyboru u kierownika i we wniosku z „Moich pracowników”.
  */
 
+/**
+ * Dyf stanu docelowego względem tego, co pracownik ma obecnie (wspólny dla
+ * kroku wyboru u kierownika i wniosku z „Moich pracowników”):
+ *   toGrant      — zaznaczone, a nieposiadane
+ *   toRevoke     — posiadane, a odznaczone
+ *   scopeChanged — posiadane, którym zmieniono wartość pola (zakres) — idą
+ *                  jako ponowne nadanie z nową wartością
+ */
+export function diffSelection(picked, held, permsBySys = {}, fieldValues = {}, heldValues = {}) {
+  const toGrant  = [...picked].filter(k => !held.has(k))
+  const toRevoke = [...held].filter(k => !picked.has(k))
+  const scopeChanged = [...picked].filter(k => {
+    if (!held.has(k)) return false
+    const [sid, pid] = k.split(':').map(Number)
+    const p = (permsBySys[sid] || []).find(x => x.id === pid)
+    if (!p || (p.input_type || 'none') === 'none') return false
+    const now = (fieldValues[k] || {})[p.permission_name] || ''
+    const before = (heldValues[k] || {})[p.permission_name] || ''
+    return now !== before
+  })
+  return { toGrant, toRevoke, scopeChanged }
+}
+
 /** Klucze "system_id:permission_id" → wiersze do podsumowania. */
 export function describeKeys(keys, systems, permsBySys, fieldValues = {}) {
   const sysById = new Map((systems || []).map(s => [s.id, s]))

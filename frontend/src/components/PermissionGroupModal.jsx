@@ -1,6 +1,9 @@
 import { useState } from 'react'
-import { X, Check, Plus, Trash2, ClipboardPaste, ListPlus } from 'lucide-react'
-import { commitPermissionImport } from '../api'
+import { X, Check, Plus, Trash2, ClipboardPaste } from 'lucide-react'
+import { commitPermissionImport , errorMessage} from '../api'
+
+// Okno dialogowe dostaje fokus po otwarciu (Escape i czytniki ekranu działają od razu).
+const focusDialog = el => { if (el && !el.contains(document.activeElement)) el.focus() }
 
 /**
  * Ręczne założenie GRUPY uprawnień — bliźniacze do importu z pliku, tylko bez
@@ -65,15 +68,16 @@ export default function PermissionGroupModal({ system, existingGroups = [], onCl
       })
       onDone()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udało się zapisać grupy')
+      setErr(errorMessage(ex, 'Nie udało się zapisać grupy'))
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 760, width: '92vw' }}>
+    <div className="modal-overlay" role="presentation" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Okno dialogowe" tabIndex={-1} ref={focusDialog}
+           onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }} style={{ maxWidth: 760, width: '92vw' }}>
         <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-heading)', padding: '12px 12px 12px 20px', gap: 12 }}>
           <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
             {isExisting ? 'Dopisz do grupy' : 'Nowa grupa uprawnień'} — {system.name}
@@ -90,7 +94,7 @@ export default function PermissionGroupModal({ system, existingGroups = [], onCl
 
           <div className="form-group">
             <label className="form-label">Nazwa grupy *</label>
-            <input className="form-control" style={{ maxWidth: 460 }} autoFocus
+            <input aria-label="Nazwa grupy" className="form-control" style={{ maxWidth: 460 }} autoFocus
                    list="szup-existing-groups"
                    value={group} onChange={e => setGroup(e.target.value)}
                    placeholder="np. Rejestry księgowe, Moduły, Oddziały" />
@@ -110,6 +114,7 @@ export default function PermissionGroupModal({ system, existingGroups = [], onCl
           </div>
 
           <div className="form-label" style={{ marginTop: 12 }}>Uprawnienia w grupie</div>
+          <div style={{ overflowX: 'auto' }}>
           <table className="data-table" style={{ marginBottom: 8 }}>
             <thead>
               <tr>
@@ -142,6 +147,7 @@ export default function PermissionGroupModal({ system, existingGroups = [], onCl
               ))}
             </tbody>
           </table>
+          </div>
           <button className="btn btn--ghost btn--sm" onClick={addRow}>
             <Plus size={13} /> Dodaj wiersz
           </button>

@@ -6,18 +6,10 @@ import {
   getAppSettings, updateAppSettings, factoryReset,
   listNotificationTemplates, saveNotificationTemplate,
   resetNotificationTemplate, testNotificationTemplate,
-} from '../api'
-import { toast, confirmDialog } from '../components/ui/feedback'
+ errorMessage} from '../api'
+import { toast, ask } from '../components/ui/feedback'
+import { getUserRoles } from '../roles'
 
-// Potwierdzenie w oknie aplikacji (zamiast systemowego confirm). Operacje
-// usuwające / odbierające / nieodwracalne oznaczamy na czerwono.
-const ask = (message) => {
-  const danger = /usun|odebra|wygas|ostrze|nieodwracal/i.test(message)
-  return confirmDialog({
-    title: danger ? 'Potwierdź operację' : 'Potwierdź',
-    message, danger, confirmLabel: danger ? 'Tak, wykonaj' : 'Potwierdź',
-  })
-}
 
 // v3.0 — sekcja ustawień jako karta z nagłówkiem-przyciskiem (ikona w kafelku,
 // tytuł z odznaką stanu, opis pod spodem, strzałka). `danger` = strefa niebezpieczna.
@@ -43,14 +35,14 @@ function Accordion({ icon: Icon, title, sub, badge, defaultOpen = false, danger 
           <span aria-hidden="true" style={{
             width: 34, height: 34, flexShrink: 0, borderRadius: 8, display: 'grid', placeItems: 'center',
             background: danger ? 'var(--color-error-bg)' : 'var(--bg-secondary)',
-            color: danger ? 'var(--color-error-text)' : 'var(--color-navy)',
+            color: danger ? 'var(--color-error-text)' : 'var(--color-heading)',
           }}>
             <Icon size={17} />
           </span>
         )}
         <span style={{ flex: 1, minWidth: 0 }}>
           <span style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            <strong style={{ fontSize: 16, color: danger ? 'var(--color-error-text)' : 'var(--color-navy)' }}>{title}</strong>
+            <strong style={{ fontSize: 16, color: danger ? 'var(--color-error-text)' : 'var(--color-heading)' }}>{title}</strong>
             {tone && (
               <span style={{ padding: '1px 8px', borderRadius: 10, fontSize: 11, fontWeight: 800,
                              background: tone[0], color: tone[1] }}>{badge}</span>
@@ -70,41 +62,36 @@ function Accordion({ icon: Icon, title, sub, badge, defaultOpen = false, danger 
 export default function Settings() {
   const [email, setEmail] = useState(null)
   const [emailSaving, setEmailSaving] = useState(false)
-  const [emailSaved, setEmailSaved] = useState(false)
   const [emailTestResult, setEmailTestResult] = useState(null)
   const [emailTesting, setEmailTesting] = useState(false)
 
   const [ldap, setLdap] = useState(null)
   const [ldapBindPassword, setLdapBindPassword] = useState('')
   const [ldapSaving, setLdapSaving] = useState(false)
-  const [ldapSaved, setLdapSaved] = useState(false)
   const [ldapTestResult, setLdapTestResult] = useState(null)
   const [ldapTesting, setLdapTesting] = useState(false)
 
   const [app, setApp] = useState(null)
   const [appSaving, setAppSaving] = useState(false)
-  const [appSaved, setAppSaved] = useState(false)
   const [helpdesk, setHelpdesk] = useState('')
   const [declText, setDeclText] = useState('')
   const [declIsDefault, setDeclIsDefault] = useState(true)
   const [declSaving, setDeclSaving] = useState(false)
-  const [declSaved, setDeclSaved] = useState(false)
   const [snap, setSnap] = useState({ enabled: true, hour: 23, minute: 50, envDisabled: false })
   const [snapSaving, setSnapSaving] = useState(false)
-  const [snapSaved, setSnapSaved] = useState(false)
 
   // Reset fabryczny widoczny WYŁĄCZNIE dla superadmina (backend i tak egzekwuje).
-  const isSuperadmin = (() => {
-    try {
-      const u = JSON.parse(localStorage.getItem('szup_user') || '{}')
-      const roles = Array.isArray(u.roles) ? u.roles : (u.role ? [u.role] : [])
-      return roles.includes('superadmin')
-    } catch { return false }
-  })()
+  const isSuperadmin = getUserRoles().includes('superadmin')
 
-  useEffect(() => {
-    getEmailSettings().then(r => setEmail({ ...r.data, smtp_password: '' })).catch(() => {})
-    getLdapSettings().then(r => setLdap(r.data)).catch(() => {})
+  // Błąd wczytania sekcji jest widoczny, a jej formularz się nie pokazuje —
+  // nie da się więc zapisać wartości domyślnych na prawdziwą konfigurację.
+  const [loadErr, setLoadErr] = useState({})
+  const failLoad = (key) => (ex) =>
+    setLoadErr(e => ({ ...e, [key]: errorMessage(ex, 'Nie udało się wczytać ustawień.') }))
+  function loadAll() {
+    setLoadErr({})
+    getEmailSettings().then(r => setEmail({ ...r.data, smtp_password: '' })).catch(failLoad('email'))
+    getLdapSettings().then(r => setLdap(r.data)).catch(failLoad('ldap'))
     getAppSettings().then(r => {
       setApp(r.data)
       setHelpdesk(r.data.helpdesk_email || '')
@@ -116,11 +103,18 @@ export default function Settings() {
         minute: r.data.snapshot_minute ?? 50,
         envDisabled: !!r.data.snapshot_env_disabled,
       })
-    }).catch(() => {})
-  }, [])
+    }).catch(failLoad('app'))
+  }
+  useEffect(() => { loadAll() }, [])
+  const loadError = (k) => loadErr[k] ? (
+    <div className="alert alert--error" role="alert" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
+      <span style={{ flex: 1 }}>{loadErr[k]} Zapis tej sekcji jest zablokowany do czasu wczytania danych.</span>
+      <button type="button" className="btn btn--ghost btn--sm" onClick={loadAll}>Spróbuj ponownie</button>
+    </div>
+  ) : null
 
   async function saveSnapshotSchedule() {
-    setSnapSaving(true); setSnapSaved(false)
+    setSnapSaving(true)
     try {
       const r = await updateAppSettings({
         test_mode: !!app?.test_mode,
@@ -136,15 +130,14 @@ export default function Settings() {
         hour: r.data.snapshot_hour ?? 23,
         minute: r.data.snapshot_minute ?? 50,
       }))
-      setSnapSaved(true)
-      setTimeout(() => setSnapSaved(false), 3000)
+      toast('Zapisano harmonogram migawek')
     } catch (ex) {
-      toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' })
+      toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' })
     } finally { setSnapSaving(false) }
   }
 
   async function saveDeclaration() {
-    setDeclSaving(true); setDeclSaved(false)
+    setDeclSaving(true)
     try {
       const r = await updateAppSettings({
         test_mode: !!app?.test_mode,
@@ -154,10 +147,9 @@ export default function Settings() {
       setApp(r.data)
       setDeclText(r.data.declaration_text || '')
       setDeclIsDefault(!!r.data.declaration_is_default)
-      setDeclSaved(true)
-      setTimeout(() => setDeclSaved(false), 3000)
+      toast('Zapisano treść oświadczenia')
     } catch (ex) {
-      toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' })
+      toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' })
     } finally { setDeclSaving(false) }
   }
 
@@ -167,11 +159,12 @@ export default function Settings() {
         'UWAGA: Tryb testowy pozwala zalogować się DOWOLNEMU użytkownikowi bez podania hasła.\n\n' +
         'To jest WYŁĄCZNIE do testów przepływu wniosków na środowisku nieprodukcyjnym.\n' +
         'Każde takie logowanie jest rejestrowane jako security event.\n\n' +
-        'Czy na pewno włączyć tryb testowy?'
+        'Czy na pewno włączyć tryb testowy?',
+        { title: 'Włączyć tryb testowy?', confirmLabel: 'Włącz tryb testowy', danger: true }
       )
       if (!ok) return
     }
-    setAppSaving(true); setAppSaved(false)
+    setAppSaving(true)
     try {
       // PUT zastępuje cały rekord — przekazujemy też adres helpdesku,
       // żeby przełącznik trybu testowego go nie skasował.
@@ -180,15 +173,14 @@ export default function Settings() {
         helpdesk_email: app?.helpdesk_email || null,
       })
       setApp(r.data)
-      setAppSaved(true)
-      setTimeout(() => setAppSaved(false), 3000)
+      toast(enabled ? 'Tryb testowy włączony' : 'Tryb testowy wyłączony', { tone: enabled ? 'warning' : 'success' })
     } catch (ex) {
-      toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' })
+      toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' })
     } finally { setAppSaving(false) }
   }
 
   async function saveHelpdesk() {
-    setAppSaving(true); setAppSaved(false)
+    setAppSaving(true)
     try {
       const r = await updateAppSettings({
         test_mode: !!app?.test_mode,
@@ -196,23 +188,21 @@ export default function Settings() {
       })
       setApp(r.data)
       setHelpdesk(r.data.helpdesk_email || '')
-      setAppSaved(true)
-      setTimeout(() => setAppSaved(false), 3000)
+      toast('Zapisano adres helpdesku')
     } catch (ex) {
-      toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' })
+      toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' })
     } finally { setAppSaving(false) }
   }
 
   async function saveEmail(e) {
     e.preventDefault()
-    setEmailSaving(true); setEmailSaved(false); setEmailTestResult(null)
+    setEmailSaving(true); setEmailTestResult(null)
     try {
       const data = { ...email }
       if (!data.smtp_password) delete data.smtp_password
       await updateEmailSettings(data)
-      setEmailSaved(true)
-      setTimeout(() => setEmailSaved(false), 3000)
-    } catch (ex) { toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' }) }
+      toast('Zapisano ustawienia e-mail')
+    } catch (ex) { toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' }) }
     finally { setEmailSaving(false) }
   }
 
@@ -229,25 +219,25 @@ export default function Settings() {
           : (r.data?.error || ''),
       })
     } catch (ex) {
-      setEmailTestResult({ success: false, message: ex.response?.data?.detail || 'Błąd wysyłki' })
+      setEmailTestResult({ success: false, message: errorMessage(ex, 'Błąd wysyłki') })
     } finally { setEmailTesting(false) }
   }
 
   async function saveLdap(e) {
     e.preventDefault()
-    setLdapSaving(true); setLdapSaved(false); setLdapTestResult(null)
+    setLdapSaving(true); setLdapTestResult(null)
     try {
       await updateLdapSettings({ ...ldap, bind_password: ldapBindPassword || null })
-      setLdapBindPassword(''); setLdapSaved(true)
-      setTimeout(() => setLdapSaved(false), 3000)
-    } catch (ex) { toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' }) }
+      setLdapBindPassword('')
+      toast('Zapisano ustawienia AD/LDAP')
+    } catch (ex) { toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' }) }
     finally { setLdapSaving(false) }
   }
 
   async function handleTestLdap() {
     setLdapTesting(true); setLdapTestResult(null)
     try { const r = await testLdap(); setLdapTestResult(r.data) }
-    catch (ex) { setLdapTestResult({ success: false, message: ex.response?.data?.detail || 'Błąd połączenia' }) }
+    catch (ex) { setLdapTestResult({ success: false, message: errorMessage(ex, 'Błąd połączenia') }) }
     finally { setLdapTesting(false) }
   }
 
@@ -258,13 +248,14 @@ export default function Settings() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Ustawienia</div>
+          <h1 className="page-header__title">Ustawienia</h1>
           <div className="page-header__sub">Konfiguracja powiadomień e-mail i integracji AD/LDAP</div>
         </div>
       </div>
 
       <Accordion icon={Mail} title="Powiadomienia e-mail" sub="Powiadomienia o wnioskach dla pracowników i kierowników"
                  badge={email?.enabled ? 'ON' : 'OFF'} defaultOpen>
+        {loadError('email')}
         {email && (
           <form onSubmit={saveEmail}>
             <label className="form-check" style={{ marginBottom: 16 }}>
@@ -275,26 +266,26 @@ export default function Settings() {
             <div className="form-row">
               <div className="form-group">
                 <label className="form-label">Serwer SMTP</label>
-                <input className="form-control" value={email.smtp_host || ''}
+                <input aria-label="Serwer SMTP" className="form-control" value={email.smtp_host || ''}
                        onChange={e => setE('smtp_host', e.target.value)} placeholder="smtp.firma.local" />
               </div>
               <div className="form-group">
                 <label className="form-label">Port SMTP</label>
-                <input className="form-control" type="number" value={email.smtp_port || 587}
+                <input aria-label="Port SMTP" className="form-control" type="number" value={email.smtp_port || 587}
                        onChange={e => setE('smtp_port', parseInt(e.target.value))} />
               </div>
             </div>
             <div className="form-row">
               <div className="form-group">
                 <label className="form-label">Użytkownik SMTP</label>
-                <input className="form-control" value={email.smtp_user || ''}
+                <input aria-label="Użytkownik SMTP" className="form-control" value={email.smtp_user || ''}
                        onChange={e => setE('smtp_user', e.target.value)} />
               </div>
               <div className="form-group">
                 <label className="form-label">
                   Hasło SMTP {email.has_password && <span className="badge badge--neutral" style={{ fontSize: 10, marginLeft: 6 }}>Ustawione</span>}
                 </label>
-                <input className="form-control" type="password" value={email.smtp_password || ''}
+                <input aria-label="Hasło SMTP" className="form-control" type="password" value={email.smtp_password || ''}
                        onChange={e => setE('smtp_password', e.target.value)}
                        placeholder={email.has_password ? 'Pozostaw puste, by nie zmieniać' : ''}
                        autoComplete="new-password" />
@@ -303,13 +294,13 @@ export default function Settings() {
             <div className="form-row">
               <div className="form-group">
                 <label className="form-label">Nadawca (From)</label>
-                <input className="form-control" type="email" value={email.from_address || ''}
+                <input aria-label="Nadawca (From)" className="form-control" type="email" value={email.from_address || ''}
                        onChange={e => setE('from_address', e.target.value)}
                        placeholder="szup@firma.local" />
               </div>
               <div className="form-group">
                 <label className="form-label">Domyślny odbiorca CC (opcjonalny)</label>
-                <input className="form-control" type="email" value={email.to_address || ''}
+                <input aria-label="Domyślny odbiorca CC (opcjonalny)" className="form-control" type="email" value={email.to_address || ''}
                        onChange={e => setE('to_address', e.target.value)}
                        placeholder="it@firma.local" />
               </div>
@@ -330,16 +321,11 @@ export default function Settings() {
               Wysyłką technicznie zajmuje się serwer aplikacji. Wyłącz, jeśli serwer SMTP
               odrzuca wiadomości z cudzym adresem nadawcy.
             </div>
-            {emailSaved && (
-              <div className="alert" style={{ background: 'var(--color-success-bg)', borderLeft: '4px solid var(--color-success)', color: '#1a7a45', marginBottom: 12 }}>
-                Ustawienia e-mail zapisane.
-              </div>
-            )}
             {emailTestResult && (
               <div className="alert" style={{
                 borderLeft: `4px solid ${emailTestResult.success ? 'var(--color-success)' : 'var(--color-error)'}`,
                 background: emailTestResult.success ? 'var(--color-success-bg)' : 'var(--color-error-bg)',
-                color: emailTestResult.success ? '#1a7a45' : 'var(--color-error)',
+                color: emailTestResult.success ? 'var(--color-success-text)' : 'var(--color-error)',
                 marginBottom: 12,
               }}>
                 {emailTestResult.success
@@ -361,6 +347,7 @@ export default function Settings() {
 
       <Accordion icon={Mail} title="Powiadomienia obiegu"
                  sub="Skrzynka helpdesku IT — zgłoszenia wniosków do realizacji">
+        {loadError('app')}
         {app && (
           <div>
             <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 10 }}>
@@ -370,7 +357,7 @@ export default function Settings() {
             </div>
             <div className="form-group">
               <label className="form-label">Adres e-mail helpdesku IT</label>
-              <input
+              <input aria-label="Adres e-mail helpdesku IT"
                 className="form-control"
                 type="email"
                 placeholder={app.helpdesk_email_effective || 'helpdesk@…'}
@@ -384,14 +371,6 @@ export default function Settings() {
                 )}.
               </div>
             </div>
-            {appSaved && (
-              <div className="alert" style={{
-                background: 'var(--color-success-bg)', borderLeft: '4px solid var(--color-success)',
-                color: '#1a7a45', marginBottom: 12,
-              }}>
-                Ustawienia zapisane.
-              </div>
-            )}
             <button className="btn btn--primary" onClick={saveHelpdesk} disabled={appSaving}>
               {appSaving ? 'Zapisywanie…' : 'Zapisz adres helpdesku'}
             </button>
@@ -407,6 +386,7 @@ export default function Settings() {
       <Accordion icon={FileText} title="Oświadczenie wnioskującego"
                  sub="Treść podpisywana przy kierowaniu wniosku do realizacji IT"
                  badge={declIsDefault ? 'domyślne' : 'własne'}>
+        {loadError('app')}
         {app && (
           <div>
             <div className="alert alert--info" style={{ fontSize: 12.5, marginBottom: 12 }}>
@@ -416,7 +396,7 @@ export default function Settings() {
             </div>
             <div className="form-group">
               <label className="form-label">Treść oświadczenia</label>
-              <textarea className="form-control"
+              <textarea aria-label="Treść oświadczenia" className="form-control"
                         style={{ minHeight: 320, fontSize: 13, lineHeight: 1.5,
                                  fontFamily: 'inherit' }}
                         value={declText}
@@ -427,7 +407,6 @@ export default function Settings() {
                   : 'Obecnie używana jest treść własna.'}
               </div>
             </div>
-            {declSaved && <div className="alert alert--success" style={{ fontSize: 12 }}>Zapisano.</div>}
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn btn--primary" onClick={saveDeclaration} disabled={declSaving}>
                 {declSaving ? 'Zapisywanie…' : 'Zapisz treść oświadczenia'}
@@ -446,6 +425,7 @@ export default function Settings() {
       <Accordion icon={Camera} title="Migawki uprawnień (harmonogram)"
                  sub="Nocne zestawienie „kto co ma” — pora i włącznik"
                  badge={snap.envDisabled ? 'ENV OFF' : (snap.enabled ? `${String(snap.hour).padStart(2,'0')}:${String(snap.minute).padStart(2,'0')}` : 'OFF')}>
+        {loadError('app')}
         {app && (
           <div>
             {snap.envDisabled && (
@@ -468,13 +448,13 @@ export default function Settings() {
             <div className="form-row" style={{ maxWidth: 320 }}>
               <div className="form-group">
                 <label className="form-label">Godzina</label>
-                <input className="form-control" type="number" min={0} max={23}
+                <input aria-label="Godzina" className="form-control" type="number" min={0} max={23}
                        value={snap.hour} disabled={!snap.enabled}
                        onChange={e => setSnap(s => ({ ...s, hour: e.target.value }))} />
               </div>
               <div className="form-group">
                 <label className="form-label">Minuta</label>
-                <input className="form-control" type="number" min={0} max={59}
+                <input aria-label="Minuta" className="form-control" type="number" min={0} max={59}
                        value={snap.minute} disabled={!snap.enabled}
                        onChange={e => setSnap(s => ({ ...s, minute: e.target.value }))} />
               </div>
@@ -482,7 +462,6 @@ export default function Settings() {
             <div style={{ fontSize: 11, color: 'var(--color-text-muted)', margin: '2px 0 12px' }}>
               Czas lokalny serwera. Migawka dotyczy dnia jej wykonania.
             </div>
-            {snapSaved && <div className="alert alert--success" style={{ fontSize: 12 }}>Zapisano.</div>}
             <button className="btn btn--primary" onClick={saveSnapshotSchedule} disabled={snapSaving}>
               {snapSaving ? 'Zapisywanie…' : 'Zapisz harmonogram'}
             </button>
@@ -492,6 +471,7 @@ export default function Settings() {
 
       <Accordion icon={AlertTriangle} title="Tryb testowy" sub="Logowanie samym loginem (bez hasła) — tylko do testów"
                  badge={app?.test_mode ? 'ON' : 'OFF'}>
+        {loadError('app')}
         {app && (
           <div>
             <div className="alert" style={{
@@ -515,20 +495,13 @@ export default function Settings() {
               />
               Włącz tryb testowy (logowanie samym loginem)
             </label>
-            {appSaved && (
-              <div className="alert" style={{
-                background: 'var(--color-success-bg)', borderLeft: '4px solid var(--color-success)',
-                color: '#1a7a45', marginBottom: 0,
-              }}>
-                Ustawienie zapisane.
-              </div>
-            )}
           </div>
         )}
       </Accordion>
 
       <Accordion icon={ShieldCheck} title="Active Directory / LDAP" sub="Logowanie przez konto domenowe"
                  badge={ldap?.enabled ? 'ON' : 'OFF'}>
+        {loadError('ldap')}
         {ldap && (
           <form onSubmit={saveLdap}>
             <label className="form-check" style={{ marginBottom: 16 }}>
@@ -539,13 +512,13 @@ export default function Settings() {
             <div className="form-row">
               <div className="form-group">
                 <label className="form-label">Serwer LDAP / AD</label>
-                <input className="form-control" value={ldap.host || ''}
+                <input aria-label="Serwer LDAP / AD" className="form-control" value={ldap.host || ''}
                        onChange={e => setL('host', e.target.value)}
                        placeholder="192.168.1.10 lub dc.firma.local" />
               </div>
               <div className="form-group">
                 <label className="form-label">Port</label>
-                <input className="form-control" type="number" value={ldap.port || 389}
+                <input aria-label="Port" className="form-control" type="number" value={ldap.port || 389}
                        onChange={e => setL('port', parseInt(e.target.value))} />
               </div>
             </div>
@@ -556,14 +529,14 @@ export default function Settings() {
             </label>
             <div className="form-group">
               <label className="form-label">Kontener bazowy (Base DN)</label>
-              <input className="form-control" value={ldap.base_dn || ''}
+              <input aria-label="Kontener bazowy (Base DN)" className="form-control" value={ldap.base_dn || ''}
                      onChange={e => setL('base_dn', e.target.value)}
                      placeholder="DC=firma,DC=local" />
             </div>
             <div className="form-row">
               <div className="form-group">
                 <label className="form-label">Konto usługowe (Bind DN)</label>
-                <input className="form-control" value={ldap.bind_dn || ''}
+                <input aria-label="Konto usługowe (Bind DN)" className="form-control" value={ldap.bind_dn || ''}
                        onChange={e => setL('bind_dn', e.target.value)}
                        placeholder="CN=svc-szup,OU=Service,DC=firma,DC=local" />
               </div>
@@ -572,7 +545,7 @@ export default function Settings() {
                   Hasło konta usługowego
                   {ldap.has_bind_password && <span className="badge badge--neutral" style={{ fontSize: 10, marginLeft: 6 }}>Ustawione</span>}
                 </label>
-                <input className="form-control" type="password" value={ldapBindPassword}
+                <input aria-label="Hasło konta usługowego" className="form-control" type="password" value={ldapBindPassword}
                        onChange={e => setLdapBindPassword(e.target.value)}
                        placeholder={ldap.has_bind_password ? 'Pozostaw puste, by nie zmieniać' : ''}
                        autoComplete="new-password" />
@@ -580,13 +553,13 @@ export default function Settings() {
             </div>
             <div className="form-group">
               <label className="form-label">Baza wyszukiwania użytkowników (opcjonalnie)</label>
-              <input className="form-control" value={ldap.user_search_base || ''}
+              <input aria-label="Baza wyszukiwania użytkowników (opcjonalnie)" className="form-control" value={ldap.user_search_base || ''}
                      onChange={e => setL('user_search_base', e.target.value)}
                      placeholder="OU=Users,DC=firma,DC=local (domyślnie: Base DN)" />
             </div>
             <div className="form-group">
               <label className="form-label">Filtr użytkownika</label>
-              <input className="form-control" value={ldap.user_filter || ''}
+              <input aria-label="Filtr użytkownika" className="form-control" value={ldap.user_filter || ''}
                      onChange={e => setL('user_filter', e.target.value)} />
               <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
                 {'{username}'} zostanie zastąpione loginem wpisanym przez użytkownika
@@ -608,16 +581,11 @@ export default function Settings() {
                 Próbuj SSO automatycznie przy wejściu (bez klikania)
               </label>
             </div>
-            {ldapSaved && (
-              <div className="alert" style={{ background: 'var(--color-success-bg)', borderLeft: '4px solid var(--color-success)', color: '#1a7a45', marginBottom: 12 }}>
-                Ustawienia AD/LDAP zapisane.
-              </div>
-            )}
             {ldapTestResult && (
               <div className="alert" style={{
                 borderLeft: `4px solid ${ldapTestResult.success ? 'var(--color-success)' : 'var(--color-error)'}`,
                 background: ldapTestResult.success ? 'var(--color-success-bg)' : 'var(--color-error-bg)',
-                color: ldapTestResult.success ? '#1a7a45' : 'var(--color-error)',
+                color: ldapTestResult.success ? 'var(--color-success-text)' : 'var(--color-error)',
                 marginBottom: 12,
               }}>
                 {ldapTestResult.success ? 'Połączono z domeną pomyślnie.' : ldapTestResult.message}
@@ -673,7 +641,8 @@ function FactoryResetSection() {
       'OSTATNIE OSTRZEŻENIE\n\n' +
       'Ta operacja jest NIEODWRACALNA i usunie wybrane dane z systemu.\n' +
       'Twoje konto superadmina zostanie zachowane.\n\n' +
-      'Upewnij się, że masz kopię bazy danych.\n\nKontynuować?'
+      'Upewnij się, że masz kopię bazy danych.\n\nKontynuować?',
+      { title: 'Ostatnie ostrzeżenie', confirmLabel: 'Przywróć ustawienia fabryczne', danger: true }
     )
     if (!ok) return
     setBusy(true)
@@ -682,7 +651,7 @@ function FactoryResetSection() {
       setResult(r.data)
       setPassword(''); setConfirm('')
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Reset nie powiódł się')
+      setErr(errorMessage(ex, 'Reset nie powiódł się'))
     } finally { setBusy(false) }
   }
 
@@ -725,13 +694,13 @@ function FactoryResetSection() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
         <div className="form-group" style={{ margin: 0 }}>
           <label className="form-label">Twoje hasło</label>
-          <input className="form-control" type="password" value={password}
+          <input aria-label="Twoje hasło" className="form-control" type="password" value={password}
                  autoComplete="current-password"
                  onChange={e => setPassword(e.target.value)} />
         </div>
         <div className="form-group" style={{ margin: 0 }}>
           <label className="form-label">Wpisz: RESET</label>
-          <input className="form-control" value={confirm}
+          <input aria-label="Wpisz: RESET" className="form-control" value={confirm}
                  onChange={e => setConfirm(e.target.value)} placeholder="RESET" />
         </div>
       </div>
@@ -741,7 +710,7 @@ function FactoryResetSection() {
       {result && (
         <div className="alert" style={{
           background: 'var(--color-success-bg)', borderLeft: '4px solid var(--color-success)',
-          color: '#1a7a45', marginBottom: 12,
+          color: 'var(--color-success-text)', marginBottom: 12,
         }}>
           <strong>Reset zakończony.</strong>
           <div style={{ marginTop: 6, fontSize: 12, fontFamily: 'var(--font-mono)' }}>
@@ -769,7 +738,7 @@ function NotificationsSection() {
   function load() {
     listNotificationTemplates()
       .then(r => setTpls(r.data))
-      .catch(ex => setErr(ex.response?.data?.detail || 'Nie udało się wczytać szablonów'))
+      .catch(ex => setErr(errorMessage(ex, 'Nie udało się wczytać szablonów')))
   }
   useEffect(() => { load() }, [])
 
@@ -814,20 +783,20 @@ function TplEditor({ tpl, onSaved }) {
     try {
       const r = await saveNotificationTemplate(tpl.event_key, { subject, body, enabled })
       setSubject(r.data.subject); setBody(r.data.body); setEnabled(r.data.enabled !== false)
-      setMsg({ ok: true, text: 'Zapisano.' }); onSaved?.()
+      toast(`Zapisano szablon „${tpl.label}”`); onSaved?.()
     } catch (ex) {
-      setMsg({ ok: false, text: ex.response?.data?.detail || 'Błąd zapisu' })
+      setMsg({ ok: false, text: errorMessage(ex, 'Błąd zapisu') })
     } finally { setBusy(false) }
   }
   async function reset() {
-    if (!await ask('Przywrócić domyślną treść tego powiadomienia?')) return
+    if (!await ask('Przywrócić domyślną treść tego powiadomienia?', { title: 'Potwierdź', confirmLabel: 'Przywróć domyślną' })) return
     setBusy(true); setMsg(null)
     try {
       const r = await resetNotificationTemplate(tpl.event_key)
       setSubject(r.data.subject); setBody(r.data.body); setEnabled(true)
-      setMsg({ ok: true, text: 'Przywrócono domyślny tekst.' }); onSaved?.()
+      toast('Przywrócono domyślny tekst'); onSaved?.()
     } catch (ex) {
-      setMsg({ ok: false, text: ex.response?.data?.detail || 'Błąd' })
+      setMsg({ ok: false, text: errorMessage(ex, 'Błąd') })
     } finally { setBusy(false) }
   }
   async function test() {
@@ -836,20 +805,21 @@ function TplEditor({ tpl, onSaved }) {
       const r = await testNotificationTemplate(tpl.event_key)
       setMsg({ ok: true, text: `Test wysłany na ${r.data.sent_to}.` })
     } catch (ex) {
-      setMsg({ ok: false, text: ex.response?.data?.detail || 'Nie udało się wysłać testu' })
+      setMsg({ ok: false, text: errorMessage(ex, 'Nie udało się wysłać testu') })
     } finally { setBusy(false) }
   }
 
   return (
     <div style={{ border: '1px solid var(--color-border)', borderRadius: 8, marginBottom: 10 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
-                    cursor: 'pointer', flexWrap: 'wrap' }}
-           onClick={() => setOpen(v => !v)}>
-        {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+      <button type="button" aria-expanded={open} onClick={() => setOpen(v => !v)}
+              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+                       minHeight: 44, cursor: 'pointer', flexWrap: 'wrap', border: 0, background: 'transparent',
+                       font: 'inherit', color: 'inherit', textAlign: 'left' }}>
+        {open ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
         <strong style={{ fontSize: 13, color: 'var(--color-heading)' }}>{tpl.label}</strong>
         {!enabled && <span className="badge badge--warning" style={{ fontSize: 9 }}>wyłączone</span>}
         {tpl.is_custom && <span className="badge badge--info" style={{ fontSize: 9 }}>zmienione</span>}
-      </div>
+      </button>
       {open && (
         <div style={{ padding: '0 12px 12px', borderTop: '1px solid var(--color-border)' }}>
           <div style={{ fontSize: 11, color: 'var(--color-text-muted)', margin: '8px 0' }}>
@@ -861,13 +831,13 @@ function TplEditor({ tpl, onSaved }) {
           </label>
           <div className="form-group">
             <label className="form-label">Temat</label>
-            <input ref={subjectRef} className="form-control" value={subject}
+            <input aria-label="Temat" ref={subjectRef} className="form-control" value={subject}
                    onFocus={() => { activeRef.current = 'subject' }}
                    onChange={e => setSubject(e.target.value)} />
           </div>
           <div className="form-group">
             <label className="form-label">Treść</label>
-            <textarea ref={bodyRef} className="form-control" style={{ minHeight: 160, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+            <textarea aria-label="Treść" ref={bodyRef} className="form-control" style={{ minHeight: 160, fontFamily: 'var(--font-mono)', fontSize: 12 }}
                       value={body}
                       onFocus={() => { activeRef.current = 'body' }}
                       onChange={e => setBody(e.target.value)} />
@@ -890,7 +860,7 @@ function TplEditor({ tpl, onSaved }) {
             <div className="alert" style={{
               background: msg.ok ? 'var(--color-success-bg)' : 'var(--color-error-bg)',
               borderLeft: `4px solid ${msg.ok ? 'var(--color-success)' : 'var(--color-error)'}`,
-              color: msg.ok ? '#1a7a45' : 'var(--color-error-text)', marginBottom: 10, fontSize: 12,
+              color: msg.ok ? 'var(--color-success-text)' : 'var(--color-error-text)', marginBottom: 10, fontSize: 12,
             }}>{msg.text}</div>
           )}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

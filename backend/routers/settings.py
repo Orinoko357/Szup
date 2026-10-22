@@ -717,7 +717,9 @@ def config_health(
     from models import (Unit, Department, RequestType, WorkflowTemplate,
                         WorkflowInstance, WorkflowInstanceStatus, SecurityEvent,
                         parse_roles)
-    from services.workflow import current_step_since
+    from sqlalchemy import func
+    from models import WorkflowStep
+    from services.permissions import effective_manager_dept
     from services.email_alerts import HELPDESK_EMAIL
 
     ldap = session.exec(select(LdapSettings)).first()
@@ -725,15 +727,20 @@ def config_health(
     app = session.exec(select(AppSettings)).first()
     units = session.exec(select(Unit)).all()
     depts = session.exec(select(Department)).all()
-    users = session.exec(select(User)).all()
-    users_by_id = {u.id: u for u in users}
+    active_unit_ids = {u.id for u in units if u.is_active}
+    inactive_user_ids = set(session.exec(
+        select(User.id).where(User.is_active == False)  # noqa: E712
+    ).all())
 
-    active_depts = [d for d in depts if d.is_active]
-    no_manager = [d for d in active_depts
-                  if getattr(d, "kind", "department") != "standalone" and not d.manager_user_id]
+    active_depts = [d for d in depts if d.is_active and d.unit_id in active_unit_ids]
+    # Komórka bez kierownika jest problemem tylko wtedy, gdy NIKT wyżej za nią
+    # nie odpowiada — inaczej obieg przejmuje najbliższy kierownik wyżej.
+    # Bez BEZPOŚREDNIEGO kierownika (to pokazuje filtr /units?filter=no_manager).
+    no_direct_manager = [d for d in active_depts
+                         if getattr(d, "kind", "department") != "standalone" and not d.manager_user_id]
+    no_manager = [d for d in no_direct_manager if effective_manager_dept(session, d) is None]
     inactive_mgr = [d for d in active_depts
-                    if d.manager_user_id and users_by_id.get(d.manager_user_id)
-                    and not users_by_id[d.manager_user_id].is_active]
+                    if d.manager_user_id and d.manager_user_id in inactive_user_ids]
 
     templates = {t.id: t for t in session.exec(select(WorkflowTemplate)).all()}
     active_tpl = [t for t in templates.values() if t.is_active]
@@ -762,9 +769,9 @@ def config_health(
          "link": "/units"},
         {"key": "managers", "label": "Kierownicy przypisani",
          "ok": not no_manager,
-         "detail": ("Wszystkie komórki mają kierownika" if not no_manager
-                    else f"Komórek bez kierownika: {len(no_manager)}"),
-         "link": "/units"},
+         "detail": ("Każda komórka ma kierownika (własnego lub wyżej w strukturze)" if not no_manager
+                    else f"Komórek bez żadnego kierownika w strukturze: {len(no_manager)}"),
+         "link": "/units?filter=no_manager"},
         {"key": "request_types", "label": "Typy wniosków",
          "ok": bool(req_types_ok),
          "detail": f"Aktywnych z aktywnym szablonem: {len(req_types_ok)}",
@@ -779,33 +786,44 @@ def config_health(
          "link": "/settings"},
         {"key": "helpdesk", "label": "Adres helpdesku IT",
          "ok": bool(helpdesk or HELPDESK_EMAIL),
-         "detail": helpdesk or f"{HELPDESK_EMAIL} (domyślny)",
+         "detail": (f"{helpdesk} (ustawiony)" if helpdesk
+                    else f"{HELPDESK_EMAIL} (domyślny z konfiguracji)"),
          "link": "/settings"},
     ]
 
     # Użytkownicy bez komórki — pomijamy nieaktywnych i konta czysto administracyjne.
     admin_only = {"admin", "superadmin"}
-    no_dept = [u for u in users if u.is_active and not u.department_id
-               and not set(parse_roles(u.roles)) <= admin_only]
+    no_dept = [roles for roles in session.exec(
+        select(User.roles).where(User.is_active == True)  # noqa: E712
+        .where(User.department_id == None)  # noqa: E711
+    ).all() if not set(parse_roles(roles)) <= admin_only]
 
-    # Wnioski czekające > 7 dni na bieżącym kroku (aktywna instancja obiegu).
+    # Wnioski czekające > 7 dni na bieżącym kroku — jedno zapytanie:
+    # ostatni krok (max created_at) dla każdej aktywnej instancji obiegu.
     limit = datetime.utcnow() - timedelta(days=7)
     stale = 0
-    for inst in session.exec(
-        select(WorkflowInstance).where(WorkflowInstance.status == WorkflowInstanceStatus.active)
+    for _iid, inst_created, last_step in session.exec(
+        select(WorkflowInstance.id, WorkflowInstance.created_at, func.max(WorkflowStep.created_at))
+        .join(WorkflowStep, WorkflowStep.instance_id == WorkflowInstance.id, isouter=True)
+        .where(WorkflowInstance.status == WorkflowInstanceStatus.active)
+        .group_by(WorkflowInstance.id)
     ).all():
-        since = current_step_since(session, inst)
+        since = last_step or inst_created
         if since and since < limit:
             stale += 1
 
-    open_sec = len(session.exec(
-        select(SecurityEvent).where(SecurityEvent.resolved_at == None)  # noqa: E711
-    ).all())
+    open_sec = session.exec(
+        select(func.count()).select_from(SecurityEvent)
+        .where(SecurityEvent.resolved_at == None)  # noqa: E711
+    ).one()
 
     issues = [
-        {"key": "dept_no_manager", "label": "Komórki bez kierownika", "count": len(no_manager), "link": "/units"},
+        {"key": "dept_no_manager", "label": "Komórki bez kierownika", "count": len(no_direct_manager),
+         "link": "/units?filter=no_manager"},
         {"key": "users_no_dept", "label": "Użytkownicy bez komórki", "count": len(no_dept), "link": "/users"},
-        {"key": "stale_requests", "label": "Wnioski czekające ponad 7 dni", "count": stale, "link": "/requests"},
+        {"key": "stale_requests", "label": "Wnioski czekające ponad 7 dni", "count": stale,
+         # Admin nie ma dostępu do /requests (obsługują kierownicy i IT) — bez linku.
+         "link": None},
         {"key": "inactive_managers", "label": "Nieaktywni kierownicy na stanowisku", "count": len(inactive_mgr), "link": "/units"},
         {"key": "security_open", "label": "Otwarte zdarzenia bezpieczeństwa", "count": open_sec, "link": "/security"},
     ]

@@ -1,40 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { FilePlus, UserMinus, ChevronDown, ChevronRight, Check, Search, Info, Lock, Copy, X } from 'lucide-react'
-import { listRequests, createRequest, listActiveDepts, listActiveUnits, listRequestTypes, usersByDepartment, searchUsers } from '../api'
+import { listRequests, createRequest, listActiveDepts, listActiveUnits, listRequestTypes, usersByDepartment, searchUsers, errorMessage } from '../api'
 import { fmtDate, serverTs, serverNow } from '../serverTime'
 import { statusLabel, statusBadge, kindLabel, daysSince, waitText } from '../labels'
-import { toast } from '../components/ui/feedback'
+import { toast, confirmDialog } from '../components/ui/feedback'
+import Segmented from '../components/ui/Segmented'
 import RequestViewShell, { Section, buildWorkflowSteps, KindBadge } from '../components/RequestView'
 
 
-// Mały nagłówek sekcji w oknach kadrowych — spójny, czytelny podział.
-function SectionLabel({ children }) {
-  return (
-    <div style={{
-      fontSize: 11, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase',
-      color: 'var(--color-text-muted)', margin: '2px 0 8px',
-    }}>
-      {children}
-    </div>
-  )
-}
-
-// Zielony chip z wybraną komórką (jednostka › komórka).
-function SelectedPlace({ unit, dept }) {
-  return (
-    <div style={{
-      display: 'inline-flex', alignItems: 'center', gap: 8, marginBottom: 8,
-      padding: '6px 12px', borderRadius: 999,
-      background: 'var(--color-success-bg)', border: '1px solid var(--color-success)',
-      fontSize: 13,
-    }}>
-      <Check size={14} style={{ color: 'var(--color-success)' }} />
-      <span><strong style={{ color: 'var(--color-heading)' }}>{unit || '?'}</strong> › {dept}</span>
-    </div>
-  )
-}
-
-// v3.0 — wspólne style formularzy kadrowych (wg projektu).
 const FIELD_GRID  = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px 16px' }
 const FIELD_INPUT = { minHeight: 44, borderRadius: 8, fontSize: 14 }
 const NOTE_BOX = {
@@ -140,6 +113,8 @@ export default function HR() {
       // rolą IT/admin/kierownik dostawała pod „Moje zgłoszenia” cudze wnioski).
       const r = await listRequests({ scope: 'mine' })
       setRequests(r.data)
+    } catch (ex) {
+      toast(errorMessage(ex, 'Nie udało się wczytać zgłoszeń'), { tone: 'error' })
     } finally {
       setLoading(false)
     }
@@ -171,7 +146,7 @@ export default function HR() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Kartoteka</div>
+          <h1 className="page-header__title">Kartoteka</h1>
           <div className="page-header__sub">Zgłoś zatrudnienie nowego pracownika lub ustanie stosunku pracy</div>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
@@ -193,22 +168,12 @@ export default function HR() {
           <h2 style={{ margin: 0, flex: '1 1 200px', fontSize: 16, fontWeight: 800, color: 'var(--color-heading)' }}>
             Moje zgłoszenia
           </h2>
-          <div role="group" aria-label="Filtr statusu" style={{
-            display: 'inline-flex', padding: 3, borderRadius: 8,
-            background: 'var(--bg-secondary)', border: '1px solid var(--color-border)',
-          }}>
-            {[['open', 'W toku'], ['done', 'Zakończone'], ['all', 'Wszystkie']].map(([id, label]) => (
-              <button key={id} type="button" aria-pressed={view === id} onClick={() => setView(id)}
-                      style={{
-                        minHeight: 36, padding: '0 14px', border: 0, borderRadius: 6, cursor: 'pointer',
-                        font: 'inherit', fontSize: 13, fontWeight: view === id ? 700 : 600,
-                        background: view === id ? 'var(--color-navy)' : 'transparent',
-                        color: view === id ? '#fff' : 'var(--color-heading)',
-                      }}>
-                {label} ({counts[id]})
-              </button>
-            ))}
-          </div>
+          <Segmented ariaLabel="Filtr statusu" value={view} onChange={setView}
+                     options={[
+                       { value: 'open', label: 'W toku', count: counts.open },
+                       { value: 'done', label: 'Zakończone', count: counts.done },
+                       { value: 'all',  label: 'Wszystkie', count: counts.all },
+                     ]} />
           <label style={{ position: 'relative', display: 'block', flex: '0 1 280px' }}>
             <span className="sr-only" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
               Szukaj pracownika
@@ -269,38 +234,6 @@ export default function HR() {
 
 
 // ---------------------------------------------------------------------------
-// Wspólny layout pełnoekranowego formularza kadrowego (spójny dla obu).
-// ---------------------------------------------------------------------------
-function HRFormPage({ icon: Icon, title, subtitle, onCancel, onSubmit,
-                     submitLabel, busy, canSubmit = true, children }) {
-  return (
-    <div>
-      <div className="page-header">
-        <div>
-          <div className="page-header__title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {Icon && <Icon size={18} style={{ color: 'var(--color-heading)' }} />}
-            {title}
-          </div>
-          {subtitle && <div className="page-header__sub">{subtitle}</div>}
-        </div>
-        <button type="button" className="btn btn--ghost" onClick={onCancel}>← Wróć do kartoteki</button>
-      </div>
-      <form onSubmit={onSubmit} className="card" style={{ maxWidth: 860, margin: '0 auto', width: '100%' }}>
-        {children}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20,
-                      borderTop: '1px solid var(--color-border)', paddingTop: 16 }}>
-          <button type="button" className="btn btn--ghost" onClick={onCancel}>Anuluj</button>
-          <button type="submit" className="btn btn--action" disabled={busy || !canSubmit}>
-            {busy ? 'Zapisywanie…' : submitLabel}
-          </button>
-        </div>
-      </form>
-    </div>
-  )
-}
-
-
-// ---------------------------------------------------------------------------
 // Formularz: imię, nazwisko, stanowisko, wydział (picker harmonijkowy)
 // ---------------------------------------------------------------------------
 
@@ -327,7 +260,8 @@ function RequestFormView({ onCancel, onCreated }) {
         const emp = t.data.find(x => x.code === 'NEW_EMP') || t.data[0]
         if (emp) setRequestTypeId(emp.id)
       })
-      .catch(() => {})
+      .catch(ex => setErr(errorMessage(ex,
+        'Nie udało się wczytać słowników (jednostki, komórki, typy wniosków). Odśwież stronę.')))
   }, [])
 
   const selectedDept = useMemo(
@@ -338,6 +272,16 @@ function RequestFormView({ onCancel, onCreated }) {
     () => selectedDept ? units.find(u => u.id === selectedDept.unit_id) : null,
     [selectedDept, units]
   )
+
+  const dirty = !!(firstName || lastName || position || startDate || deptId)
+  // Niezapisane dane — „Anuluj” / „← Wróć” pyta przed porzuceniem zmian.
+  async function leave() {
+    if (dirty && !(await confirmDialog({
+      title: 'Porzucić zmiany?', message: 'Wpisane dane zgłoszenia nie zostaną zapisane.',
+      confirmLabel: 'Porzuć zmiany', danger: true,
+    }))) return
+    onCancel()
+  }
 
   async function submit(e) {
     e.preventDefault()
@@ -367,7 +311,7 @@ function RequestFormView({ onCancel, onCreated }) {
         from: startDate,
       })
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Błąd zapisu zgłoszenia')
+      setErr(errorMessage(ex, 'Błąd zapisu zgłoszenia'))
       setBusy(false)
     }
   }
@@ -385,14 +329,14 @@ function RequestFormView({ onCancel, onCreated }) {
   ]
 
   return (
-    <RequestViewShell icon={FilePlus} kind="grant" kindLabel="Zatrudnienie"
+    <RequestViewShell icon={FilePlus} kind="grant" kindLabel={kindLabel('grant')}
                       statusText="Nowy wniosek · nie wysłany" title="Nowy pracownik"
                       subtitle="Zgłoszenie zatrudnienia — po wysłaniu trafi do kierownika komórki, a potem do IT."
-                      backLabel="← Wróć do kartoteki" onBack={onCancel}
+                      backLabel="← Wróć do kartoteki" onBack={leave}
                       steps={steps} summary={summary} history={[]}
                       footerLeft="* pola wymagane"
                       footerActions={<>
-                        <button type="button" className="btn btn--ghost" onClick={onCancel}>Anuluj</button>
+                        <button type="button" className="btn btn--ghost" onClick={leave}>Anuluj</button>
                         <button type="button" className="btn btn--action" onClick={submit} disabled={busy}>
                           {busy ? 'Zapisywanie…' : 'Wyślij do kierownika →'}
                         </button>
@@ -476,7 +420,8 @@ function TerminationFormView({ onCancel, onCreated }) {
         setUnits(u.data); setDepts(d.data)
         if (t.data.length > 0) setRequestTypeId(t.data[0].id)
       })
-      .catch(() => {})
+      .catch(ex => setErr(errorMessage(ex,
+        'Nie udało się wczytać słowników (jednostki, komórki, typy wniosków). Odśwież stronę.')))
   }, [])
 
   // Debounced wyszukiwanie po nazwisku/loginie.
@@ -487,7 +432,7 @@ function TerminationFormView({ onCancel, onCreated }) {
     const t = setTimeout(() => {
       searchUsers(q)
         .then(r => setResults(r.data))
-        .catch(() => setResults([]))
+        .catch(ex => { setResults([]); toast(errorMessage(ex, 'Wyszukiwanie nie powiodło się'), { tone: 'error' }) })
         .finally(() => setSearching(false))
     }, 250)
     return () => clearTimeout(t)
@@ -507,7 +452,7 @@ function TerminationFormView({ onCancel, onCreated }) {
     setLoadingWorkers(true)
     usersByDepartment(deptId)
       .then(r => setWorkers(r.data))
-      .catch(() => setWorkers([]))
+      .catch(ex => { setWorkers([]); toast(errorMessage(ex, 'Nie udało się wczytać pracowników komórki'), { tone: 'error' }) })
       .finally(() => setLoadingWorkers(false))
   }, [deptId])
 
@@ -535,6 +480,16 @@ function TerminationFormView({ onCancel, onCreated }) {
           })()
         : null)
 
+  const dirty = !!(picked || workerId || workUntil || deptId)
+  // Niezapisane dane — „Anuluj” / „← Wróć” pyta przed porzuceniem zmian.
+  async function leave() {
+    if (dirty && !(await confirmDialog({
+      title: 'Porzucić zmiany?', message: 'Wpisane dane zgłoszenia nie zostaną zapisane.',
+      confirmLabel: 'Porzuć zmiany', danger: true,
+    }))) return
+    onCancel()
+  }
+
   async function submit(e) {
     e.preventDefault()
     setErr(null)
@@ -556,7 +511,7 @@ function TerminationFormView({ onCancel, onCreated }) {
       toast(`Wysłano zgłoszenie odejścia: ${effWorker.name}. Trafi teraz do kierownika komórki.`)
       onCreated()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Błąd zapisu zgłoszenia')
+      setErr(errorMessage(ex, 'Błąd zapisu zgłoszenia'))
       setBusy(false)
     }
   }
@@ -572,14 +527,14 @@ function TerminationFormView({ onCancel, onCreated }) {
   })
 
   return (
-    <RequestViewShell icon={UserMinus} kind="revoke" kindLabel="Odejście"
+    <RequestViewShell icon={UserMinus} kind="revoke" kindLabel={kindLabel('revoke')}
                       statusText="Nowy wniosek · nie wysłany" title="Ustanie stosunku pracy"
                       subtitle="Zgłoszenie odejścia — trafi do kierownika komórki, potem do IT."
-                      backLabel="← Wróć do kartoteki" onBack={onCancel}
+                      backLabel="← Wróć do kartoteki" onBack={leave}
                       steps={steps} summary={summary} history={[]}
                       footerLeft="* pola wymagane"
                       footerActions={<>
-                        <button type="button" className="btn btn--ghost" onClick={onCancel}>Anuluj</button>
+                        <button type="button" className="btn btn--ghost" onClick={leave}>Anuluj</button>
                         <button type="button" className="btn btn--action" onClick={submit} disabled={busy || !effWorker}>
                           {busy ? 'Zapisywanie…' : 'Wyślij do kierownika →'}
                         </button>
@@ -615,11 +570,14 @@ function TerminationFormView({ onCancel, onCreated }) {
                                 maxHeight: 240, overflowY: 'auto', background: 'var(--color-card)',
                                 boxShadow: '0 6px 18px rgba(27, 42, 74, .08)' }}>
                     {results.map(r => (
-                      <div key={r.id} onClick={() => pickFromSearch(r)}
-                           style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
-                                    minHeight: 44, padding: '0 12px', borderRadius: 6, fontSize: 14 }}
-                           onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover, rgba(0,0,0,0.04))'}
-                           onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      <button type="button" key={r.id} onClick={() => pickFromSearch(r)} className="hr-result"
+                              style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', width: '100%',
+                                       minHeight: 44, padding: '0 12px', borderRadius: 6, fontSize: 14, border: 0,
+                                       background: 'transparent', font: 'inherit', textAlign: 'left', color: 'inherit' }}
+                              onMouseEnter={e => e.currentTarget.style.background = 'var(--color-table-head)'}
+                              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                              onFocus={e => e.currentTarget.style.background = 'var(--color-table-head)'}
+                              onBlur={e => e.currentTarget.style.background = 'transparent'}>
                         <span style={{ fontWeight: 700, color: 'var(--color-heading)' }}>{r.full_name || r.username}</span>
                         <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
                           {[r.title, r.username].filter(Boolean).join(' · ')}
@@ -627,7 +585,7 @@ function TerminationFormView({ onCancel, onCreated }) {
                         <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-text-muted)' }}>
                           {r.unit_name ? `${r.unit_name} › ` : ''}{r.department_name || '—'}
                         </span>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 )}

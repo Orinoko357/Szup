@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Plus, Trash2, Edit2, ChevronDown, ChevronRight, Building2, Download, Users,
-  FolderTree, Layers, User as UserIcon, UserCog, X, Save,
+  FolderTree, Layers, User as UserIcon, UserCog, Save,
 } from 'lucide-react'
 import {
   listUnits, createUnit, updateUnit, deleteUnit,
@@ -10,18 +11,13 @@ import {
   ldapPreviewUsers, ldapImportUsers,
   listDeputies, addDeputy, updateDeputy, deleteDeputy,
   dedupeDepartments,
-} from '../api'
-import { toast, confirmDialog } from '../components/ui/feedback'
+ errorMessage} from '../api'
+import { toast, ask } from '../components/ui/feedback'
+import Modal from '../components/ui/Modal'
 
-// Potwierdzenie w oknie aplikacji (zamiast systemowego confirm). Operacje
-// usuwające / odbierające / nieodwracalne oznaczamy na czerwono.
-const ask = (message) => {
-  const danger = /usun|odebra|wygas|ostrze|nieodwracal/i.test(message)
-  return confirmDialog({
-    title: danger ? 'Potwierdź operację' : 'Potwierdź',
-    message, danger, confirmLabel: danger ? 'Tak, wykonaj' : 'Potwierdź',
-  })
-}
+// Okno dialogowe dostaje fokus po otwarciu (Escape i czytniki ekranu działają od razu).
+const focusDialog = el => { if (el && !el.contains(document.activeElement)) el.focus() }
+
 
 // Typy węzłów struktury organizacyjnej (zsynchronizowane z backend: models.DEPARTMENT_KINDS)
 export const DEPT_KINDS = [
@@ -65,11 +61,25 @@ export default function Units() {
 
   useEffect(() => { load() }, [])
 
+  // ?filter=no_manager — tylko komórki bez kierownika (aktywne, nie-samodzielne);
+  // link z listy kontrolnej administratora. Reaguje też na zmianę adresu.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const noMgrFilter = searchParams.get('filter') === 'no_manager'
+  const noMgrIds = new Set(depts
+    .filter(d => d.is_active !== false && d.kind !== 'standalone' && !d.manager_user_id)
+    .map(d => d.id))
+  const clearFilter = () => {
+    const p = new URLSearchParams(searchParams); p.delete('filter'); setSearchParams(p)
+  }
+  const shownUnits = noMgrFilter
+    ? units.filter(u => depts.some(d => d.unit_id === u.id && noMgrIds.has(d.id)))
+    : units
+
   const [dedupeBusy, setDedupeBusy] = useState(false)
   async function runDedupe() {
     if (!await ask('Usunąć zduplikowane komórki (np. po ponownym imporcie)?\n\n'
       + 'Usunięte zostaną WYŁĄCZNIE kopie BEZ danych — bez przypisanych pracowników, '
-      + 'wniosków i bez ustawionego kierownika. Rekord z danymi zawsze zostaje.')) return
+      + 'wniosków i bez ustawionego kierownika. Rekord z danymi zawsze zostaje.', { title: 'Potwierdź operację', confirmLabel: 'Usuń duplikaty', danger: true })) return
     setDedupeBusy(true)
     try {
       const r = await dedupeDepartments()
@@ -79,7 +89,7 @@ export default function Units() {
         + (d.details.length ? `\n\n${d.details.join('\n')}` : ''))
       load()
     } catch (ex) {
-      toast(ex.response?.data?.detail || 'Nie udało się usunąć duplikatów', { tone: 'error' })
+      toast(errorMessage(ex, 'Nie udało się usunąć duplikatów'), { tone: 'error' })
     } finally { setDedupeBusy(false) }
   }
 
@@ -87,7 +97,7 @@ export default function Units() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Jednostki i wydziały</div>
+          <h1 className="page-header__title">Jednostki</h1>
           <div className="page-header__sub">Struktura organizacyjna — jednostki i podległe wydziały</div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -117,10 +127,25 @@ export default function Units() {
               Zaimportuj strukturę z AD przyciskiem „Importuj strukturę z AD” powyżej albo dodaj jednostkę ręcznie poniżej.
             </div>
           )}
-          {units.map(u => (
-            <UnitAccordion key={u.id} unit={u}
+          {noMgrFilter && (
+            <div className="card" role="status" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center',
+                                                         gap: 10, padding: '12px 18px' }}>
+              <span style={{ flex: 1, fontSize: 14 }}>
+                Filtr: <strong>komórki bez kierownika</strong> ({noMgrIds.size})
+              </span>
+              <button type="button" className="btn btn--ghost btn--sm" onClick={clearFilter}>Pokaż wszystkie</button>
+            </div>
+          )}
+          {noMgrFilter && !loading && noMgrIds.size === 0 && (
+            <div className="card" style={{ fontSize: 14, color: 'var(--color-text-muted)' }}>
+              Wszystkie aktywne komórki mają przypisanego kierownika.
+            </div>
+          )}
+          {shownUnits.map(u => (
+            <UnitAccordion key={`${u.id}-${noMgrFilter ? 'f' : 'a'}`} unit={u}
               depts={depts.filter(d => d.unit_id === u.id)}
               users={users}
+              onlyDeptIds={noMgrFilter ? noMgrIds : null}
               onChanged={load} />
           ))}
           <AddUnitCard onAdded={load} />
@@ -130,8 +155,9 @@ export default function Units() {
   )
 }
 
-function UnitAccordion({ unit: u, depts, users, onChanged }) {
-  const [open, setOpen] = useState(false)
+function UnitAccordion({ unit: u, depts, users, onChanged, onlyDeptIds = null }) {
+  // Przy filtrze („bez kierownika”) jednostka startuje rozwinięta.
+  const [open, setOpen] = useState(!!onlyDeptIds)
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(u.name)
   const [err, setErr] = useState(null)
@@ -142,7 +168,7 @@ function UnitAccordion({ unit: u, depts, users, onChanged }) {
     try {
       await updateUnit(u.id, { name })
       setEditing(false); onChanged()
-    } catch (ex) { setErr(ex.response?.data?.detail || 'Błąd zapisu') }
+    } catch (ex) { setErr(errorMessage(ex, 'Błąd zapisu')) }
   }
 
   async function saveUnitManager(val) {
@@ -150,14 +176,14 @@ function UnitAccordion({ unit: u, depts, users, onChanged }) {
     try {
       await updateUnit(u.id, { manager_user_id: val ? Number(val) : null })
       onChanged()
-    } catch (ex) { toast(ex.response?.data?.detail || 'Nie udało się ustawić kierownika jednostki', { tone: 'error' }) }
+    } catch (ex) { toast(errorMessage(ex, 'Nie udało się ustawić kierownika jednostki'), { tone: 'error' }) }
     finally { setMgrBusy(false) }
   }
 
   async function delUnit() {
-    if (!await ask(`Usunąć jednostkę "${u.name}"? Usunięte zostaną też powiązane wydziały.`)) return
+    if (!await ask(`Usunąć jednostkę "${u.name}"? Usunięte zostaną też powiązane wydziały.`, { title: 'Potwierdź operację', confirmLabel: 'Usuń jednostkę', danger: true })) return
     try { await deleteUnit(u.id); onChanged(); toast(`Usunięto jednostkę „${u.name}”`) }
-    catch (ex) { toast(ex.response?.data?.detail || 'Błąd usuwania', { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Błąd usuwania'), { tone: 'error' }) }
   }
 
   // v3.0 — jednostka jako karta: nagłówek (rozwiń/zwiń) + osobne przyciski
@@ -198,7 +224,7 @@ function UnitAccordion({ unit: u, depts, users, onChanged }) {
                                                alignItems: 'flex-end', borderBottom: '1px solid var(--color-border)' }}>
               <div className="form-group" style={{ margin: 0, flex: '1 1 260px' }}>
                 <label className="form-label">Nazwa jednostki</label>
-                <input className="form-control" required value={name} onChange={e => setName(e.target.value)} />
+                <input aria-label="Nazwa jednostki" className="form-control" required value={name} onChange={e => setName(e.target.value)} />
               </div>
               <button type="button" className="btn btn--ghost" onClick={() => { setEditing(false); setName(u.name) }}>Anuluj</button>
               <button type="submit" className="btn btn--primary">Zapisz</button>
@@ -231,7 +257,7 @@ function UnitAccordion({ unit: u, depts, users, onChanged }) {
             <table className="data-table" style={{ minWidth: 1040 }}>
               <thead><tr><th>Nazwa</th><th>Typ</th><th>Kierownik</th><th>Aktywny</th><th title="Wymaga zatwierdzenia kierownika wydziału nadrzędnego">Wyższa akcept.</th><th title="Komórka kadrowa — jej pracownicy mogą zgłaszać nowych pracowników i ustania">Kadry</th><th></th></tr></thead>
               <tbody>
-                {flattenDeptTree(depts).map(({ dept: d, depth }) => (
+                {flattenDeptTree(depts).filter(({ dept: d }) => !onlyDeptIds || onlyDeptIds.has(d.id)).map(({ dept: d, depth }) => (
                   <DeptRow key={d.id} dept={d} depth={depth} users={users}
                            unitId={u.id} unitDepts={depts} onChanged={onChanged} />
                 ))}
@@ -359,13 +385,13 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
         is_hr: isHr,
       })
       setEditing(false); onChanged()
-    } catch (ex) { toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' }) }
+    } catch (ex) { toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' }) }
   }
 
   async function del() {
-    if (!await ask(`Usunąć "${d.name}"?`)) return
+    if (!await ask(`Usunąć "${d.name}"?`, { title: 'Potwierdź operację', confirmLabel: 'Usuń komórkę', danger: true })) return
     try { await deleteDepartment(d.id); onChanged(); toast(`Usunięto „${d.name}”`) }
-    catch (ex) { toast(ex.response?.data?.detail || 'Błąd usuwania', { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Błąd usuwania'), { tone: 'error' }) }
   }
 
   const indentPx = depth * 18
@@ -513,7 +539,7 @@ function AddDeptForm({ unitId, users, unitDepts, onAdded }) {
       })
       setName(''); setKind('department'); setParentId(''); setManagerId('')
       onAdded()
-    } catch (ex) { setErr(ex.response?.data?.detail || 'Błąd zapisu') }
+    } catch (ex) { setErr(errorMessage(ex, 'Błąd zapisu')) }
   }
 
   const parentCandidates = flattenDeptTree(unitDepts || [])
@@ -522,13 +548,13 @@ function AddDeptForm({ unitId, users, unitDepts, onAdded }) {
     <form onSubmit={submit} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
       <div className="form-group" style={{ margin: 0, flex: 2, minWidth: 160 }}>
         <label className="form-label">Nowy węzeł</label>
-        <input className="form-control" required value={name}
+        <input aria-label="Nowy węzeł" className="form-control" required value={name}
                onChange={e => setName(e.target.value)}
                placeholder="Nazwa (np. Wydział Finansów, Referat Księgowości, Pełnomocnik ds. …)" />
       </div>
       <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 160 }}>
         <label className="form-label">Typ</label>
-        <select className="form-control" value={kind} onChange={e => setKind(e.target.value)}>
+        <select aria-label="Typ" className="form-control" value={kind} onChange={e => setKind(e.target.value)}>
           {DEPT_KINDS.map(k => (
             <option key={k.value} value={k.value}>{k.label}</option>
           ))}
@@ -536,7 +562,7 @@ function AddDeptForm({ unitId, users, unitDepts, onAdded }) {
       </div>
       <div className="form-group" style={{ margin: 0, flex: 2, minWidth: 180 }}>
         <label className="form-label">Węzeł nadrzędny</label>
-        <select className="form-control" value={parentId}
+        <select aria-label="Węzeł nadrzędny" className="form-control" value={parentId}
                 onChange={e => setParentId(e.target.value)}>
           <option value="">— bezpośrednio pod jednostką —</option>
           {parentCandidates.map(({ dept: x, depth: xd }) => (
@@ -578,7 +604,7 @@ function AddUnitCard({ onAdded }) {
     try {
       await createUnit({ name })
       setName(''); setShow(false); onAdded()
-    } catch (ex) { setErr(ex.response?.data?.detail || 'Błąd zapisu') }
+    } catch (ex) { setErr(errorMessage(ex, 'Błąd zapisu')) }
   }
 
   if (!show) {
@@ -600,7 +626,7 @@ function AddUnitCard({ onAdded }) {
       <form onSubmit={submit}>
         <div className="form-group">
           <label className="form-label">Nazwa jednostki *</label>
-          <input className="form-control" required value={name} onChange={e => setName(e.target.value)} />
+          <input aria-label="Kierownik" className="form-control" required value={name} onChange={e => setName(e.target.value)} />
         </div>
         {err && <div className="alert alert--error mb-4">{err}</div>}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -699,7 +725,9 @@ function LdapImportModal({ onClose }) {
         id: x.id,
         label: `${unitName[x.unit_id] ? unitName[x.unit_id] + ' › ' : ''}${x.name}`,
       })))
-    }).catch(() => {})
+    }).catch(ex => {
+      if (alive) toast(errorMessage(ex, 'Nie udało się wczytać listy jednostek do mapowania'), { tone: 'warning' })
+    })
     return () => { alive = false }
   }, [])
 
@@ -792,7 +820,7 @@ function LdapImportModal({ onClose }) {
       setSelected(initSelected(r.data))
       setStep('preview')
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Błąd połączenia z LDAP')
+      setErr(errorMessage(ex, 'Błąd połączenia z LDAP'))
     } finally { setBusy(false) }
   }
 
@@ -814,7 +842,7 @@ function LdapImportModal({ onClose }) {
       setResult(r.data)
       setStep('done')
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Błąd importu')
+      setErr(errorMessage(ex, 'Błąd importu'))
       setStep('preview')
     } finally { setBusy(false) }
   }
@@ -825,15 +853,17 @@ function LdapImportModal({ onClose }) {
   const totalCount = preview.reduce((n, u) => n + 1 + countNodes(u.departments), 0)
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 680 }}>
+    <div className="modal-overlay" role="presentation" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Import struktury z Active Directory" tabIndex={-1} ref={focusDialog}
+           onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }} style={{ maxWidth: 680 }}>
 
-        <div className="modal__header">
-          <span className="modal__title">
+        <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-heading)', padding: '12px 12px 12px 20px', gap: 12 }}>
+          <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
             <Download size={15} style={{ marginRight: 8, verticalAlign: 'middle' }} />
             Import struktury z Active Directory
-          </span>
-          <button className="modal__close" onClick={onClose}>×</button>
+          </h2>
+          <button type="button" className="modal__close" aria-label="Zamknij" title="Zamknij" onClick={onClose}
+                  style={{ width: 44, height: 44, color: 'var(--color-text-muted)' }}>×</button>
         </div>
 
         <div className="modal__body">
@@ -843,7 +873,7 @@ function LdapImportModal({ onClose }) {
             <div style={{ marginBottom: 16 }}>
               <div className="form-group" style={{ marginBottom: 8 }}>
                 <label className="form-label">Baza wyszukiwania (Search Base DN)</label>
-                <input
+                <input aria-label="Baza wyszukiwania (Search Base DN)"
                   className="form-control"
                   placeholder="np. OU=Organizacja,DC=firma,DC=local"
                   value={searchBase}
@@ -1005,7 +1035,7 @@ export function LdapUsersImportModal({ onClose }) {
         r.data.filter(u => u.in_structure).map(u => u.unit_id ?? 0)))
       setStep('preview')
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Błąd połączenia z LDAP')
+      setErr(errorMessage(ex, 'Błąd połączenia z LDAP'))
     } finally { setBusy(false) }
   }
 
@@ -1019,7 +1049,7 @@ export function LdapUsersImportModal({ onClose }) {
       setResult(r.data)
       setStep('done')
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Błąd importu')
+      setErr(errorMessage(ex, 'Błąd importu'))
       setStep('preview')
     } finally { setBusy(false) }
   }
@@ -1107,15 +1137,17 @@ export function LdapUsersImportModal({ onClose }) {
   const duplicateCnt  = inStructure.filter(u => u.duplicate).length
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 820 }}>
+    <div className="modal-overlay" role="presentation" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Import użytkowników z Active Directory" tabIndex={-1} ref={focusDialog}
+           onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }} style={{ maxWidth: 820 }}>
 
-        <div className="modal__header">
-          <span className="modal__title">
+        <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-heading)', padding: '12px 12px 12px 20px', gap: 12 }}>
+          <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
             <Users size={15} style={{ marginRight: 8, verticalAlign: 'middle' }} />
             Import użytkowników z Active Directory
-          </span>
-          <button className="modal__close" onClick={onClose}>×</button>
+          </h2>
+          <button type="button" className="modal__close" aria-label="Zamknij" title="Zamknij" onClick={onClose}
+                  style={{ width: 44, height: 44, color: 'var(--color-text-muted)' }}>×</button>
         </div>
 
         <div className="modal__body">
@@ -1124,7 +1156,7 @@ export function LdapUsersImportModal({ onClose }) {
             <div style={{ marginBottom: 16 }}>
               <div className="form-group" style={{ marginBottom: 8 }}>
                 <label className="form-label">Baza wyszukiwania (Search Base DN)</label>
-                <input
+                <input aria-label="Baza wyszukiwania (Search Base DN)"
                   className="form-control"
                   placeholder="np. OU=Organizacja,DC=firma,DC=local"
                   value={searchBase}
@@ -1334,7 +1366,7 @@ function DeputiesModal({ dept, users, unitDepts = [], onClose, onChanged }) {
       const r = await listDeputies(dept.id)
       setRows(r.data)
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udalo sie zaladowac listy zastepcow')
+      setErr(errorMessage(ex, 'Nie udalo sie zaladowac listy zastepcow'))
     } finally {
       setLoading(false)
     }
@@ -1354,7 +1386,7 @@ function DeputiesModal({ dept, users, unitDepts = [], onClose, onChanged }) {
       setAddUserId(''); setAddLabel('')
       await load(); onChanged?.()
     } catch (ex) {
-      setErr(ex.response?.data?.detail || 'Nie udalo sie dodac zastepcy')
+      setErr(errorMessage(ex, 'Nie udalo sie dodac zastepcy'))
     } finally { setBusy(false) }
   }
 
@@ -1362,39 +1394,24 @@ function DeputiesModal({ dept, users, unitDepts = [], onClose, onChanged }) {
     try {
       await updateDeputy(row.id, { user_id: row.user_id, role_label: newLabel })
       await load(); onChanged?.()
-    } catch (ex) { toast(ex.response?.data?.detail || 'Blad', { tone: 'error' }) }
+    } catch (ex) { toast(errorMessage(ex, 'Blad'), { tone: 'error' }) }
   }
 
   async function onDelete(row) {
-    if (!await ask('Odebrać uprawnienia zastępcy: ' + row.user_name + '?')) return
+    if (!await ask('Odebrać uprawnienia zastępcy: ' + row.user_name + '?', { title: 'Potwierdź operację', confirmLabel: 'Odbierz uprawnienia', danger: true })) return
     try {
       await deleteDeputy(row.id)
       await load(); onChanged?.()
       toast(`Odebrano uprawnienia zastępcy: ${row.user_name}`)
-    } catch (ex) { toast(ex.response?.data?.detail || 'Blad', { tone: 'error' }) }
+    } catch (ex) { toast(errorMessage(ex, 'Blad'), { tone: 'error' }) }
   }
 
   return (
     <td colSpan={999} style={{ padding: 0, background: 'transparent' }}>
-      <div
-        style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
-          zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}
-        onClick={(e) => e.target === e.currentTarget && onClose()}
-      >
-        <div className="card" style={{ width: 620, maxWidth: '95vw',
-                                        maxHeight: '90vh', overflowY: 'auto', padding: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <UserCog size={18} style={{ color: 'var(--color-heading)' }} />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 14, fontWeight: 700 }}>Zastępcy w komórce „{dept.name}"</div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
-                Osoby z pełnymi uprawnieniami kierownika tej komórki (obok głównego kierownika).
-                Mogą akceptować wnioski, wybierać uprawnienia i widzieć pracowników.
-              </div>
-            </div>
-            <button className="btn btn--ghost btn--sm" onClick={onClose}><X size={14} /></button>
+      <Modal title={`Zastępcy w komórce „${dept.name}”`} onClose={onClose} width={620}>
+          <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 4 }}>
+            Osoby z pełnymi uprawnieniami kierownika tej komórki (obok głównego kierownika).
+            Mogą akceptować wnioski, wybierać uprawnienia i widzieć pracowników.
           </div>
 
           {err && <div className="alert alert--error mb-4">{err}</div>}
@@ -1405,13 +1422,13 @@ function DeputiesModal({ dept, users, unitDepts = [], onClose, onChanged }) {
               Dodaj zastępcę
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 6 }}>
-              <select className="input input--sm" value={addUserId}
+              <select className="input input--sm" value={addUserId} aria-label="Osoba"
                       onChange={e => setAddUserId(e.target.value)}>
                 <option value="">— wybierz osobę —</option>
                 <ManagerOptions users={users} deptId={dept.id}
                                 unitDeptIds={unitDepts.map(x => x.id)} exclude={[...alreadyIds]} />
               </select>
-              <input className="input input--sm" value={addLabel}
+              <input className="input input--sm" value={addLabel} aria-label="Funkcja"
                      onChange={e => setAddLabel(e.target.value)}
                      placeholder="Funkcja (np. Zastępca, Koordynator IT)" />
               <button className="btn btn--action btn--sm" onClick={onAdd} disabled={busy || !addUserId}>
@@ -1420,7 +1437,8 @@ function DeputiesModal({ dept, users, unitDepts = [], onClose, onChanged }) {
             </div>
           </div>
 
-          <table className="table">
+          <div style={{ overflowX: 'auto' }}>
+          <table className="table" style={{ minWidth: 440 }}>
             <thead>
               <tr><th>Osoba</th><th>Funkcja</th><th></th></tr>
             </thead>
@@ -1438,8 +1456,8 @@ function DeputiesModal({ dept, users, unitDepts = [], onClose, onChanged }) {
               ))}
             </tbody>
           </table>
-        </div>
-      </div>
+          </div>
+      </Modal>
     </td>
   )
 }
