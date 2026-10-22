@@ -8,22 +8,51 @@ import {
   resetNotificationTemplate, testNotificationTemplate,
 } from '../api'
 
-function Accordion({ icon: Icon, title, sub, badge, defaultOpen = false, children }) {
+// v3.0 — sekcja ustawień jako karta z nagłówkiem-przyciskiem (ikona w kafelku,
+// tytuł z odznaką stanu, opis pod spodem, strzałka). `danger` = strefa niebezpieczna.
+function badgeTone(badge) {
+  const b = String(badge)
+  if (b === 'ON') return ['var(--color-success-bg)', 'var(--color-success-text)']
+  if (b.includes('OFF') || b === 'domyślne') return ['var(--color-neutral-bg)', 'var(--color-neutral-text)']
+  return ['var(--color-info-bg)', 'var(--color-info-text)']
+}
+
+function Accordion({ icon: Icon, title, sub, badge, defaultOpen = false, danger = false, children }) {
   const [open, setOpen] = useState(defaultOpen)
+  const tone = badge != null ? badgeTone(badge) : null
   return (
-    <div className="accordion-item" style={{ marginBottom: 12 }}>
-      <button type="button" className={`accordion-trigger${open ? ' open' : ''}`}
-              onClick={() => setOpen(v => !v)}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {Icon && <Icon size={15} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />}
-          <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--color-navy)' }}>{title}</span>
-          {badge != null && <span className="badge badge--neutral" style={{ fontSize: 10 }}>{badge}</span>}
-          {sub && <span style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{sub}</span>}
-        </div>
-        {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+    <section style={{ background: 'var(--color-card)', border: '1px solid var(--color-border)',
+                      borderRadius: 10, overflow: 'hidden', marginBottom: 14 }}>
+      <button type="button" aria-expanded={open} onClick={() => setOpen(v => !v)}
+              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, minHeight: 64,
+                       padding: '10px 18px', border: 0, borderBottom: open ? '1px solid var(--color-border)' : 0,
+                       background: 'var(--color-card)', font: 'inherit', color: 'inherit', cursor: 'pointer',
+                       textAlign: 'left' }}>
+        {Icon && (
+          <span aria-hidden="true" style={{
+            width: 34, height: 34, flexShrink: 0, borderRadius: 8, display: 'grid', placeItems: 'center',
+            background: danger ? 'var(--color-error-bg)' : 'var(--bg-secondary)',
+            color: danger ? 'var(--color-error-text)' : 'var(--color-navy)',
+          }}>
+            <Icon size={17} />
+          </span>
+        )}
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <strong style={{ fontSize: 16, color: danger ? 'var(--color-error-text)' : 'var(--color-navy)' }}>{title}</strong>
+            {tone && (
+              <span style={{ padding: '1px 8px', borderRadius: 10, fontSize: 11, fontWeight: 800,
+                             background: tone[0], color: tone[1] }}>{badge}</span>
+            )}
+          </span>
+          {sub && <span style={{ display: 'block', fontSize: 13, color: 'var(--color-text-muted)' }}>{sub}</span>}
+        </span>
+        {open
+          ? <ChevronDown size={18} aria-hidden="true" style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
+          : <ChevronRight size={18} aria-hidden="true" style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />}
       </button>
-      {open && <div className="accordion-content" style={{ padding: 16 }}>{children}</div>}
-    </div>
+      {open && <div style={{ padding: '18px 20px' }}>{children}</div>}
+    </section>
   )
 }
 
@@ -662,6 +691,7 @@ function FactoryResetSection() {
       icon={AlertTriangle}
       title="Strefa niebezpieczna — reset do ustawień fabrycznych"
       sub="tylko superadmin"
+      danger
     >
       <div className="alert" style={{
         background: 'var(--color-error-bg)', borderLeft: '4px solid var(--color-error)',

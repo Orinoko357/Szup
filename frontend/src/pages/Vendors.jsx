@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  Truck, Plus, Trash2, Edit2, Save, X, RefreshCw, FileText, AlertTriangle,
+  Truck, Plus, Trash2, Edit2, Save, RefreshCw, FileText, X,
 } from 'lucide-react'
 import {
   listVendors, createVendor, updateVendor, deleteVendor,
@@ -29,7 +29,7 @@ function StatusBadge({ v }) {
   if (v.status === 'expiring') text = `umowa wygasa za ${v.days_left} dni`
   if (v.status === 'active' && v.active_until) text = `umowa do ${fmtDate(v.active_until)}`
   if (v.status === 'expired' && v.active_until) text = `umowa wygasła ${fmtDate(v.active_until)}`
-  return <span className={`badge ${s.cls}`} style={{ fontSize: 10 }}>{text}</span>
+  return <span className={`badge ${s.cls}`} style={{ fontSize: 11, fontWeight: 700 }}>{text}</span>
 }
 
 export default function Vendors() {
@@ -55,16 +55,16 @@ export default function Vendors() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Dostawcy oprogramowania</div>
+          <div className="page-header__title">Dostawcy i umowy</div>
           <div className="page-header__sub">
             Producenci, dane kontaktowe i umowy serwisowe
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn--ghost btn--sm" onClick={load} disabled={loading}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn btn--ghost" onClick={load} disabled={loading}>
             <RefreshCw size={14} /> Odśwież
           </button>
-          <button className="btn btn--action btn--sm" onClick={() => setShowAdd(v => !v)}>
+          <button className="btn btn--action" onClick={() => setShowAdd(v => !v)}>
             <Plus size={14} /> Dodaj dostawcę
           </button>
         </div>
@@ -73,10 +73,18 @@ export default function Vendors() {
       {err && <div className="alert alert--error mb-4">{err}</div>}
 
       {expired.length > 0 && (
-        <div className="alert alert--error mb-4" style={{ fontSize: 13 }}>
-          <AlertTriangle size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-          <strong>Wygasłe umowy serwisowe: {expired.length}</strong>
-          {' — '}{expired.map(v => v.name).join(', ')}
+        <div role="alert" style={{
+          display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', marginBottom: 16,
+          borderRadius: 8, background: 'var(--color-error-bg)', color: 'var(--color-error-text)', fontSize: 14,
+        }}>
+          <span aria-hidden="true" style={{
+            width: 22, height: 22, flexShrink: 0, borderRadius: '50%', background: 'var(--color-card)',
+            display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 12,
+          }}>!</span>
+          <span>
+            <strong>Wygasłe umowy serwisowe: {expired.length}</strong>
+            {' — '}{expired.map(v => v.name).join(', ')}
+          </span>
         </div>
       )}
 
@@ -142,82 +150,53 @@ function VendorForm({ vendor, onCancel, onSaved }) {
     } finally { setSaving(false) }
   }
 
+  // Pola formularza — kolejność jak w projekcie (siatka 3 kolumny).
+  const FIELDS = [
+    ['name', 'Nazwa producenta *', {}],
+    ['nip', 'NIP', {}],
+    ['address', 'Ulica i numer', {}],
+    ['postal_code', 'Kod pocztowy', { placeholder: '00-000' }],
+    ['city', 'Miejscowość', {}],
+    ['contact_person', 'Osoba kontaktowa', {}],
+    ['phone', 'Telefon', {}],
+    ['email', 'E-mail', {}],
+    ['website', 'Strona WWW', {}],
+  ]
+
   return (
-    <div className="card mb-4" style={{ borderTop: '3px solid var(--color-gold)' }}>
-      <form onSubmit={submit}>
-        <div className="form-row">
-          <div className="form-group">
-            <label className="form-label">Nazwa producenta *</label>
-            <input className="form-control" required value={f.name}
-                   onChange={e => set('name', e.target.value)} autoFocus />
-          </div>
-          <div className="form-group">
-            <label className="form-label">NIP</label>
-            <input className="form-control" value={f.nip}
-                   onChange={e => set('nip', e.target.value)} />
-          </div>
+    <section className="card mb-4" aria-label={vendor ? 'Edycja dostawcy' : 'Nowy dostawca'}
+             style={{ border: '2px solid var(--color-navy)', padding: '18px 18px 16px' }}>
+      <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: 'var(--color-navy)' }}>
+          {vendor ? `Edycja: ${vendor.name}` : 'Nowy dostawca'}
+        </h2>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
+          {FIELDS.map(([k, label, extra]) => (
+            <div key={k}>
+              <label className="form-label" htmlFor={`vendor-${k}`}>{label}</label>
+              <input id={`vendor-${k}`} className="form-control" style={{ minHeight: 44 }}
+                     required={k === 'name'} autoFocus={k === 'name'}
+                     value={f[k]} onChange={e => set(k, e.target.value)} {...extra} />
+            </div>
+          ))}
+        </div>
+        <div>
+          <label className="form-label" htmlFor="vendor-notes">Uwagi</label>
+          <textarea id="vendor-notes" className="form-control" style={{ minHeight: 70 }}
+                    value={f.notes} onChange={e => set('notes', e.target.value)} />
         </div>
 
-        <div className="form-row">
-          <div className="form-group">
-            <label className="form-label">Ulica i numer</label>
-            <input className="form-control" value={f.address}
-                   onChange={e => set('address', e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Kod pocztowy</label>
-            <input className="form-control" style={{ maxWidth: 140 }} value={f.postal_code}
-                   onChange={e => set('postal_code', e.target.value)} placeholder="00-000" />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Miejscowość</label>
-            <input className="form-control" value={f.city}
-                   onChange={e => set('city', e.target.value)} />
-          </div>
-        </div>
-
-        <div className="form-row">
-          <div className="form-group">
-            <label className="form-label">Osoba kontaktowa</label>
-            <input className="form-control" value={f.contact_person}
-                   onChange={e => set('contact_person', e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Telefon</label>
-            <input className="form-control" value={f.phone}
-                   onChange={e => set('phone', e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label className="form-label">E-mail</label>
-            <input className="form-control" value={f.email}
-                   onChange={e => set('email', e.target.value)} />
-          </div>
-        </div>
-
-        <div className="form-row">
-          <div className="form-group">
-            <label className="form-label">Strona WWW</label>
-            <input className="form-control" value={f.website}
-                   onChange={e => set('website', e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Uwagi</label>
-            <input className="form-control" value={f.notes}
-                   onChange={e => set('notes', e.target.value)} />
-          </div>
-        </div>
-
-        {err && <div className="alert alert--error mb-4">{err}</div>}
+        {err && <div className="alert alert--error">{err}</div>}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={onCancel}>
-            <X size={13} /> Anuluj
+          <button type="button" className="btn btn--ghost" onClick={onCancel}>
+            Anuluj
           </button>
-          <button type="submit" className="btn btn--primary btn--sm" disabled={saving}>
+          <button type="submit" className="btn btn--primary" disabled={saving}>
             <Save size={13} /> Zapisz
           </button>
         </div>
       </form>
-    </div>
+    </section>
   )
 }
 
@@ -246,44 +225,51 @@ function VendorRow({ vendor: v, onReload }) {
       borderTop: v.status === 'expired' ? '3px solid var(--color-error)' : undefined,
     }}>
       <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '12px 16px', gap: 10,
+        display: 'flex', alignItems: 'flex-start', flexWrap: 'wrap',
+        padding: '14px 16px', gap: 12,
       }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <Truck size={15} style={{ color: 'var(--color-gold)' }} />
-            <span style={{ fontWeight: 700 }}>{v.name}</span>
+        <span aria-hidden="true" style={{
+          width: 34, height: 34, borderRadius: 8, flexShrink: 0, background: 'var(--bg-secondary)',
+          color: 'var(--color-navy)', display: 'grid', placeItems: 'center',
+        }}>
+          <Truck size={17} />
+        </span>
+        <div style={{ flex: '1 1 360px', minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <strong style={{ fontSize: 15, color: 'var(--color-navy)' }}>{v.name}</strong>
             <StatusBadge v={v} />
             {v.contract_count > 0 && (
-              <span className="badge badge--neutral" style={{ fontSize: 10 }}>
+              <span className="badge badge--neutral" style={{ fontSize: 11, fontWeight: 700 }}>
                 {v.contract_count} {v.contract_count === 1 ? 'umowa' : 'umów'}
               </span>
             )}
             {!v.is_active && (
-              <span className="badge badge--neutral" style={{ fontSize: 10 }}>nieaktywny</span>
+              <span className="badge badge--neutral" style={{ fontSize: 11, fontWeight: 700 }}>nieaktywny</span>
             )}
           </div>
           {addr && (
-            <div style={{ color: 'var(--color-text-muted)', fontSize: 12, marginTop: 4 }}>
+            <div style={{ color: 'var(--color-text-muted)', fontSize: 13, marginTop: 4 }}>
               {addr}{v.nip ? ` · NIP ${v.nip}` : ''}
             </div>
           )}
           {contact && (
-            <div style={{ color: 'var(--color-text-muted)', fontSize: 12, marginTop: 2 }}>
+            <div style={{ color: 'var(--color-text-muted)', fontSize: 13, marginTop: 2 }}>
               {contact}
             </div>
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-          <button className="btn btn--ghost btn--sm" onClick={() => setContractsOpen(true)}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn btn--ghost btn--sm" style={{ minHeight: 36, fontWeight: 700 }} onClick={() => setContractsOpen(true)}>
             <FileText size={12} /> Umowy serwisowe
           </button>
-          <button className="btn btn--ghost btn--sm" onClick={() => setEditing(e => !e)}>
+          <button className="btn btn--ghost btn--sm" style={{ minHeight: 36 }} onClick={() => setEditing(e => !e)}>
             <Edit2 size={12} /> Edytuj
           </button>
-          <button className="btn btn--danger btn--sm" onClick={del}>
-            <Trash2 size={12} />
+          <button className="btn btn--ghost btn--sm" onClick={del} aria-label="Usuń dostawcę" title="Usuń dostawcę"
+                  style={{ minHeight: 36, width: 36, padding: 0, justifyContent: 'center',
+                           color: 'var(--color-error-text)', borderColor: 'var(--color-error)' }}>
+            <Trash2 size={14} />
           </button>
         </div>
       </div>
@@ -359,29 +345,29 @@ function ContractsModal({ vendor, onClose, onChanged }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 760 }}>
-        <div className="modal__header">
-          <span className="modal__title">
-            <FileText size={15} style={{ marginRight: 8, verticalAlign: 'middle' }} />
+      <div className="modal" role="dialog" aria-modal="true" style={{ maxWidth: 820 }}>
+        <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-navy)', padding: '12px 12px 12px 20px', gap: 12 }}>
+          <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-navy)' }}>
             Umowy serwisowe — {vendor.name}
-          </span>
-          <button className="modal__close" onClick={onClose}>×</button>
+          </h2>
+          <button type="button" onClick={onClose} aria-label="Zamknij" title="Zamknij"
+                  style={{ width: 44, height: 44, display: 'grid', placeItems: 'center', border: 0, borderRadius: 8,
+                           background: 'transparent', color: 'var(--color-text-muted)', cursor: 'pointer', flexShrink: 0 }}>
+            <X size={18} />
+          </button>
         </div>
 
         <div className="modal__body">
           {err && <div className="alert alert--error" style={{ marginBottom: 12 }}>{err}</div>}
 
           <div style={{
-            padding: 12, background: 'var(--bg-secondary)', borderRadius: 6, marginBottom: 14,
+            padding: 14, background: 'var(--bg-secondary)', border: '1px solid var(--color-border)', borderRadius: 8, marginBottom: 16,
           }}>
-            <div style={{
-              fontSize: 11, fontWeight: 700, marginBottom: 8,
-              color: 'var(--color-text-muted)', textTransform: 'uppercase',
-            }}>
+            <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 800, color: 'var(--color-navy)' }}>
               Dodaj umowę
-            </div>
+            </h3>
             <div style={{
-              display: 'grid', gridTemplateColumns: '1fr 150px 150px auto', gap: 8,
+              display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 150px 150px auto', gap: 10,
               alignItems: 'end',
             }}>
               <div>
@@ -403,7 +389,7 @@ function ContractsModal({ vendor, onClose, onChanged }) {
                        value={form.valid_to}
                        onChange={e => set('valid_to', e.target.value)} />
               </div>
-              <button className="btn btn--action btn--sm" onClick={onAdd}
+              <button className="btn btn--action" style={{ minHeight: 40 }} onClick={onAdd}
                       disabled={busy || !form.valid_to}>
                 <Plus size={12} /> Dodaj
               </button>
@@ -420,7 +406,7 @@ function ContractsModal({ vendor, onClose, onChanged }) {
             </div>
           </div>
 
-          <table className="data-table" style={{ fontSize: 13 }}>
+          <table className="data-table" style={{ fontSize: 14, border: '1px solid var(--color-border)' }}>
             <thead>
               <tr>
                 <th>Numer</th><th>Okres</th><th>Zakres</th><th>Status</th><th></th>
@@ -459,10 +445,11 @@ function ContractRow({ c, onDelete }) {
         {c.valid_from ? fmtDate(c.valid_from) : '—'} — {fmtDate(c.valid_to)}
       </td>
       <td style={{ color: 'var(--color-text-muted)' }}>{c.description || '—'}</td>
-      <td><span className={`badge ${badge.cls}`} style={{ fontSize: 10 }}>{badge.text}</span></td>
-      <td>
-        <button className="btn btn--danger btn--sm" onClick={() => onDelete(c)}>
-          <Trash2 size={12} />
+      <td><span className={`badge ${badge.cls}`} style={{ fontSize: 11, fontWeight: 700 }}>{badge.text}</span></td>
+      <td style={{ textAlign: 'right' }}>
+        <button className="btn btn--ghost btn--sm" onClick={() => onDelete(c)} aria-label="Usuń umowę" title="Usuń umowę"
+                style={{ width: 34, padding: 0, justifyContent: 'center', color: 'var(--color-error-text)', borderColor: 'var(--color-error)' }}>
+          <Trash2 size={13} />
         </button>
       </td>
     </tr>

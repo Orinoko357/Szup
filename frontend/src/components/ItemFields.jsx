@@ -21,9 +21,9 @@ export default function PermInput({ input, name, show, values, onChange, compact
 
   return (
     <div style={{
-      marginLeft: compact ? 20 : 24, marginTop: 4, marginBottom: 6,
-      padding: compact ? 6 : 8, borderLeft: '2px solid var(--color-gold)',
-      background: 'var(--color-card)', borderRadius: 4,
+      marginLeft: compact ? 20 : 26, marginTop: 4, marginBottom: 6,
+      padding: compact ? '6px 8px' : '8px 10px', border: '1px solid var(--color-border)',
+      background: 'var(--color-card)', borderRadius: 6,
     }}>
       {/* Co wpisać/wybrać — najpierw podpowiedź (prompt), potem ewentualny opis. */}
       {input?.prompt && (
@@ -92,12 +92,14 @@ export function SystemBlock({
     if (box.current) box.current.indeterminate = indeterminate && !checked
   }, [indeterminate, checked])
 
-  // Akcent = pełnowysokościowy, kolorowy lewy pasek całej karty (jak w projekcie):
-  // zielony dla nadania, czerwony dla odebrania. Dla pozycji mieszanych brak.
+  // Akcent (v3.0, wg projektu): wewnętrzny pasek po lewej + kolor obramowania —
+  // zielony dla nadania, czerwony dla odebrania, granatowy dla zaznaczonego programu.
   const accentStyle = accent === 'grant'
-    ? { borderLeft: '3px solid var(--color-success)' }
+    ? { borderColor: '#CFE3D0', boxShadow: 'inset 3px 0 0 var(--color-success)' }
     : accent === 'revoke'
-    ? { borderLeft: '3px solid var(--color-error)' }
+    ? { borderColor: '#E7A79F', boxShadow: 'inset 3px 0 0 var(--color-error)', background: 'var(--color-error-bg)' }
+    : (checked || indeterminate)
+    ? { boxShadow: 'inset 3px 0 0 var(--color-navy)' }
     : {}
 
   // Program z listą uprawnień NIE ma zbiorczego checkboxa — zaznaczanie jest
@@ -106,31 +108,32 @@ export function SystemBlock({
   const Header = showCheckbox ? 'label' : 'div'
   return (
     <div style={{
-      border: '1px solid var(--color-border)', borderRadius: 8,
-      marginBottom: 10, background: 'var(--bg-primary)', ...accentStyle,
+      border: '1px solid var(--color-border-strong, var(--color-border))', borderRadius: 8, overflow: 'hidden',
+      marginBottom: 10, background: 'var(--color-card)', ...accentStyle,
     }}>
       <Header style={{
-        display: 'flex', alignItems: 'center', gap: 8,
+        display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10,
         cursor: showCheckbox ? 'pointer' : 'default',
-        padding: compact ? '6px 8px' : '8px 10px', borderRadius: '8px 8px 0 0',
-        fontWeight: 600, fontSize: compact ? 13 : 15, ...headerStyle,
+        padding: compact ? '9px 12px 9px 16px' : '12px 14px 12px 18px',
+        fontWeight: 700, fontSize: compact ? 13 : 14, ...headerStyle,
       }}>
         {showCheckbox && (
           <input ref={box} type="checkbox" checked={checked} onChange={onToggle}
-                 style={{ width: 16, height: 16, flexShrink: 0 }} />
+                 style={{ width: 18, height: 18, flexShrink: 0, accentColor: 'var(--color-navy)' }} />
         )}
-        <span style={{ color: 'var(--color-navy)' }}>{name}</span>
+        <span style={{ color: 'var(--color-text)' }}>{name}</span>
+        <span style={{ flex: 1 }} />
         {badges}
       </Header>
       {description && (
         <div style={{
-          fontSize: 11, color: 'var(--color-text-muted)',
-          padding: compact ? '0 8px 4px 32px' : '0 10px 6px 34px',
+          fontSize: 12, color: 'var(--color-text-muted)',
+          padding: compact ? '0 12px 6px 44px' : '0 14px 8px 46px', marginTop: -4,
         }}>
           {description}
         </div>
       )}
-      <div style={{ padding: compact ? '0 8px 8px' : '0 10px 10px' }}>
+      <div style={{ padding: compact ? '0 12px 10px 16px' : '0 14px 12px 18px' }}>
         {locked && lockedHint && (
           <div style={{
             fontSize: 12, color: 'var(--color-text-muted)', fontStyle: 'italic',
@@ -221,7 +224,7 @@ export function AdminPermRow({ perm, checked, onToggle, indent = 20, extra = nul
   if (!perm) return null
   return (
     <label style={{
-      display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
+      display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, minHeight: 34,
       cursor: disabled ? 'not-allowed' : 'pointer', marginLeft: indent, marginTop: 3,
       opacity: disabled ? 0.45 : 1,
     }} title={disabled
@@ -229,7 +232,7 @@ export function AdminPermRow({ perm, checked, onToggle, indent = 20, extra = nul
       : 'Pełne uprawnienia administracyjne — nadawaj tylko, gdy to konieczne'}>
       <input type="checkbox" checked={checked} disabled={disabled}
              onChange={disabled ? undefined : onToggle} />
-      <span style={{ color: 'var(--color-error)', fontWeight: 600 }}>
+      <span style={{ color: 'var(--color-error-text)', fontWeight: 600 }}>
         {perm.permission_name}
       </span>
       {extra}
@@ -342,36 +345,38 @@ export function PermGroupSection({
   const fs = compact ? 12 : 13
   return (
     <div style={{
-      border: '1px solid var(--color-border)', borderRadius: 6,
-      marginBottom: 8, background: 'var(--color-card)',
+      borderRadius: 6, marginBottom: 6, background: 'var(--color-table-head)',
     }}>
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px',
-        cursor: 'pointer', userSelect: 'none',
-      }} onClick={() => setOpen(v => !v)}>
-        <span style={{ fontSize: 11, color: 'var(--color-text-muted)', width: 12 }}>
-          {open ? '▾' : '▸'}
-        </span>
-        <span style={{ fontWeight: 600, fontSize: fs, color: 'var(--color-navy)' }}>
+        display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '4px 10px',
+        userSelect: 'none',
+      }}>
+        <button type="button" aria-expanded={open} onClick={() => setOpen(v => !v)}
+                style={{
+                  minHeight: 36, display: 'inline-flex', alignItems: 'center', gap: 6,
+                  border: 0, background: 'transparent', padding: 0, cursor: 'pointer',
+                  font: 'inherit', fontSize: fs, fontWeight: 700, color: 'var(--color-text)',
+                }}>
+          <span aria-hidden="true" style={{ width: 12, color: 'var(--color-text-muted)' }}>{open ? '▾' : '▸'}</span>
           {group || 'Uprawnienia'}
+          <span style={{ padding: '0 7px', borderRadius: 9, fontSize: 11, fontWeight: 700,
+                         background: 'var(--color-neutral-bg)', color: 'var(--color-neutral-text)' }}>{count}</span>
+        </button>
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+          {selectedCount > 0 ? `zaznaczone: ${selectedCount}` : 'brak'}
         </span>
-        <span className="badge badge--info" style={{ fontSize: 9 }}>{count}</span>
-        {selectedCount > 0 && (
-          <span className="badge badge--success" style={{ fontSize: 9 }}>
-            zaznaczone: {selectedCount}
-          </span>
-        )}
         {/* Zaznacz/odznacz WSZYSTKIE w tej grupie (nie w całym programie). */}
         {onToggleAll && count > 1 && (
           <button type="button" className="btn btn--ghost btn--sm"
-                  style={{ marginLeft: 'auto', fontSize: 11 }}
+                  style={{ fontSize: 12, minHeight: 32 }}
                   onClick={e => { e.stopPropagation(); setOpen(true); onToggleAll() }}>
             {selectedCount >= count ? 'Odznacz wszystkie' : 'Zaznacz wszystkie'}
           </button>
         )}
       </div>
       {open && (
-        <div style={{ padding: '0 8px 8px' }}>
+        <div style={{ padding: '2px 10px 10px 32px' }}>
           {searchable && count > 12 && (
             <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
               <input className="form-control" style={{ fontSize: fs, flex: 1 }}

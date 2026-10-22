@@ -356,10 +356,20 @@ export default function Users() {
           <div className="page-header__title">Użytkownicy</div>
           <div className="page-header__sub">Zarządzanie kontami i rolami w systemie SZUP</div>
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button className="btn btn--action" onClick={() => setShowAdd(v => !v)}>
+          <Plus size={14} /> Nowy użytkownik
+        </button>
+      </div>
+
+      {/* v3.0 — pasek narzędzi: filtr jednostki + akcje masowe/importu. */}
+      <div className="card" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10,
+                                     padding: '12px 14px', marginBottom: 18 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600,
+                        color: 'var(--color-text-muted)' }}>
+          Jednostka
           <select
             className="form-control"
-            style={{ maxWidth: 260, fontSize: 13 }}
+            style={{ maxWidth: 260, fontSize: 14 }}
             value={filterUnit}
             onChange={e => setFilterUnit(e.target.value)}
             title="Pokaż użytkowników z wybranej jednostki"
@@ -367,22 +377,20 @@ export default function Users() {
             <option value="">Wszystkie jednostki</option>
             {units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
-          <button className="btn btn--ghost btn--sm"
-                  onClick={() => collapsed.size > 0 ? setCollapsed(new Set()) : collapseAll()}
-                  title="Zwiń lub rozwiń wszystkie sekcje">
-            <FolderTree size={14} /> {collapsed.size > 0 ? 'Rozwiń wszystko' : 'Zwiń wszystko'}
-          </button>
-          <button className="btn btn--ghost btn--sm" onClick={runAutoManagers} disabled={autoBusy}
-                  title="Przypisz kierowników komórek wg stanowiska z AD (kierownik/dyrektor/naczelnik)">
-            <UserCog size={13} /> {autoBusy ? 'Przypisywanie…' : 'Kierownicy wg stanowiska'}
-          </button>
-          <button className="btn btn--action btn--sm" onClick={() => setShowLdapUsersImport(true)}>
-            <UsersIcon size={13} /> Importuj z AD
-          </button>
-          <button className="btn btn--action btn--sm" onClick={() => setShowAdd(v => !v)}>
-            <Plus size={13} /> Nowy użytkownik
-          </button>
-        </div>
+        </label>
+        <div style={{ flex: 1 }} />
+        <button className="btn btn--ghost btn--sm"
+                onClick={() => collapsed.size > 0 ? setCollapsed(new Set()) : collapseAll()}
+                title="Zwiń lub rozwiń wszystkie sekcje">
+          <FolderTree size={14} /> {collapsed.size > 0 ? 'Rozwiń wszystko' : 'Zwiń wszystko'}
+        </button>
+        <button className="btn btn--ghost btn--sm" onClick={runAutoManagers} disabled={autoBusy}
+                title="Przypisz kierowników komórek wg stanowiska z AD (kierownik/dyrektor/naczelnik)">
+          <UserCog size={14} /> {autoBusy ? 'Przypisywanie…' : 'Kierownicy wg stanowiska'}
+        </button>
+        <button className="btn btn--ghost btn--sm" onClick={() => setShowLdapUsersImport(true)}>
+          <UsersIcon size={14} /> Importuj z AD
+        </button>
       </div>
 
       {showLdapUsersImport && (
@@ -418,29 +426,33 @@ export default function Users() {
         </div>
       ) : (
         // Akordeon per JEDNOSTKA — spójnie z zakładką „Jednostki".
-        <div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {userGroups.map(g => {
             const uKey = `u:${g.key}`
             const unitOpen = !collapsed.has(uKey)
             return (
-              <div className="accordion-item" key={`g-${g.key}`}>
-                <button type="button" className={`accordion-trigger${unitOpen ? ' open' : ''}`}
-                        onClick={() => toggleCollapse(uKey)}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <Building2 size={15} style={{
-                      color: g.key === '_none' ? 'var(--color-text-muted)' : 'var(--color-navy)', flexShrink: 0 }} />
-                    <span style={{ fontWeight: 700, fontSize: 14,
+              <section key={`g-${g.key}`} aria-label={`Jednostka ${g.name}`}
+                       style={{ background: 'var(--color-card)', border: '1px solid var(--color-border)',
+                                borderRadius: 10, overflow: 'hidden' }}>
+                <button type="button" aria-expanded={unitOpen} onClick={() => toggleCollapse(uKey)}
+                        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, minHeight: 52,
+                                 padding: '0 18px', border: 0, borderBottom: unitOpen ? '1px solid var(--color-border)' : 0,
+                                 background: 'var(--color-card)', font: 'inherit', color: 'inherit',
+                                 cursor: 'pointer', textAlign: 'left' }}>
+                  {unitOpen ? <ChevronDown size={18} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />
+                            : <ChevronRight size={18} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />}
+                  <Building2 size={17} aria-hidden="true" style={{
+                    color: g.key === '_none' ? 'var(--color-text-muted)' : 'var(--color-navy)', flexShrink: 0 }} />
+                  <strong style={{ fontSize: 16,
                                    color: g.key === '_none' ? 'var(--color-text-muted)' : 'var(--color-navy)' }}>
-                      {g.name}
-                    </span>
-                    <span className="badge badge--neutral" style={{ fontSize: 10 }}>{g.count}</span>
-                  </div>
-                  {unitOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                    {g.name}
+                  </strong>
+                  <span className="badge badge--neutral">{g.count}</span>
                 </button>
 
                 {unitOpen && (
-                  <div className="accordion-content" style={{ padding: 0 }}>
-                    <table className="data-table" style={{ margin: 0 }}>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className="data-table" style={{ margin: 0, minWidth: 1300 }}>
                       <thead>
                         <tr>
                           <th>Login</th><th>Imię i nazwisko</th><th>E-mail</th><th>Rola</th>
@@ -467,16 +479,16 @@ export default function Users() {
                               <tr>
                                 <td colSpan={10} onClick={() => toggleCollapse(dKey)}
                                     style={{
-                                      padding: '7px 12px 7px 24px', cursor: 'pointer', userSelect: 'none',
+                                      padding: '10px 18px 10px 46px', cursor: 'pointer', userSelect: 'none',
                                       background: 'var(--bg-secondary)',
                                     }}>
                                   <span style={{
-                                    display: 'inline-flex', alignItems: 'center', gap: 7,
-                                    fontSize: 13, fontWeight: 700, color: 'var(--color-text)',
+                                    display: 'inline-flex', alignItems: 'center', gap: 8,
+                                    fontSize: 14, fontWeight: 700, color: 'var(--color-navy)',
                                   }}>
-                                    {deptOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                    {deptOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                                     {d.label}
-                                    <span className="badge badge--neutral" style={{ fontSize: 10 }}>
+                                    <span className="badge badge--neutral">
                                       {d.users.length}
                                     </span>
                                   </span>
@@ -492,7 +504,7 @@ export default function Users() {
                     </table>
                   </div>
                 )}
-              </div>
+              </section>
             )
           })}
         </div>
@@ -675,26 +687,26 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
         {fmtDate(u.password_changed_at)}
       </td>
       <td style={{ whiteSpace: 'nowrap' }}>
-        <button className="btn btn--ghost btn--sm" onClick={toggleActive}
-                title={u.is_active ? 'Dezaktywuj' : 'Aktywuj'}>
-          <Ban size={12} style={{ color: u.is_active ? 'var(--color-warning)' : 'var(--color-success)' }} />
+        <button className="btn btn--ghost btn--sm" style={{ border: 0 }} onClick={toggleActive}
+                title={u.is_active ? 'Dezaktywuj' : 'Aktywuj'} aria-label={u.is_active ? 'Dezaktywuj' : 'Aktywuj'}>
+          <Ban size={15} style={{ color: u.is_active ? 'var(--color-warning)' : 'var(--color-success)' }} />
         </button>
         {u.auth_type === 'local' && (
-          <button className="btn btn--ghost btn--sm" style={{ marginLeft: 4 }}
-                  onClick={handleReset} title="Resetuj hasło">
-            <KeyRound size={12} />
+          <button className="btn btn--ghost btn--sm" style={{ border: 0 }}
+                  onClick={handleReset} title="Resetuj hasło" aria-label="Resetuj hasło">
+            <KeyRound size={15} />
           </button>
         )}
         {isLocked && (
-          <button className="btn btn--ghost btn--sm" style={{ marginLeft: 4 }}
-                  onClick={handleUnlock} title="Odblokuj konto">
-            <Unlock size={12} style={{ color: 'var(--color-warning)' }} />
+          <button className="btn btn--ghost btn--sm" style={{ border: 0 }}
+                  onClick={handleUnlock} title="Odblokuj konto" aria-label="Odblokuj konto">
+            <Unlock size={15} style={{ color: 'var(--color-warning)' }} />
           </button>
         )}
         {!(u.roles || [u.role]).includes('superadmin') && (
-          <button className="btn btn--danger btn--sm" style={{ marginLeft: 4 }}
-                  onClick={handleDelete}>
-            <Trash2 size={12} />
+          <button className="btn btn--ghost btn--sm" style={{ border: 0, color: 'var(--color-error-text)' }}
+                  onClick={handleDelete} title="Usuń" aria-label="Usuń">
+            <Trash2 size={15} />
           </button>
         )}
       </td>
@@ -897,8 +909,8 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
         </div>
         {err && <div className="alert alert--error mb-4">{err}</div>}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={onCancel}>Anuluj</button>
-          <button type="submit" className="btn btn--primary btn--sm" disabled={busy}>
+          <button type="button" className="btn btn--ghost" onClick={onCancel}>Anuluj</button>
+          <button type="submit" className="btn btn--primary" disabled={busy}>
             {busy ? 'Tworzenie…' : 'Utwórz konto'}
           </button>
         </div>

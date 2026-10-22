@@ -46,7 +46,7 @@ export default function Structure({ renderHeader }) {
 
       {err && <div className="alert alert--error mb-4">{err}</div>}
 
-      <div className="card">
+      <section aria-label="Struktura" className="card" style={{ padding: 12 }}>
         {loading ? (
           <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
         ) : roots.length === 0 ? (
@@ -55,13 +55,13 @@ export default function Structure({ renderHeader }) {
             Brak wydziałów w Twoim zakresie
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div role="tree" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {roots.map(d => (
               <DeptNode key={d.id} dept={d} depth={0} defaultOpen />
             ))}
           </div>
         )}
-      </div>
+      </section>
     </div>
   )
 }
@@ -72,58 +72,58 @@ function DeptNode({ dept: d, depth, defaultOpen = false }) {
   const hasWorkers  = (d.workers  || []).length > 0
 
   return (
-    <div style={{
-      marginLeft: depth * 14,
-      borderLeft: depth > 0 ? '2px solid var(--color-border)' : 'none',
-      paddingLeft: depth > 0 ? 12 : 0,
-    }}>
+    <div role="treeitem" aria-expanded={open} style={{ marginLeft: depth > 0 ? 24 : 0 }}>
       <div
+        role="button" tabIndex={0}
         onClick={() => setOpen(v => !v)}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(v => !v) } }}
         style={{
-          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
-          background: 'var(--bg-secondary)', borderRadius: 6, cursor: 'pointer',
+          display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, minHeight: 48,
+          padding: '4px 12px', boxSizing: 'border-box',
+          background: 'var(--bg-secondary)', borderRadius: 8, cursor: 'pointer',
           border: '1px solid var(--color-border)',
         }}>
         {hasChildren || hasWorkers
-          ? (open ? <ChevronDown size={14} /> : <ChevronRight size={14} />)
+          ? (open ? <ChevronDown size={14} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />
+                  : <ChevronRight size={14} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />)
           : <span style={{ width: 14, display: 'inline-block' }} />}
         {(() => {
           const meta = kindMeta(d.kind)
           const Icon = meta.icon || Building2
-          return <Icon size={15} style={{ color: 'var(--color-navy)' }} />
+          return <Icon size={17} aria-hidden="true" style={{ color: 'var(--color-navy)' }} />
         })()}
-        <strong style={{ fontSize: 13 }}>{d.name}</strong>
+        <strong style={{ fontSize: 14, color: 'var(--color-navy)' }}>{d.name}</strong>
         <KindBadge kind={d.kind} />
         {d.requires_higher_approval && (
-          <span className="badge badge--warning" style={{ fontSize: 10 }}>
+          <span className="badge badge--warning" style={{ fontSize: 11, fontWeight: 700 }}>
             2-stopniowy
           </span>
         )}
-        <span style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>
+        <span style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>
           · {d.unit_name || '—'}
         </span>
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
           {d.manager ? (
-            <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
-              <Crown size={12} style={{ verticalAlign: 'middle', marginRight: 4, color: 'var(--color-gold)' }} />
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--color-text-muted)' }}>
+              <Crown size={15} aria-hidden="true" style={{ color: 'var(--color-gold-dark)' }} />
               {d.manager.full_name || d.manager.username}
             </span>
           ) : (
-            <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+            <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
               (brak kierownika)
             </span>
           )}
-          <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
-            <Users size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--color-text-muted)' }}>
+            <Users size={15} aria-hidden="true" />
             {(d.workers || []).length}
           </span>
         </div>
       </div>
 
       {open && (
-        <div style={{ marginTop: 6, marginLeft: 20 }}>
+        <div style={{ marginTop: 6, marginLeft: 24 }}>
           {hasWorkers && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 6 }}>
               {d.workers.map(w => (
                 <WorkerRow key={w.id} worker={w} />
               ))}
@@ -156,57 +156,52 @@ function WorkerRow({ worker: w }) {
   const systemNames = Object.keys(bySystem).sort()
 
   return (
-    <div style={{
-      border: '1px solid var(--color-border)', borderRadius: 6,
-      background: 'var(--bg-primary, var(--bg-secondary))',
-      padding: '6px 10px',
-    }}>
+    <div>
       <div
+        role={hasPerms ? 'button' : undefined} tabIndex={hasPerms ? 0 : undefined}
+        aria-expanded={hasPerms ? expanded : undefined}
         onClick={() => hasPerms && setExpanded(v => !v)}
+        onKeyDown={e => { if (hasPerms && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setExpanded(v => !v) } }}
         style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          cursor: hasPerms ? 'pointer' : 'default',
+          display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, minHeight: 40,
+          padding: '2px 12px', borderRadius: 6, cursor: hasPerms ? 'pointer' : 'default',
         }}>
         {hasPerms
-          ? (expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />)
+          ? (expanded ? <ChevronDown size={12} aria-hidden="true" /> : <ChevronRight size={12} aria-hidden="true" />)
           : <span style={{ width: 12, display: 'inline-block' }} />}
         {w.is_manager_here
-          ? <Crown size={13} style={{ color: 'var(--color-gold)' }} />
-          : <User size={13} style={{ color: 'var(--color-text-muted)' }} />}
-        <span style={{ fontWeight: w.is_manager_here ? 700 : 500, fontSize: 12 }}>
+          ? <Crown size={15} aria-hidden="true" style={{ color: 'var(--color-gold-dark)' }} />
+          : <User size={15} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />}
+        <span style={{ fontWeight: w.is_manager_here ? 700 : 600, fontSize: 14 }}>
           {w.full_name || w.username}
         </span>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--color-text-muted)' }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-text-muted)' }}>
           {w.username}
         </span>
         {w.email && (
-          <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
+          <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
             · {w.email}
           </span>
         )}
-        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--color-text-muted)' }}>
-          <ShieldCheck size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--color-text-muted)' }}>
+          <ShieldCheck size={14} aria-hidden="true" />
           {w.permissions.length} upr.
         </span>
       </div>
 
       {expanded && hasPerms && (
-        <div style={{ marginTop: 6, marginLeft: 22, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ padding: '4px 12px 10px 35px', display: 'flex', flexDirection: 'column', gap: 6 }}>
           {systemNames.map(sn => (
-            <div key={sn}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-navy)' }}>
-                {sn}
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginLeft: 8, marginTop: 2 }}>
-                {bySystem[sn].map(p => (
-                  <span key={`${p.system_id}:${p.permission_id}:${p.request_id}`}
-                        className="badge badge--info"
-                        title={`Nadano: ${fmtDate(p.granted_at)} (wniosek #${p.request_id})`}
-                        style={{ fontSize: 10 }}>
-                    {p.permission_name}
-                  </span>
-                ))}
-              </div>
+            <div key={sn} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, fontSize: 13 }}>
+              <strong style={{ minWidth: 190, color: 'var(--color-navy)' }}>{sn}</strong>
+              {bySystem[sn].map(p => (
+                <span key={`${p.system_id}:${p.permission_id}:${p.request_id}`}
+                      className="badge badge--info"
+                      title={`Nadano: ${fmtDate(p.granted_at)} (wniosek #${p.request_id})`}
+                      style={{ fontSize: 12 }}>
+                  {p.permission_name}
+                </span>
+              ))}
             </div>
           ))}
         </div>

@@ -44,7 +44,7 @@ export function KindBadge({ kind = 'grant', label }) {
     <span style={{
       display: 'inline-block', padding: '2px 8px', borderRadius: 4,
       background: t.bg, color: t.fg, border: `1px solid ${t.bd}`,
-      fontSize: 10, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase',
+      fontSize: 10, fontWeight: 800, letterSpacing: '.07em', textTransform: 'uppercase',
     }}>{label}</span>
   )
 }
@@ -67,7 +67,7 @@ export function WorkerCard({ name, sub, cols = [] }) {
                   padding: '12px 16px', borderRadius: 8, border: '1px solid var(--color-border)',
                   background: 'var(--bg-secondary)' }}>
       <span style={{ flexShrink: 0, width: 38, height: 38, borderRadius: '50%',
-                     display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700,
+                     display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 800,
                      background: 'var(--color-card)', color: 'var(--color-navy)',
                      border: '1px solid var(--color-border)' }}>{initials}</span>
       <div style={{ flex: '1 1 200px', minWidth: 0 }}>
@@ -78,7 +78,7 @@ export function WorkerCard({ name, sub, cols = [] }) {
         )}
       </div>
       {cols.map((c, i) => (
-        <div key={i} style={{ minWidth: 70 }}>
+        <div key={i} style={{ minWidth: 80 }}>
           <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.06em',
                         color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>{c.label}</div>
           <div style={{ fontSize: 13, fontWeight: 600 }}>{c.value || '—'}</div>
@@ -91,18 +91,19 @@ export function WorkerCard({ name, sub, cols = [] }) {
 /** Numerowany nagłówek sekcji: „01 Tytuł”. */
 export function Section({ n, title, note, children }) {
   return (
-    <div style={{ marginBottom: 18 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10,
-                    borderBottom: '1px solid var(--color-border)', paddingBottom: 6 }}>
+    <section style={{ marginBottom: 22 }}>
+      <h2 style={{ display: 'flex', alignItems: 'baseline', gap: 8, margin: '0 0 12px',
+                   borderBottom: '1px solid var(--color-border)', paddingBottom: 8,
+                   fontWeight: 700, fontSize: 16, color: 'var(--color-navy)' }}>
         {n != null && (
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
-                         color: 'var(--color-gold)' }}>{String(n).padStart(2, '0')}</span>
+                         color: 'var(--color-gold-dark)' }}>{String(n).padStart(2, '0')}</span>
         )}
-        <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--color-navy)' }}>{title}</span>
-        {note && <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{note}</span>}
-      </div>
+        {title}
+        {note && <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--color-text-muted)' }}>{note}</span>}
+      </h2>
       {children}
-    </div>
+    </section>
   )
 }
 
@@ -114,41 +115,44 @@ function StepItem({ step }) {
   const isSkipped = state === 'skipped'
   // v3.0: zakończone kroki z delikatnym zielonym tłem (wg projektu).
   const bg = isCurrent ? '#FEF6E3' : isDone ? 'var(--color-success-bg)' : 'var(--color-card)'
-  const bd = isCurrent ? '#E6C34D' : 'var(--color-border)'
+  const bd = isCurrent ? '#E6C34D' : isDone ? '#CFE3D0'
+    : isSkipped ? 'var(--color-border-strong, var(--color-border))' : 'var(--color-border)'
   return (
-    <div style={{
-      flex: 1, minWidth: 150, display: 'flex', alignItems: 'flex-start', gap: 8,
+    <li style={{
+      display: 'flex', alignItems: 'flex-start', gap: 8,
       padding: '10px 12px', borderRadius: 8, border: `1px solid ${bd}`,
       background: bg, borderStyle: isSkipped ? 'dashed' : 'solid',
-      opacity: isSkipped ? 0.7 : 1,
     }}>
       <span style={{
         flexShrink: 0, width: 22, height: 22, borderRadius: '50%',
-        display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700,
+        display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 800, boxSizing: 'border-box',
         background: isDone ? 'var(--color-success)' : isCurrent ? 'var(--color-navy)' : 'transparent',
         color: (isDone || isCurrent) ? '#fff' : 'var(--color-text-muted)',
         border: (isDone || isCurrent) ? 'none' : '1.5px solid var(--color-border-strong, var(--color-border))',
       }}>
         {isDone ? <Check size={13} /> : isSkipped ? '–' : n}
       </span>
-      <div style={{ lineHeight: 1.25 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700,
+      <div style={{ lineHeight: 1.25, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 700,
                       textDecoration: isSkipped ? 'line-through' : 'none',
-                      color: isCurrent ? 'var(--color-navy)' : 'var(--color-text)' }}>
+                      color: isSkipped ? 'var(--color-text-muted)' : isCurrent ? 'var(--color-navy)' : 'var(--color-text)' }}>
           {label}
         </div>
         <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>{caption}</div>
       </div>
-    </div>
+    </li>
   )
 }
 
 export function RequestStepper({ steps = [] }) {
   if (!steps.length) return null
   return (
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
+    <ol aria-label="Etapy obiegu" style={{
+      listStyle: 'none', margin: '0 0 18px', padding: 0, display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8,
+    }}>
       {steps.map((s, i) => <StepItem key={i} step={s} />)}
-    </div>
+    </ol>
   )
 }
 
@@ -195,21 +199,22 @@ export function buildWorkflowSteps({ sent, nodeType, status, requiresHigher, kin
 function SummaryBox({ rows = [] }) {
   if (!rows.length) return null
   return (
-    <div style={{ border: '1px solid var(--color-border)', borderRadius: 8, overflow: 'hidden' }}>
-      <div style={{ background: 'var(--color-navy)', color: '#fff', padding: '8px 12px',
-                    fontSize: 11, fontWeight: 800, letterSpacing: '.06em' }}>
+    <section aria-label="Podsumowanie" style={{ border: '1px solid var(--color-border)', borderRadius: 10,
+                                                overflow: 'hidden', background: 'var(--color-card)' }}>
+      <h2 style={{ margin: 0, background: 'var(--color-navy)', color: '#fff', padding: '10px 14px',
+                   fontSize: 11, fontWeight: 800, letterSpacing: '.08em' }}>
         PODSUMOWANIE
-      </div>
-      <div style={{ padding: '8px 12px' }}>
+      </h2>
+      <dl style={{ margin: 0, padding: '8px 14px 10px' }}>
         {rows.map((r, i) => (
           <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 12,
-                                padding: '4px 0', fontSize: 13 }}>
-            <span style={{ color: 'var(--color-text-muted)' }}>{r.label}</span>
-            <span style={{ fontWeight: 600, textAlign: 'right' }}>{r.value}</span>
+                                padding: '5px 0', fontSize: 13 }}>
+            <dt style={{ color: 'var(--color-text-muted)' }}>{r.label}</dt>
+            <dd style={{ margin: 0, fontWeight: 700, textAlign: 'right' }}>{r.value}</dd>
           </div>
         ))}
-      </div>
-    </div>
+      </dl>
+    </section>
   )
 }
 
@@ -255,38 +260,39 @@ function HistoryBox({ items = [], requestId, createdBy }) {
   }
 
   return (
-    <div style={{ border: '1px solid var(--color-border)', borderRadius: 8, padding: '10px 12px' }}>
-      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.06em',
-                    color: 'var(--color-text-muted)', marginBottom: 8 }}>HISTORIA</div>
+    <section aria-label="Historia" style={{ border: '1px solid var(--color-border)', borderRadius: 10,
+                                            padding: '12px 14px', background: 'var(--color-card)' }}>
+      <h2 style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 800, letterSpacing: '.08em',
+                   color: 'var(--color-text-muted)' }}>HISTORIA</h2>
       {requestId && steps === null ? (
-        <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>Ładowanie…</div>
+        <div style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>Ładowanie…</div>
       ) : rows.length === 0 ? (
-        <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+        <div style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
           {requestId ? 'Brak kroków w obiegu.' : 'Wniosek nie został jeszcze wysłany.'}
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
           {rows.map((it, i) => (
-            <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12 }}>
-              <span style={{ flexShrink: 0, width: 8, height: 8, borderRadius: '50%', marginTop: 4,
+            <li key={i} style={{ display: 'flex', gap: 9, fontSize: 13 }}>
+              <span aria-hidden="true" style={{ flexShrink: 0, width: 9, height: 9, borderRadius: '50%', marginTop: 5,
                              boxSizing: 'border-box',
                              border: it.skipped ? '1.5px dashed var(--color-text-muted)' : 'none',
                              background: it.skipped ? 'transparent'
                                : it.muted ? 'var(--color-error)' : 'var(--color-success)' }} />
-              <div>
+              <div style={{ minWidth: 0 }}>
                 <div style={{ color: (it.muted || it.skipped) ? 'var(--color-text-muted)' : 'inherit' }}>{it.text}</div>
-                {it.sub && <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>{it.sub}</div>}
+                {it.sub && <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--color-text-muted)' }}>{it.sub}</div>}
                 {it.comment && (
-                  <div style={{ fontSize: 11, color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
-                    „{it.comment}"
+                  <div style={{ fontSize: 12, color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+                    „{it.comment}”
                   </div>
                 )}
               </div>
-            </div>
+            </li>
           ))}
-        </div>
+        </ol>
       )}
-    </div>
+    </section>
   )
 }
 
@@ -298,24 +304,26 @@ export default function RequestViewShell({
 }) {
   return (
     <div>
+      {/* Przyciski w stopce karty wg projektu: wysokość 44 px, tekst 14 px. */}
+      <style>{'.rv-footer .btn{min-height:44px;font-size:14px;padding:0 16px;border-radius:8px}'}</style>
       {/* Nagłówek */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
         {Icon && (
           <div style={{ flexShrink: 0, width: 44, height: 44, borderRadius: 10,
                         background: 'var(--color-navy)', color: 'var(--color-gold)',
                         display: 'grid', placeItems: 'center' }}>
-            <Icon size={20} />
+            <Icon size={20} aria-hidden="true" />
           </div>
         )}
         <div style={{ flex: 1, minWidth: 240 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             {kindLabel && <KindBadge kind={kind} label={kindLabel} />}
-            {statusText && <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{statusText}</span>}
+            {statusText && <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>{statusText}</span>}
           </div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--color-navy)', marginTop: 2 }}>{title}</div>
-          {subtitle && <div style={{ fontSize: 13, color: 'var(--color-text-muted)', marginTop: 2 }}>{subtitle}</div>}
+          <h1 style={{ margin: '2px 0 0', fontSize: 24, fontWeight: 800, color: 'var(--color-navy)' }}>{title}</h1>
+          {subtitle && <p style={{ margin: '2px 0 0', fontSize: 14, color: 'var(--color-text-muted)' }}>{subtitle}</p>}
         </div>
-        <button type="button" className="btn btn--ghost" onClick={onBack}>{backLabel}</button>
+        <button type="button" className="btn btn--ghost" style={{ minHeight: 44 }} onClick={onBack}>{backLabel}</button>
       </div>
 
       <RequestStepper steps={steps} />
@@ -323,14 +331,14 @@ export default function RequestViewShell({
       {/* Dwie kolumny */}
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
         <div style={{ flex: '1 1 560px', minWidth: 0 }}>
-          <div className="card">
+          <div className="card" style={{ padding: 22 }}>
             {children}
             {(footerLeft || footerActions) && (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                            gap: 12, flexWrap: 'wrap', marginTop: 20,
+              <div className="rv-footer" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            gap: 10, flexWrap: 'wrap', marginTop: 22,
                             borderTop: '1px solid var(--color-border)', paddingTop: 16 }}>
-                <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{footerLeft}</div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>{footerActions}</div>
+                <div style={{ fontSize: 13, color: 'var(--color-text-muted)', flex: '1 1 auto' }}>{footerLeft}</div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>{footerActions}</div>
               </div>
             )}
           </div>

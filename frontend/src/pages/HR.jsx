@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { FilePlus, UserMinus, ChevronDown, ChevronRight, Building2, Check, Search } from 'lucide-react'
+import { FilePlus, UserMinus, ChevronDown, ChevronRight, Check, Search, Info, Lock } from 'lucide-react'
 import { listRequests, createRequest, listActiveDepts, listActiveUnits, listRequestTypes, usersByDepartment, searchUsers } from '../api'
 import { fmtDate } from '../serverTime'
 import RequestViewShell, { Section, buildWorkflowSteps, KindBadge } from '../components/RequestView'
@@ -38,6 +38,15 @@ const STATUS_LABELS = {
   pending_it:        'Oczekuje na IT',
   completed:         'Zrealizowane',
   rejected:          'Odrzucone',
+}
+
+// v3.0 — wspólne style formularzy kadrowych (wg projektu).
+const FIELD_GRID  = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px 16px' }
+const FIELD_INPUT = { minHeight: 44, borderRadius: 8, fontSize: 14 }
+const NOTE_BOX = {
+  display: 'flex', alignItems: 'flex-start', gap: 10, marginTop: 14, padding: '12px 14px',
+  borderRadius: 8, background: 'var(--bg-secondary)', border: '1px solid var(--color-border)',
+  fontSize: 13, color: 'var(--color-text-muted)',
 }
 
 const STATUS_BADGE = {
@@ -97,29 +106,34 @@ export default function HR() {
           <div className="page-header__title">Kartoteka</div>
           <div className="page-header__sub">Zgłoś zatrudnienie nowego pracownika lub ustanie stosunku pracy</div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn--action" onClick={() => setShowForm(true)}>
-            <FilePlus size={15} />
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+          <button className="btn btn--action" style={{ minHeight: 44, fontSize: 14 }} onClick={() => setShowForm(true)}>
+            <FilePlus size={16} />
             Nowy pracownik
           </button>
-          <button className="btn btn--ghost" onClick={() => setShowTermination(true)}>
-            <UserMinus size={15} />
+          <button className="btn btn--ghost" style={{ minHeight: 44, fontSize: 14, background: 'var(--color-card)' }}
+                  onClick={() => setShowTermination(true)}>
+            <UserMinus size={16} />
             Ustanie stosunku pracy
           </button>
         </div>
       </div>
 
-      <div className="card">
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-          <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--color-navy)', flex: '1 1 auto' }}>
+      <section aria-label="Moje zgłoszenia" className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12,
+                      padding: '14px 18px', borderBottom: '1px solid var(--color-border)' }}>
+          <h2 style={{ margin: 0, flex: '1 1 200px', fontSize: 16, fontWeight: 800, color: 'var(--color-navy)' }}>
             Moje zgłoszenia
-          </div>
-          <div role="group" aria-label="Filtr statusu" style={{ display: 'inline-flex', border: '1px solid var(--color-input-border)', borderRadius: 8, overflow: 'hidden' }}>
+          </h2>
+          <div role="group" aria-label="Filtr statusu" style={{
+            display: 'inline-flex', padding: 3, borderRadius: 8,
+            background: 'var(--bg-secondary)', border: '1px solid var(--color-border)',
+          }}>
             {[['open', 'W toku'], ['done', 'Zakończone'], ['all', 'Wszystkie']].map(([id, label]) => (
               <button key={id} type="button" aria-pressed={view === id} onClick={() => setView(id)}
                       style={{
-                        minHeight: 36, padding: '0 12px', border: 0, cursor: 'pointer', font: 'inherit', fontSize: 13,
-                        fontWeight: view === id ? 700 : 500,
+                        minHeight: 36, padding: '0 14px', border: 0, borderRadius: 6, cursor: 'pointer',
+                        font: 'inherit', fontSize: 13, fontWeight: view === id ? 700 : 600,
                         background: view === id ? 'var(--color-navy)' : 'transparent',
                         color: view === id ? '#fff' : 'var(--color-navy)',
                       }}>
@@ -127,47 +141,52 @@ export default function HR() {
               </button>
             ))}
           </div>
-          <div style={{ position: 'relative', flex: '0 1 260px' }}>
-            <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-muted)' }} />
-            <input className="form-input" style={{ paddingLeft: 30 }} aria-label="Szukaj pracownika"
+          <label style={{ position: 'relative', display: 'block', flex: '0 1 280px' }}>
+            <span className="sr-only" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
+              Szukaj pracownika
+            </span>
+            <Search size={15} aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-muted)' }} />
+            <input type="search" className="form-input" style={{ minHeight: 44, paddingLeft: 36 }}
                    placeholder="Szukaj pracownika…" value={q} onChange={e => setQ(e.target.value)} />
-          </div>
+          </label>
         </div>
         {loading ? (
-          <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
+          <div style={{ padding: '20px 18px', color: 'var(--color-text-muted)' }}>Ładowanie…</div>
         ) : shown.length === 0 ? (
-          <div style={{ color: 'var(--color-text-muted)' }}>Brak zgłoszeń</div>
+          <div style={{ padding: '20px 18px', fontSize: 14, color: 'var(--color-text-muted)' }}>Brak zgłoszeń</div>
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>#</th><th>Pracownik</th><th>Rodzaj</th><th>Stanowisko</th><th>Status</th><th>Data</th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map(r => {
-                const kind = r.kind || 'grant'
-                return (
-                  <tr key={r.id}>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
-                    <td style={{ fontWeight: 600 }}>{r.worker_name}</td>
-                    <td>
-                      <KindBadge kind={kind} label={kind === 'revoke' ? 'Odejście' : 'Zatrudnienie'} />
-                    </td>
-                    <td style={{ color: 'var(--color-text-muted)' }}>{r.worker_position || '—'}</td>
-                    <td><span className={`badge ${STATUS_BADGE[r.status] || 'badge--neutral'}`}>
-                      {STATUS_LABELS[r.status] || r.status}
-                    </span></td>
-                    <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>
-                      {fmtDate(r.created_at)}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+          <div style={{ overflowX: 'auto' }}>
+            <table className="data-table" style={{ minWidth: 760 }}>
+              <thead>
+                <tr>
+                  <th>#</th><th>Pracownik</th><th>Rodzaj</th><th>Stanowisko</th><th>Status</th><th>Data</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map(r => {
+                  const kind = r.kind || 'grant'
+                  return (
+                    <tr key={r.id}>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--color-text-muted)' }}>{r.id}</td>
+                      <td style={{ fontWeight: 700 }}>{r.worker_name}</td>
+                      <td>
+                        <KindBadge kind={kind} label={kind === 'revoke' ? 'Odejście' : 'Zatrudnienie'} />
+                      </td>
+                      <td style={{ color: 'var(--color-text-muted)' }}>{r.worker_position || '—'}</td>
+                      <td><span className={`badge ${STATUS_BADGE[r.status] || 'badge--neutral'}`}>
+                        {STATUS_LABELS[r.status] || r.status}
+                      </span></td>
+                      <td style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>
+                        {fmtDate(r.created_at)}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
-      </div>
+      </section>
 
     </div>
   )
@@ -298,35 +317,44 @@ function RequestFormView({ onCancel, onCreated }) {
                         </button>
                       </>}>
       <Section n={1} title="Dane pracownika">
-        <div className="form-row">
-          <div className="form-group">
-            <label className="form-label">Imię *</label>
-            <input className="form-control" required autoFocus
+        <div style={FIELD_GRID}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label" htmlFor="hr-first">Imię *</label>
+            <input id="hr-first" className="form-control" style={FIELD_INPUT} required autoFocus
                    value={firstName} onChange={e => setFirstName(e.target.value)} />
           </div>
-          <div className="form-group">
-            <label className="form-label">Nazwisko *</label>
-            <input className="form-control" required
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label" htmlFor="hr-last">Nazwisko *</label>
+            <input id="hr-last" className="form-control" style={FIELD_INPUT} required
                    value={lastName} onChange={e => setLastName(e.target.value)} />
           </div>
-        </div>
-        <div className="form-row">
-          <div className="form-group">
-            <label className="form-label">Stanowisko *</label>
-            <input className="form-control" required value={position}
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label" htmlFor="hr-pos">Stanowisko *</label>
+            <input id="hr-pos" className="form-control" style={FIELD_INPUT} required value={position}
                    onChange={e => setPosition(e.target.value)}
                    placeholder="np. Podinspektor" />
           </div>
-          <div className="form-group">
-            <label className="form-label">Data zatrudnienia od</label>
-            <input className="form-control" type="date" value={startDate}
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label" htmlFor="hr-from">Data zatrudnienia od</label>
+            <input id="hr-from" className="form-control" style={FIELD_INPUT} type="date" value={startDate}
                    onChange={e => setStartDate(e.target.value)} />
           </div>
         </div>
       </Section>
 
       <Section n={2} title="Miejsce pracy *">
+        <div className="form-label">Komórka organizacyjna *</div>
         <DeptSearchSelect units={units} depts={depts} value={deptId} onChange={setDeptId} />
+        <div style={NOTE_BOX}>
+          <Info size={16} aria-hidden="true" style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>
+            Wniosek trafi do kierownika wybranej komórki
+            {selectedDept?.manager_name
+              ? <>: <strong style={{ color: 'var(--color-text)' }}>{selectedDept.manager_name}</strong></>
+              : ''}
+            . Uprawnienia wskaże on, nie kadry.
+          </span>
+        </div>
       </Section>
 
       {err && <div className="alert alert--error mt-4">{err}</div>}
@@ -475,11 +503,11 @@ function TerminationFormView({ onCancel, onCreated }) {
       <Section n={1} title="Pracownik">
           {/* Wyszukiwanie po nazwisku — najszybsza droga. */}
           <div className="form-group">
-            <label className="form-label">Znajdź po nazwisku lub loginie</label>
+            <label className="form-label" htmlFor="hr-term-search">Znajdź po nazwisku lub loginie</label>
             {picked ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-                            padding: '9px 12px', border: '1px solid var(--color-success)',
-                            background: 'var(--color-success-bg)', borderRadius: 6 }}>
+                            minHeight: 52, padding: '6px 12px', border: '2px solid var(--color-navy)',
+                            background: 'var(--bg-secondary)', borderRadius: 8 }}>
                 <strong>{picked.full_name || picked.username}</strong>
                 <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
                   {picked.username ? `(${picked.username}) · ` : ''}
@@ -490,24 +518,29 @@ function TerminationFormView({ onCancel, onCreated }) {
               </div>
             ) : (
               <>
-                <input className="form-control" value={search} autoFocus
-                       placeholder="Wpisz co najmniej 2 znaki nazwiska…"
-                       onChange={e => setSearch(e.target.value)} />
+                <div style={{ position: 'relative' }}>
+                  <Search size={15} aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-muted)' }} />
+                  <input id="hr-term-search" type="search" className="form-control" value={search} autoFocus
+                         style={{ ...FIELD_INPUT, paddingLeft: 36 }}
+                         placeholder="Wpisz co najmniej 2 znaki nazwiska…"
+                         onChange={e => setSearch(e.target.value)} />
+                </div>
                 {searching && <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 4 }}>Szukam…</div>}
                 {results.length > 0 && (
-                  <div style={{ border: '1px solid var(--color-border)', borderRadius: 6, marginTop: 6,
-                                maxHeight: 220, overflowY: 'auto', background: 'var(--bg-secondary)' }}>
+                  <div style={{ border: '1px solid var(--color-input-border)', borderRadius: 8, marginTop: 6, padding: 4,
+                                maxHeight: 240, overflowY: 'auto', background: 'var(--color-card)',
+                                boxShadow: '0 6px 18px rgba(27, 42, 74, .08)' }}>
                     {results.map(r => (
                       <div key={r.id} onClick={() => pickFromSearch(r)}
-                           style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
-                                    padding: '8px 12px', borderBottom: '1px solid var(--color-border)', fontSize: 13 }}
+                           style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
+                                    minHeight: 44, padding: '0 12px', borderRadius: 6, fontSize: 14 }}
                            onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover, rgba(0,0,0,0.04))'}
                            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                        <span style={{ fontWeight: 600 }}>{r.full_name || r.username}</span>
+                        <span style={{ fontWeight: 700, color: 'var(--color-navy)' }}>{r.full_name || r.username}</span>
                         <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
                           {[r.title, r.username].filter(Boolean).join(' · ')}
                         </span>
-                        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--color-text-muted)' }}>
+                        <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-text-muted)' }}>
                           {r.unit_name ? `${r.unit_name} › ` : ''}{r.department_name || '—'}
                         </span>
                       </div>
@@ -527,9 +560,9 @@ function TerminationFormView({ onCancel, onCreated }) {
               lewa kolumna — drzewo komórek, prawa — pracownicy jako karty. */}
           {!picked && (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '6px 0 12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '16px 0 12px' }}>
                 <div style={{ flex: 1, height: 1, background: 'var(--color-border)' }} />
-                <span style={{ fontSize: 11, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '.04em' }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '.08em' }}>
                   albo wybierz ze struktury
                 </span>
                 <div style={{ flex: 1, height: 1, background: 'var(--color-border)' }} />
@@ -537,14 +570,14 @@ function TerminationFormView({ onCancel, onCreated }) {
 
               <div style={{
                 display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-                gap: 0, border: '1px solid var(--color-border)', borderRadius: 8, overflow: 'hidden',
+                gap: 0, border: '1px solid var(--color-input-border)', borderRadius: 8, overflow: 'hidden',
               }}>
                 {/* Lewa kolumna — drzewo komórek */}
                 <div style={{ borderRight: '1px solid var(--color-border)', minWidth: 0 }}>
                   <div style={{
-                    fontSize: 11, fontWeight: 700, letterSpacing: '.06em', color: 'var(--color-text-muted)',
-                    padding: '8px 12px', borderBottom: '1px solid var(--color-border)',
-                    background: 'var(--bg-secondary)',
+                    fontSize: 11, fontWeight: 700, letterSpacing: '.08em', color: 'var(--color-text-muted)',
+                    padding: '9px 14px', borderBottom: '1px solid var(--color-border)',
+                    background: 'var(--color-table-head)',
                   }}>
                     KOMÓRKA
                   </div>
@@ -557,16 +590,16 @@ function TerminationFormView({ onCancel, onCreated }) {
                 {/* Prawa kolumna — pracownicy wybranej komórki */}
                 <div style={{ minWidth: 0 }}>
                   <div style={{
-                    fontSize: 11, fontWeight: 700, letterSpacing: '.06em', color: 'var(--color-text-muted)',
-                    padding: '8px 12px', borderBottom: '1px solid var(--color-border)',
-                    background: 'var(--bg-secondary)',
+                    fontSize: 11, fontWeight: 700, letterSpacing: '.08em', color: 'var(--color-text-muted)',
+                    padding: '9px 14px', borderBottom: '1px solid var(--color-border)',
+                    background: 'var(--color-table-head)',
                     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                   }}>
                     PRACOWNICY{selectedDept
                       ? ` · ${selectedUnit?.name ? selectedUnit.name + ' › ' : ''}${selectedDept.name}`
                       : ''}
                   </div>
-                  <div style={{ maxHeight: 340, overflowY: 'auto', padding: 8 }}>
+                  <div style={{ maxHeight: 360, overflowY: 'auto', padding: 10 }}>
                     {!deptId ? (
                       <div style={{ fontSize: 12, color: 'var(--color-text-muted)', padding: '8px 4px' }}>
                         Wybierz komórkę po lewej, aby zobaczyć pracowników.
@@ -578,24 +611,25 @@ function TerminationFormView({ onCancel, onCreated }) {
                         Brak aktywnych pracowników przypisanych do tej komórki.
                       </div>
                     ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div role="radiogroup" aria-label="Wybierz pracownika" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {workers.map(w => {
                           const sel = workerId === w.id
                           return (
                             <label key={w.id} style={{
                               display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
-                              padding: '8px 10px', borderRadius: 6, fontSize: 13,
-                              border: `1px solid ${sel ? 'var(--color-navy)' : 'var(--color-border)'}`,
-                              background: sel ? 'var(--color-navy-soft, rgba(27,42,74,0.07))' : 'var(--color-card)',
+                              minHeight: 52, padding: '6px 12px', borderRadius: 8, fontSize: 14,
+                              boxSizing: 'border-box',
+                              border: sel ? '2px solid var(--color-navy)' : '1px solid var(--color-input-border)',
+                              background: sel ? 'var(--bg-secondary)' : 'var(--color-card)',
                             }}>
                               <input type="radio" name="term-worker" checked={sel}
-                                     style={{ flexShrink: 0 }}
+                                     style={{ flexShrink: 0, width: 18, height: 18, margin: 0, accentColor: 'var(--color-navy)' }}
                                      onChange={() => setWorkerId(w.id)} />
                               <span style={{ minWidth: 0 }}>
-                                <span style={{ fontWeight: 600, color: 'var(--color-navy)' }}>
+                                <span style={{ display: 'block', fontWeight: 700, color: 'var(--color-navy)' }}>
                                   {w.full_name || w.username}
                                 </span>
-                                <span style={{ display: 'block', fontSize: 11, color: 'var(--color-text-muted)',
+                                <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)',
                                                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                   {/* wg makiety: „stanowisko · login” (+ podkomórka, gdy inna niż wybrana) */}
                                   {[w.title, w.username].filter(Boolean).join(' · ') || '—'}
@@ -617,11 +651,14 @@ function TerminationFormView({ onCancel, onCreated }) {
       </Section>
 
       <Section n={2} title="Termin">
-          <div className="form-group">
-            <label className="form-label">Ostatni dzień pracy *</label>
-            <input className="form-control" type="date" style={{ maxWidth: 220 }}
-                   value={workUntil} onChange={e => setWorkUntil(e.target.value)} />
-            <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
+          <div style={{ ...FIELD_GRID, gap: 16, alignItems: 'end' }}>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label" htmlFor="hr-until">Ostatni dzień pracy *</label>
+              <input id="hr-until" className="form-control" type="date" style={FIELD_INPUT}
+                     value={workUntil} onChange={e => setWorkUntil(e.target.value)} />
+            </div>
+            <div style={{ ...NOTE_BOX, marginTop: 0, alignItems: 'center', minHeight: 44, padding: '0 14px', boxSizing: 'border-box' }}>
+              <Lock size={15} aria-hidden="true" style={{ flexShrink: 0 }} />
               Blokada dostępów od następnego dnia.
             </div>
           </div>
@@ -675,8 +712,8 @@ function DeptSearchSelect({ units, depts, value, onChange }) {
     return (
       <div style={{
         display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-        padding: '8px 12px', borderRadius: 6,
-        background: 'var(--color-success-bg)', border: '1px solid var(--color-success)', fontSize: 13,
+        minHeight: 44, padding: '4px 6px 4px 12px', borderRadius: 8, boxSizing: 'border-box',
+        background: 'var(--color-success-bg)', border: '1px solid var(--color-success)', fontSize: 14,
       }}>
         <Check size={14} style={{ color: 'var(--color-success)' }} />
         <span>{pathStr(selected)}</span>
@@ -689,19 +726,21 @@ function DeptSearchSelect({ units, depts, value, onChange }) {
   return (
     <div ref={wrapRef}>
       <div style={{ position: 'relative' }}>
-        <Search size={15} style={{
-          position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)',
+        <Search size={15} aria-hidden="true" style={{
+          position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
           color: 'var(--color-text-muted)', pointerEvents: 'none',
         }} />
-        <input className="form-control" value={query} style={{ paddingLeft: 32 }}
+        <input type="search" className="form-control" value={query} aria-label="Komórka organizacyjna"
+               style={{ ...FIELD_INPUT, paddingLeft: 36,
+                        ...(open ? { border: '2px solid var(--color-navy)' } : {}) }}
                placeholder="Wpisz fragment nazwy komórki lub jednostki…"
                onFocus={() => setOpen(true)} onChange={e => { setQuery(e.target.value); setOpen(true) }} />
       </div>
       {open && (
-        <div style={{
-          marginTop: 6,
-          border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--color-card)',
-          maxHeight: 280, overflowY: 'auto', boxShadow: '0 6px 18px rgba(0,0,0,0.08)',
+        <div role="listbox" aria-label="Pasujące komórki" style={{
+          marginTop: 6, padding: 4,
+          border: '1px solid var(--color-input-border)', borderRadius: 8, background: 'var(--color-card)',
+          maxHeight: 280, overflowY: 'auto', boxShadow: '0 6px 18px rgba(27, 42, 74, .08)',
         }}>
           {matches.length === 0 ? (
             <div style={{ padding: 12, fontSize: 13, color: 'var(--color-text-muted)' }}>
@@ -709,35 +748,27 @@ function DeptSearchSelect({ units, depts, value, onChange }) {
             </div>
           ) : matches.map(({ d, path }) => {
             const isSel = d.id === value
-            // Ścieżka bez ostatniego segmentu (sama nazwa komórki jest po lewej).
-            const trail = path.replace(/\s›\s[^›]*$/, '')
             return (
-              <div key={d.id}
+              <div key={d.id} role="option" aria-selected={isSel}
                    onClick={() => { onChange(d.id); setOpen(false); setQuery('') }}
                    style={{
                      display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
-                     padding: '9px 12px', fontSize: 13, borderBottom: '1px solid var(--color-border)',
-                     background: isSel ? 'var(--color-gold-soft, rgba(196,162,88,0.18))' : 'transparent',
+                     minHeight: 44, padding: '0 12px', fontSize: 14, borderRadius: 6,
+                     background: isSel ? 'var(--bg-secondary)' : 'transparent',
                    }}
-                   onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = 'var(--bg-hover, rgba(0,0,0,0.04))' }}
+                   onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = 'var(--bg-secondary)' }}
                    onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = 'transparent' }}>
-                <Building2 size={14} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
+                {/* wg projektu: „KOD · pełna nazwa” + ścieżka (mono) po prawej */}
                 <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ fontWeight: 600, color: 'var(--color-navy)' }}>{d.name}</span>
-                  {d.description && (
-                    <span style={{ display: 'block', fontSize: 11, color: 'var(--color-text-muted)' }}>
-                      {d.description}
-                    </span>
-                  )}
+                  <strong style={{ color: 'var(--color-navy)' }}>{d.name}</strong>
+                  {d.description && <span style={{ color: 'var(--color-text)' }}> · {d.description}</span>}
                 </span>
-                {trail && (
-                  <span style={{
-                    flexShrink: 0, fontSize: 11, fontFamily: 'var(--font-mono, monospace)',
-                    color: 'var(--color-text-muted)', letterSpacing: '.02em',
-                  }}>
-                    {trail}
-                  </span>
-                )}
+                <span style={{
+                  flexShrink: 0, fontSize: 12, fontFamily: 'var(--font-mono, monospace)',
+                  color: 'var(--color-text-muted)',
+                }}>
+                  {path}
+                </span>
                 {isSel && <Check size={14} style={{ color: 'var(--color-navy)', flexShrink: 0 }} />}
               </div>
             )
@@ -810,13 +841,13 @@ function DepartmentPicker({ units, depts, selectedId, onSelect, flush = false })
 
   return (
     <div style={flush ? {} : { border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--bg-secondary)', overflow: 'hidden' }}>
-      <div style={{ padding: 8, borderBottom: '1px solid var(--color-border)',
-                    background: flush ? 'var(--bg-secondary)' : 'var(--color-card)' }}>
-        <input className="form-control" style={{ fontSize: 13 }}
-               placeholder="Szukaj komórki…"
+      <div style={{ padding: '10px 10px 4px', background: 'var(--color-card)' }}>
+        <input type="search" className="form-control" style={{ minHeight: 40, borderRadius: 8, fontSize: 14 }}
+               placeholder="Szukaj komórki…" aria-label="Szukaj komórki"
                value={query} onChange={e => setQuery(e.target.value)} />
       </div>
-      <div style={flush ? {} : { maxHeight: 'min(48vh, 420px)', overflowY: 'auto' }}>
+      <div role="tree" aria-label="Struktura" style={{ padding: '4px 6px 10px',
+                    ...(flush ? {} : { maxHeight: 'min(48vh, 420px)', overflowY: 'auto' }) }}>
         {units.length === 0 && (
           <div style={{ padding: 12, fontSize: 12, color: 'var(--color-text-muted)' }}>
             Brak jednostek — poproś administratora o zaimportowanie struktury z AD.
@@ -831,19 +862,11 @@ function DepartmentPicker({ units, depts, selectedId, onSelect, flush = false })
           ) : matches.map(({ d, path }) => {
             const isSelected = selectedId === d.id
             return (
-              <div key={d.id} onClick={() => onSelect(d.id)}
-                   style={{
-                     display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
-                     padding: '9px 12px', fontSize: 13,
-                     borderBottom: '1px solid var(--color-border)',
-                     background: isSelected ? 'var(--color-gold-soft, rgba(196,162,88,0.18))' : 'transparent',
-                     fontWeight: isSelected ? 600 : 400,
-                   }}
-                   onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--bg-hover, rgba(0,0,0,0.04))' }}
+              <div key={d.id} role="treeitem" aria-selected={isSelected} onClick={() => onSelect(d.id)}
+                   style={{ ...treeRow(isSelected, false), paddingLeft: 10 }}
+                   onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)' }}
                    onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent' }}>
-                <Building2 size={14} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
                 <span style={{ flex: 1 }}>{path}</span>
-                {isSelected && <Check size={14} style={{ color: 'var(--color-navy)' }} />}
               </div>
             )
           })
@@ -870,6 +893,17 @@ function DepartmentPicker({ units, depts, selectedId, onSelect, flush = false })
   )
 }
 
+// Wiersz drzewa komórek (v3.0, wg projektu): 36 px, zaokrąglony, wybrany = granat.
+function treeRow(selected, isUnit) {
+  return {
+    display: 'flex', alignItems: 'center', gap: 6, minHeight: 36, paddingRight: 10,
+    borderRadius: 6, cursor: 'pointer', fontSize: 14, boxSizing: 'border-box',
+    background: selected ? 'var(--color-navy)' : 'transparent',
+    color: selected ? '#fff' : (isUnit ? 'var(--color-navy)' : 'var(--color-text)'),
+    fontWeight: selected || isUnit ? 700 : 400,
+  }
+}
+
 function UnitNode({ unit, byParent, hasAny, selectedId, onSelect, initiallyOpen, expandedPath }) {
   const [open, setOpen] = useState(initiallyOpen)
   useEffect(() => { if (initiallyOpen) setOpen(true) }, [initiallyOpen])
@@ -877,26 +911,26 @@ function UnitNode({ unit, byParent, hasAny, selectedId, onSelect, initiallyOpen,
   const roots = byParent.get(null) || []
 
   return (
-    <div style={{ borderBottom: '1px solid var(--color-border)' }}>
+    <div>
       <button
         type="button"
+        aria-expanded={hasAny ? open : undefined}
         onClick={() => hasAny && setOpen(v => !v)}
         style={{
-          width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-          padding: '10px 12px', background: 'transparent', border: 'none',
-          cursor: hasAny ? 'pointer' : 'default', textAlign: 'left',
-          color: 'var(--color-navy)', fontWeight: 700, fontSize: 13,
+          ...treeRow(false, true), width: '100%', paddingLeft: 10,
+          border: 'none', textAlign: 'left', font: 'inherit', fontSize: 14, fontWeight: 700,
+          cursor: hasAny ? 'pointer' : 'default',
         }}
       >
         {hasAny
-          ? (open ? <ChevronDown size={14} /> : <ChevronRight size={14} />)
-          : <span style={{ width: 14 }} />}
-        <Building2 size={14} style={{ color: 'var(--color-text-muted)' }} />
+          ? (open ? <ChevronDown size={13} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />
+                  : <ChevronRight size={13} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />)
+          : <span style={{ width: 13 }} />}
         <span style={{ flex: 1 }}>{unit.name}</span>
-        {!hasAny && <span style={{ fontSize: 11, color: 'var(--color-text-muted)', fontWeight: 400 }}>(brak wydziałów)</span>}
+        {!hasAny && <span style={{ fontSize: 12, color: 'var(--color-text-muted)', fontWeight: 400 }}>(brak wydziałów)</span>}
       </button>
       {open && hasAny && (
-        <div style={{ paddingBottom: 4 }}>
+        <div>
           {roots.map(d => (
             <DeptNode
               key={d.id}
@@ -927,24 +961,17 @@ function DeptNode({ dept, byParent, depth, selectedId, onSelect, expandedPath })
   return (
     <div>
       <div
+        role="treeitem" aria-selected={isSelected}
         onClick={() => onSelect(dept.id)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          padding: '6px 12px 6px',
-          paddingLeft: 12 + depth * 18,
-          cursor: 'pointer',
-          background: isSelected ? 'var(--color-gold-soft, rgba(196, 162, 88, 0.18))' : 'transparent',
-          fontSize: 13, fontWeight: isSelected ? 600 : 400,
-          color: isSelected ? 'var(--color-navy)' : 'inherit',
-        }}
-        onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--bg-hover, rgba(0,0,0,0.04))' }}
+        style={{ ...treeRow(isSelected, false), paddingLeft: 10 + depth * 22 }}
+        onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)' }}
         onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent' }}
       >
         {hasKids ? (
           <button
             type="button"
             onClick={e => { e.stopPropagation(); setOpen(v => !v) }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--color-text-muted)', display: 'inline-flex' }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: isSelected ? '#fff' : 'var(--color-text-muted)', display: 'inline-flex' }}
             aria-label={open ? 'Zwiń' : 'Rozwiń'}
           >
             {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
@@ -953,7 +980,6 @@ function DeptNode({ dept, byParent, depth, selectedId, onSelect, expandedPath })
           <span style={{ width: 12 }} />
         )}
         <span style={{ flex: 1 }}>{dept.name}</span>
-        {isSelected && <Check size={13} style={{ color: 'var(--color-navy)' }} />}
       </div>
       {hasKids && open && kids.map(c => (
         <DeptNode

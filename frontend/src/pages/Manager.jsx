@@ -133,7 +133,7 @@ export default function Manager({ embedded = false, view, openId, onViewChange, 
           <button key={v} className={`tab-btn${tab === v ? ' active' : ''}`} onClick={() => setTab(v)}>
             {label}
             {count > 0 && (
-              <span className="badge badge--neutral" style={{ fontSize: 10, marginLeft: 6 }}>{count}</span>
+              <span className="tab-count">{count}</span>
             )}
           </button>
         ))}
@@ -141,9 +141,9 @@ export default function Manager({ embedded = false, view, openId, onViewChange, 
 
       {err && <div className="alert alert--error mb-4">{err}</div>}
 
-      <div className="card">
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {loading ? (
-          <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
+          <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Ładowanie…</div>
         ) : tab === 'handle' ? (
           <HandleTable rows={toHandle} onOpen={setOpenReq} />
         ) : (
@@ -157,12 +157,13 @@ export default function Manager({ embedded = false, view, openId, onViewChange, 
 // --- Zakładka „Wnioski do obsługi" -----------------------------------------
 function HandleTable({ rows, onOpen }) {
   if (rows.length === 0) {
-    return <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>
+    return <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>
       Brak wniosków do obsługi — wszystko ogarnięte.
     </div>
   }
   return (
-    <table className="data-table">
+    <div style={{ overflowX: 'auto' }}>
+    <table className="data-table" style={{ minWidth: 980 }}>
       <thead>
         <tr>
           <th>#</th><th>Pracownik</th><th>Stanowisko</th><th>Uprawnień</th>
@@ -173,16 +174,15 @@ function HandleTable({ rows, onOpen }) {
         {rows.map(r => (
           <tr key={r.id}>
             <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
-            <td style={{ fontWeight: 600 }}>
-              {r.worker_name}
-              {r.kind === 'revoke' && (
-                <span style={{ marginLeft: 8 }}><KindBadge kind="revoke" label="Odejście" /></span>
-              )}
+            <td>
+              <div style={{ fontWeight: 700 }}>{r.worker_name}</div>
+              <KindBadge kind={r.kind === 'revoke' ? 'revoke' : 'grant'}
+                         label={r.kind === 'revoke' ? 'Odejście' : 'Zatrudnienie'} />
             </td>
             <td style={{ color: 'var(--color-text-muted)' }}>{r.worker_position || '—'}</td>
             <td>{r.items?.length || 0}</td>
             <td>
-              <span className="badge badge--warning" style={{ fontSize: 10 }}>
+              <span className="badge badge--warning" style={{ fontSize: 12 }}>
                 {NODE_LABELS[r.current_node_type] || STATUS_LABELS[r.status] || r.status}
               </span>
             </td>
@@ -203,19 +203,21 @@ function HandleTable({ rows, onOpen }) {
         ))}
       </tbody>
     </table>
+    </div>
   )
 }
 
 // --- Zakładka „Moje wnioski" (złożone przeze mnie) -------------------------
 function MineTable({ rows, onOpen }) {
   if (rows.length === 0) {
-    return <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>
+    return <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>
       Nie złożyłeś(aś) jeszcze żadnego wniosku. Wnioski dla pracowników składasz
       w zakładce „Moi pracownicy".
     </div>
   }
   return (
-    <table className="data-table">
+    <div style={{ overflowX: 'auto' }}>
+    <table className="data-table" style={{ minWidth: 820 }}>
       <thead>
         <tr>
           <th>#</th><th>Pracownik</th><th>Status</th>
@@ -229,13 +231,14 @@ function MineTable({ rows, onOpen }) {
           return (
             <tr key={r.id}>
               <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
-              <td style={{ fontWeight: 600 }}>
-                {r.worker_name}
-                {r.kind === 'revoke' && (
-                  <span style={{ marginLeft: 8 }}><KindBadge kind="revoke" label="Odejście" /></span>
-                )}
-                <div style={{ fontSize: 11, fontWeight: 400, color: 'var(--color-text-muted)' }}>
-                  {r.items?.length || 0} uprawnień
+              <td>
+                <div style={{ fontWeight: 700 }}>{r.worker_name}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
+                  <KindBadge kind={r.kind === 'revoke' ? 'revoke' : 'grant'}
+                             label={r.kind === 'revoke' ? 'Odejście' : 'Zatrudnienie'} />
+                  <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                    {r.items?.length || 0} uprawnień
+                  </span>
                 </div>
               </td>
               <td>
@@ -267,6 +270,7 @@ function MineTable({ rows, onOpen }) {
         })}
       </tbody>
     </table>
+    </div>
   )
 }
 
@@ -702,14 +706,14 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           {/* --- Akcja: wybór uprawnień --- */}
           {isSelect && (
             <Section n={sec()} title={isRevoke ? 'Uprawnienia do odebrania' : 'Uprawnienia — stan docelowy'}>
-              <p style={{ color: 'var(--color-text-muted)', fontSize: 13, marginBottom: 8 }}>
+              <p style={{ color: 'var(--color-text-muted)', fontSize: 13, margin: '0 0 10px' }}>
                 {isRevoke
                   ? 'Zaznacz uprawnienia do odebrania (domyślnie wszystkie).'
                   : <>Zaznacz nowe, aby je <strong>nadać</strong>; odznacz posiadane, aby je <strong>odebrać</strong>.</>}
               </p>
               {/* Jawna informacja, dokąd trafi wniosek po zatwierdzeniu. */}
-              <div className={`alert ${twoStage ? 'alert--info' : 'alert--success'}`}
-                   style={{ fontSize: 12, marginBottom: 12 }}>
+              <div role="note" className={`alert ${twoStage ? 'alert--info' : 'alert--success'}`}
+                   style={{ fontSize: 13, marginBottom: 12, border: 'none', borderRadius: 8, padding: '10px 14px' }}>
                 {twoStage
                   ? 'Ścieżka dwustopniowa: po zatwierdzeniu wniosek trafi do akceptacji kierownika wyższego rzędu, a dopiero potem do realizacji przez IT.'
                   : 'Ścieżka jednostopniowa: po zatwierdzeniu wniosek trafi bezpośrednio do realizacji przez IT (bez akceptacji wyższego rzędu).'}
@@ -719,31 +723,32 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
               {!loading && !isRevoke && systems.length > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10,
                               flexWrap: 'wrap', marginBottom: 10 }}>
-                  <div style={{ display: 'inline-flex', border: '1px solid var(--color-border)',
-                                borderRadius: 8, overflow: 'hidden' }}>
+                  <div role="group" aria-label="Filtr" style={{ display: 'inline-flex', padding: 3, gap: 2,
+                                borderRadius: 8, background: 'var(--color-neutral-bg)' }}>
                     {[
                       { id: 'all',     label: 'Wszystkie' },
                       { id: 'held',    label: 'Posiadane' },
                       { id: 'changes', label: `Tylko zmiany${changeCount ? ' · ' + changeCount : ''}` },
                     ].map(t => (
-                      <button key={t.id} type="button"
+                      <button key={t.id} type="button" aria-pressed={permFilter === t.id}
                               onClick={() => setPermFilter(t.id)}
                               style={{
-                                border: 'none', cursor: 'pointer', fontSize: 12,
-                                padding: '6px 12px', fontWeight: 600,
-                                background: permFilter === t.id ? 'var(--color-navy)' : 'transparent',
-                                color: permFilter === t.id ? '#fff' : 'var(--color-text-muted)',
+                                border: 'none', cursor: 'pointer', fontSize: 13, minHeight: 36,
+                                padding: '0 14px', borderRadius: 6, font: 'inherit',
+                                fontWeight: permFilter === t.id ? 700 : 600,
+                                background: permFilter === t.id ? 'var(--color-card)' : 'transparent',
+                                color: permFilter === t.id ? 'var(--color-navy)' : 'var(--color-text-muted)',
                               }}>
                         {t.label}
                       </button>
                     ))}
                   </div>
-                  <div style={{ position: 'relative', flex: '1 1 200px', minWidth: 160 }}>
-                    <Search size={14} style={{
+                  <div style={{ position: 'relative', flex: '1 1 240px', minWidth: 160 }}>
+                    <Search size={15} aria-hidden="true" style={{
                       position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)',
                       color: 'var(--color-text-muted)', pointerEvents: 'none' }} />
-                    <input className="form-control" value={sysQuery}
-                           style={{ paddingLeft: 30, fontSize: 13 }}
+                    <input className="form-control" value={sysQuery} aria-label="Szukaj systemu lub zakresu"
+                           style={{ paddingLeft: 34, fontSize: 14, minHeight: 42, borderRadius: 8 }}
                            placeholder="Szukaj systemu lub zakresu…"
                            onChange={e => setSysQuery(e.target.value)} />
                   </div>
@@ -797,11 +802,11 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                           accent={permChangeState(key, held, picked)}
                           headerStyle={changeTextStyle(permChangeState(key, held, picked))}
                           badges={<>
-                            <span className="badge badge--info" style={{ fontSize: 10 }}>
+                            <span className="badge badge--info" style={{ fontSize: 11 }}>
                               dostęp
                             </span>
                             {s.default_checked && (
-                              <span className="badge badge--warning" style={{ fontSize: 10 }}
+                              <span className="badge badge--warning" style={{ fontSize: 11 }}
                                     title="Zaznaczone automatycznie — możesz odznaczyć">
                                 domyślne
                               </span>
@@ -844,12 +849,12 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                           ? 'Zaznacz program, aby wybrać zakres uprawnień.' : null}
                         badges={<>
                           {selHere > 0 && (
-                            <span className="badge badge--success" style={{ fontSize: 10 }}>
+                            <span className="badge badge--success" style={{ fontSize: 11 }}>
                               wybrano: {selHere}
                             </span>
                           )}
                           {gated && active && !anySel && (
-                            <span className="badge badge--warning" style={{ fontSize: 10 }}
+                            <span className="badge badge--warning" style={{ fontSize: 11 }}
                                   title="Wybierz co najmniej jedno uprawnienie">
                               wybierz zakres
                             </span>
@@ -912,7 +917,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                                   </span>
                                   <ChangeBadge st={permChangeState(key, held, picked)} />
                                   {p.is_active === false && (
-                                    <span className="badge badge--warning" style={{ fontSize: 9 }}
+                                    <span className="badge badge--warning" style={{ fontSize: 11 }}
                                           title="Pozycja wycofana w systemie źródłowym">
                                       wycofane
                                     </span>

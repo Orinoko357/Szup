@@ -102,26 +102,34 @@ export function RequestsTab({ onViewChange, openId, onChanged }) {
 
   return (
     <>
-      <div className="tabs" style={{ marginTop: 0 }}>
+      {/* Filtr jako przełącznik segmentowy (wg projektu). */}
+      <div role="group" aria-label="Filtr" style={{ display: 'inline-flex', padding: 3, gap: 2, borderRadius: 8,
+                                                    background: 'var(--color-neutral-bg)', marginBottom: 16 }}>
         {[['pending_it','Do realizacji'],['all','Wszystkie']].map(([v,l]) => (
-          <button key={v} className={`tab-btn${filter===v?' active':''}`} onClick={() => setFilter(v)}>{l}</button>
+          <button key={v} type="button" aria-pressed={filter===v} onClick={() => setFilter(v)}
+                  style={{
+                    minHeight: 36, padding: '0 14px', border: 0, borderRadius: 6, cursor: 'pointer',
+                    font: 'inherit', fontSize: 13, fontWeight: filter===v ? 700 : 600,
+                    background: filter===v ? 'var(--color-card)' : 'transparent',
+                    color: filter===v ? 'var(--color-navy)' : 'var(--color-text-muted)',
+                  }}>{l}</button>
         ))}
       </div>
-      <div className="card">
-        {loading ? <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div> : requests.length === 0 ? (
-          <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>Brak wniosków</div>
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        {loading ? <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Ładowanie…</div> : requests.length === 0 ? (
+          <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Brak wniosków</div>
         ) : (
-          <table className="data-table">
+          <div style={{ overflowX: 'auto' }}>
+          <table className="data-table" style={{ minWidth: 1080 }}>
             <thead><tr><th>#</th><th>Pracownik</th><th>Wydział</th><th>Jednostka</th><th>Uprawnień</th><th>Status</th><th>Przypisany</th><th>Data</th><th></th></tr></thead>
             <tbody>
               {requests.map(r => (
                 <tr key={r.id}>
                   <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
-                  <td style={{ fontWeight: 600 }}>
-                    {r.worker_name}
-                    {r.kind === 'revoke' && (
-                      <span style={{ marginLeft: 8 }}><KindBadge kind="revoke" label="Odejście" /></span>
-                    )}
+                  <td>
+                    <div style={{ fontWeight: 700 }}>{r.worker_name}</div>
+                    <KindBadge kind={r.kind === 'revoke' ? 'revoke' : 'grant'}
+                               label={r.kind === 'revoke' ? 'Odejście' : 'Zatrudnienie'} />
                   </td>
                   <td>{deptFull(r.department_name, r.department_description)}</td>
                   <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{r.unit_name || '—'}</td>
@@ -146,6 +154,7 @@ export function RequestsTab({ onViewChange, openId, onChanged }) {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </>
@@ -420,13 +429,13 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
         {canRealize && grantProgress.total > 0 && (
           <div style={{ marginBottom: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12,
-                          fontSize: 12, marginBottom: 4 }}>
+                          fontSize: 13, marginBottom: 5 }}>
               <span>
-                <span style={{ color: 'var(--color-success)', fontWeight: 600 }}>
+                <span style={{ color: 'var(--color-success-text)', fontWeight: 700 }}>
                   zrobione: {grantProgress.done}/{grantProgress.total}
                 </span>
                 {grantProgress.denied > 0 && (
-                  <span style={{ color: 'var(--color-error-text)', fontWeight: 600 }}>
+                  <span style={{ color: 'var(--color-error-text)', fontWeight: 700 }}>
                     {' · '}odmowy: {grantProgress.denied}
                   </span>
                 )}
@@ -435,7 +444,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                 bez decyzji: {grantProgress.pending}
               </span>
             </div>
-            <div style={{ display: 'flex', height: 5, borderRadius: 3, overflow: 'hidden',
+            <div aria-hidden="true" style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden',
                           background: 'var(--color-border)' }}>
               <div style={{ width: `${grantProgress.done / grantProgress.total * 100}%`,
                             background: 'var(--color-success)' }} />
@@ -451,9 +460,9 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
             ? { can: true, set: setFulfill, busyId: denyBusy }
             : undefined} />
         {r.manager_comment && (
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: 14 }}>
             <div className="form-label">Komentarz kierownika</div>
-            <div style={{ background: 'var(--bg-secondary)', padding: '10px 14px', borderRadius: 6 }}>{r.manager_comment}</div>
+            <div style={{ background: 'var(--bg-secondary)', padding: '10px 14px', borderRadius: 6, fontSize: 14 }}>{r.manager_comment}</div>
           </div>
         )}
       </Section>
@@ -470,7 +479,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                   style={{ marginBottom: showAdd ? 8 : 0 }}>
             <Plus size={13} /> Dołóż uprawnienia
             {addPicked.size > 0 && (
-              <span className="badge badge--warning" style={{ fontSize: 10, marginLeft: 6 }}>
+              <span className="badge badge--warning" style={{ fontSize: 11, marginLeft: 6 }}>
                 {addPicked.size}
               </span>
             )}

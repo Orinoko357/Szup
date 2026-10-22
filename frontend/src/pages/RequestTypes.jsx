@@ -46,10 +46,10 @@ export default function RequestTypes() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn--ghost btn--sm" onClick={load} disabled={loading}>
+          <button className="btn btn--ghost" onClick={load} disabled={loading}>
             <RefreshCw size={14} /> Odśwież
           </button>
-          <button className="btn btn--action btn--sm" onClick={() => setEditing('new')}>
+          <button className="btn btn--action" onClick={() => setEditing('new')}>
             <Plus size={14} /> Nowy typ
           </button>
         </div>
@@ -63,8 +63,9 @@ export default function RequestTypes() {
                   onSaved={() => { setEditing(null); load() }} />
       )}
 
-      <div className="card" style={{ padding: 0 }}>
-        <table className="table">
+      <section aria-label="Typy wniosków" className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+        <table className="table" style={{ minWidth: 900 }}>
           <thead><tr>
             <th></th><th>Nazwa</th><th>Kod</th><th>Szablon obiegu</th>
             <th>Wnioski</th><th>Stan</th><th></th>
@@ -90,7 +91,8 @@ export default function RequestTypes() {
             ))}
           </tbody>
         </table>
-      </div>
+        </div>
+      </section>
     </div>
   )
 }
@@ -104,31 +106,38 @@ function TypeRow({ t, onEdit, onReload }) {
   }
   return (
     <tr>
-      <td><Icon size={16} style={{ color: 'var(--color-navy)' }} /></td>
+      <td style={{ width: 48 }}>
+        <span aria-hidden="true" style={{ width: 34, height: 34, borderRadius: 8, background: 'var(--bg-secondary)',
+                                          color: 'var(--color-navy)', display: 'grid', placeItems: 'center' }}>
+          <Icon size={17} />
+        </span>
+      </td>
       <td>
-        <strong>{t.name}</strong>
+        <span style={{ display: 'block', fontWeight: 700, color: 'var(--color-navy)' }}>{t.name}</span>
         {t.description && (
-          <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>{t.description}</div>
+          <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>{t.description}</span>
         )}
       </td>
-      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{t.code || '—'}</td>
-      <td style={{ fontSize: 12 }}>
+      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>{t.code || '—'}</td>
+      <td style={{ fontSize: 13 }}>
         {t.workflow_template_name || '—'}
         {t.workflow_template_version && (
-          <span style={{ fontSize: 10, color: 'var(--color-text-muted)', marginLeft: 4 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-text-muted)', marginLeft: 6 }}>
             v{t.workflow_template_version}
           </span>
         )}
       </td>
-      <td style={{ fontSize: 12 }}>{t.used_by_requests_count}</td>
+      <td style={{ fontSize: 13 }}>{t.used_by_requests_count}</td>
       <td>
         {t.is_active
-          ? <span className="badge badge--success" style={{ fontSize: 10 }}>aktywny</span>
-          : <span className="badge badge--neutral" style={{ fontSize: 10 }}>nieaktywny</span>}
+          ? <span className="badge badge--success">aktywny</span>
+          : <span className="badge badge--neutral">nieaktywny</span>}
       </td>
-      <td style={{ whiteSpace: 'nowrap' }}>
-        <button className="btn btn--ghost btn--sm" onClick={onEdit}><Edit2 size={12} /></button>
-        <button className="btn btn--ghost btn--sm" onClick={del}><Trash2 size={12} /></button>
+      <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+        <button className="btn btn--ghost btn--sm" onClick={onEdit} aria-label="Edytuj" title="Edytuj"
+                style={{ border: 0 }}><Edit2 size={15} /></button>
+        <button className="btn btn--ghost btn--sm" onClick={del} aria-label="Usuń" title="Usuń"
+                style={{ border: 0, color: 'var(--color-error-text)' }}><Trash2 size={15} /></button>
       </td>
     </tr>
   )
@@ -166,52 +175,60 @@ function TypeForm({ type, templates, onCancel, onSaved }) {
   }
 
   return (
-    <div className="card" style={{ padding: 12, background: 'var(--bg-secondary)', margin: isEdit ? 0 : '0 0 10px 0' }}>
-      <strong>{isEdit ? 'Edycja typu wniosku' : 'Nowy typ wniosku'}</strong>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8, marginTop: 8 }}>
+    <section aria-label={isEdit ? 'Edycja typu wniosku' : 'Nowy typ wniosku'} className="card"
+             style={{ padding: '18px 20px', borderTop: '3px solid var(--color-gold)',
+                      margin: isEdit ? 0 : '0 0 18px 0', display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: 'var(--color-navy)' }}>
+        {isEdit ? 'Edycja typu wniosku' : 'Nowy typ wniosku'}
+      </h2>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
         <Field label="Nazwa *">
-          <input className="input input--sm" value={form.name} onChange={e => setF('name', e.target.value)} />
+          <input className="form-control" style={INP} value={form.name} onChange={e => setF('name', e.target.value)} />
         </Field>
         <Field label="Kod (skrót)">
-          <input className="input input--sm" value={form.code} onChange={e => setF('code', e.target.value)} placeholder="np. NEW_EMP" />
+          <input className="form-control" style={INP} value={form.code} onChange={e => setF('code', e.target.value)} placeholder="np. NEW_EMP" />
         </Field>
         <Field label="Szablon obiegu *">
-          <select className="input input--sm" value={form.workflow_template_id} onChange={e => setF('workflow_template_id', e.target.value)}>
+          <select className="form-control" style={INP} value={form.workflow_template_id} onChange={e => setF('workflow_template_id', e.target.value)}>
             <option value="">— wybierz —</option>
             {templates.map(t => <option key={t.id} value={t.id}>{t.name} (v{t.version})</option>)}
           </select>
         </Field>
         <Field label="Ikona">
-          <select className="input input--sm" value={form.icon} onChange={e => setF('icon', e.target.value)}>
+          <select className="form-control" style={INP} value={form.icon} onChange={e => setF('icon', e.target.value)}>
             {Object.keys(ICON_MAP).map(k => <option key={k} value={k}>{k}</option>)}
           </select>
         </Field>
       </div>
       <Field label="Opis">
-        <textarea className="input input--sm" rows={2}
+        <textarea className="form-control" rows={2} style={{ minHeight: 70, fontSize: 14, fontWeight: 400, letterSpacing: 0, textTransform: 'none' }}
                   value={form.description} onChange={e => setF('description', e.target.value)} />
       </Field>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, marginTop: 6 }}>
-        <input type="checkbox" checked={form.is_active} onChange={e => setF('is_active', e.target.checked)} />
-        Aktywny — dostępny do wyboru przy tworzeniu wniosku
-      </label>
-      {err && <div className="alert alert--error mt-2">{err}</div>}
-      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-        <button className="btn btn--action btn--sm" onClick={save} disabled={saving}>
-          <Save size={12} /> Zapisz
+      {err && <div className="alert alert--error">{err}</div>}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
+        <label className="form-check" style={{ flex: '1 1 360px', fontSize: 14 }}>
+          <input type="checkbox" checked={form.is_active} onChange={e => setF('is_active', e.target.checked)}
+                 style={{ width: 18, height: 18 }} />
+          Aktywny — dostępny do wyboru przy tworzeniu wniosku
+        </label>
+        <button className="btn btn--ghost" onClick={onCancel}>
+          <X size={14} /> Anuluj
         </button>
-        <button className="btn btn--ghost btn--sm" onClick={onCancel}>
-          <X size={12} /> Anuluj
+        <button className="btn btn--action" onClick={save} disabled={saving}>
+          <Save size={14} /> Zapisz
         </button>
       </div>
-    </div>
+    </section>
   )
 }
 
+const INP = { minHeight: 44, fontSize: 14, fontWeight: 400, letterSpacing: 0, textTransform: 'none' }
+
 function Field({ label, children }) {
   return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, marginTop: 6 }}>
-      <span style={{ color: 'var(--color-text-muted)' }}>{label}</span>
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11, fontWeight: 700,
+                    letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--color-text-muted)' }}>
+      {label}
       {children}
     </label>
   )

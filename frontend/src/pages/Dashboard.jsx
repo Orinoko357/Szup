@@ -119,7 +119,8 @@ export default function Dashboard() {
           <div className="page-header__title">Pulpit</div>
           <div className="page-header__sub">Sprawy czekające na Twoje działanie</div>
         </div>
-        <button className="btn btn--ghost" onClick={load} disabled={loading}>
+        <button className="btn btn--ghost" style={{ minHeight: 44, fontSize: 14, background: 'var(--color-card)' }}
+                onClick={load} disabled={loading}>
           <RefreshCw size={14} className={loading ? 'spin' : ''} /> Odśwież
         </button>
       </div>
@@ -209,18 +210,25 @@ export default function Dashboard() {
                     const tab = p.node_type === 'it_execute' ? 'it' : 'handle'
                     return (
                       <tr key={p.request_id}>
-                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{p.request_id}</td>
-                        <td style={{ fontWeight: 600 }}>{p.worker_name}</td>
-                        <td style={{ fontSize: 13 }}>{deptFull(p.dept_name, p.dept_description)}</td>
+                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--color-text-muted)' }}>{p.request_id}</td>
+                        <td style={{ fontWeight: 700 }}>{p.worker_name}</td>
                         <td>
-                          <span className={`badge ${NODE_TONE[p.node_type] || 'badge--neutral'}`}>{p.node_label}</span>
+                          {/* wg projektu: kod pogrubiony + pełna nazwa wyszarzona */}
+                          <strong style={{ color: 'var(--color-navy)' }}>{p.dept_name || '—'}</strong>
+                          {deptFull(p.dept_name, p.dept_description).includes(' · ') && (
+                            <span style={{ color: 'var(--color-text-muted)' }}> · {p.dept_description}</span>
+                          )}
+                        </td>
+                        <td>
+                          <span className={`badge ${NODE_TONE[p.node_type] || 'badge--neutral'}`} style={{ fontSize: 12, fontWeight: 700 }}>{p.node_label}</span>
                         </td>
                         <td style={{ fontSize: 13, fontWeight: w.late ? 700 : 400,
                                      color: w.late ? 'var(--color-error-text)' : 'var(--color-text-muted)' }}>
                           {w.text}
                         </td>
                         <td style={{ textAlign: 'right' }}>
-                          <Link className="btn btn--action btn--sm" to={`/requests?tab=${tab}&open=${p.request_id}`}>
+                          <Link className="btn btn--action btn--sm" style={{ minHeight: 36, fontSize: 13, fontWeight: 700 }}
+                                to={`/requests?tab=${tab}&open=${p.request_id}`}>
                             Otwórz
                           </Link>
                         </td>

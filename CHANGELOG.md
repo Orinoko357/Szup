@@ -28,6 +28,13 @@ Wyłącznie frontend — bez zmian w logice, API i bazie danych.
 - Styl: zaokrąglone karty, większe nagłówki stron, zakładki ze złotym
   podkreśleniem i licznikami, polskie nazwy istotności zdarzeń.
 
+- Wszystkie ekrany przepisane wizualnie 1:1 wg projektu 3.0: logowanie i pierwsze
+  uruchomienie, górna belka i zmiana hasła, widoki i listy wniosków, Kartoteka,
+  Moi pracownicy / Struktura, Moje uprawnienia, rejestry (uprawnienia, migawki,
+  oprogramowanie, dostawcy), administracja (jednostki, użytkownicy, szablony obiegu,
+  typy wniosków, audit log, bezpieczeństwo, ustawienia) oraz okna dialogowe.
+  Bez lewych pasków-akcentów; przyciski i pola 44 px; tryb ciemny zachowany.
+
 ### Naprawiono
 - Literówka w podtytule „Powiadomienia e-mail” w Ustawieniach.
 

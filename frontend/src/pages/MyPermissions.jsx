@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ShieldCheck, RefreshCw, FileText } from 'lucide-react'
+import { ShieldCheck, RefreshCw } from 'lucide-react'
 import { getMyPermissions } from '../api'
 import { fmtDate } from '../serverTime'
 import MyNameChanges from '../components/MyNameChanges'
@@ -43,7 +43,7 @@ export default function MyPermissions() {
             Uprawnienia nadane na podstawie zrealizowanych wniosków
           </div>
         </div>
-        <button className="btn btn--ghost btn--sm" onClick={load} disabled={loading}>
+        <button className="btn btn--ghost" onClick={load} disabled={loading}>
           <RefreshCw size={14} /> Odśwież
         </button>
       </div>
@@ -52,22 +52,23 @@ export default function MyPermissions() {
 
       <MyNameChanges />
 
-      <div className="card" style={{ marginBottom: 16 }}>
+      <section aria-label="Uprawnienia" className="card" style={{ marginBottom: 18, padding: 0, overflow: 'hidden' }}>
         {loading ? (
-          <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
+          <div style={{ color: 'var(--color-text-muted)', padding: '16px 18px' }}>Ładowanie…</div>
         ) : perms.length === 0 ? (
-          <div style={{ color: 'var(--color-text-muted)', padding: 12 }}>
+          <div style={{ color: 'var(--color-text-muted)', padding: '16px 18px' }}>
             <ShieldCheck size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
             Nie masz żadnych uprawnień nadanych wnioskiem w tym systemie.
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {systems.map(sn => (
-              <div key={sn}>
-                <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--color-navy)', marginBottom: 8 }}>
+          <div>
+            {systems.map((sn, i) => (
+              <div key={sn} style={{ borderBottom: i < systems.length - 1 ? '1px solid var(--color-border)' : 'none' }}>
+                <h2 style={{ margin: 0, padding: '14px 18px 10px', fontSize: 15, fontWeight: 800, color: 'var(--color-navy)' }}>
                   {sn}
-                </div>
-                <table className="data-table">
+                </h2>
+                <div style={{ overflowX: 'auto' }}>
+                <table className="data-table" style={{ minWidth: 640 }}>
                   <thead>
                     <tr>
                       <th style={{ width: '30%' }}>Uprawnienie</th>
@@ -83,29 +84,31 @@ export default function MyPermissions() {
                         <td style={{ color: 'var(--color-text-muted)' }}>
                           {p.description || '—'}
                         </td>
-                        <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>
+                        <td style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>
                           {fmtDate(p.granted_at)}
                         </td>
-                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--color-navy)' }}>
                           #{p.request_id}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             ))}
           </div>
         )}
-      </div>
+      </section>
 
       {reqs.length > 0 && (
-        <div className="card">
-          <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--color-navy)', marginBottom: 12 }}>
-            <FileText size={13} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+        <section aria-label="Historia zrealizowanych wniosków" className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <h2 style={{ margin: 0, padding: '14px 18px', fontSize: 16, fontWeight: 800, color: 'var(--color-navy)',
+                       borderBottom: '1px solid var(--color-border)' }}>
             Historia zrealizowanych wniosków
-          </div>
-          <table className="data-table">
+          </h2>
+          <div style={{ overflowX: 'auto' }}>
+          <table className="data-table" style={{ minWidth: 700 }}>
             <thead>
               <tr>
                 <th style={{ width: 80 }}>Wniosek</th>
@@ -117,17 +120,17 @@ export default function MyPermissions() {
             <tbody>
               {reqs.map(r => (
                 <tr key={r.id}>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>#{r.id}</td>
-                  <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--color-navy)' }}>#{r.id}</td>
+                  <td style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>
                     {fmtDate(r.created_at)}
                   </td>
-                  <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>
+                  <td style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>
                     {r.completed_at ? fmtDate(r.completed_at) : '—'}
                   </td>
                   <td>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                       {r.items.map((it, i) => (
-                        <span key={i} className="badge badge--info" style={{ fontSize: 10 }}>
+                        <span key={i} className="badge badge--info" style={{ fontSize: 12 }}>
                           {it.system_name}: {it.permission_name}
                         </span>
                       ))}
@@ -137,7 +140,8 @@ export default function MyPermissions() {
               ))}
             </tbody>
           </table>
-        </div>
+          </div>
+        </section>
       )}
     </div>
   )

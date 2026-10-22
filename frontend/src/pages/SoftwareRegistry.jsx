@@ -213,17 +213,18 @@ function PermRow({ p, onChanged, selected = false, onToggleSel }) {
       <td style={{ fontWeight: 600 }}>
         {onToggleSel && !p.is_admin_option && (
           <input type="checkbox" checked={selected} onChange={onToggleSel}
-                 style={{ marginRight: 8, verticalAlign: 'middle' }}
-                 title="Zaznacz do operacji masowej" />
+                 style={{ width: 17, height: 17, marginRight: 10, verticalAlign: 'middle', accentColor: 'var(--color-navy)' }}
+                 aria-label="Zaznacz pozycję" title="Zaznacz do operacji masowej" />
         )}
-        {p.permission_name}
+        <span style={{ fontWeight: 600 }}>{p.permission_name}</span>
         {p.is_active === false && (
-          <span className="badge badge--warning" style={{ fontSize: 9, marginLeft: 6 }}>
+          <span className="badge badge--warning" style={{ fontSize: 11, fontWeight: 700, marginLeft: 6 }}>
             wycofane
           </span>
         )}
         {p.input_type && p.input_type !== 'none' && (
-          <span className="badge badge--info" style={{ fontSize: 9, marginLeft: 6 }}
+          <span className="badge" style={{ fontSize: 11, fontWeight: 700, marginLeft: 6, borderRadius: 4,
+                                           background: '#FEF3DC', color: '#8A6D1B' }}
                 title={INPUT_TYPE_LABELS[p.input_type] || p.input_type}>
             {INPUT_BADGE_LABELS[p.input_type] || p.input_type}
             {(p.options || []).length > 0 && ` (${p.options.length})`}
@@ -231,13 +232,15 @@ function PermRow({ p, onChanged, selected = false, onToggleSel }) {
           </span>
         )}
       </td>
-      <td style={{ color: 'var(--color-text-muted)' }}>{p.description || '—'}</td>
-      <td style={{ whiteSpace: 'nowrap' }}>
-        <button className="btn btn--ghost btn--sm" onClick={() => setEditing(true)} title="Edytuj">
-          <Edit2 size={12} />
+      <td style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>{p.description || '—'}</td>
+      <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+        <button className="btn btn--ghost btn--sm" onClick={() => setEditing(true)} title="Edytuj" aria-label="Edytuj"
+                style={{ width: 32, padding: 0, justifyContent: 'center', marginRight: 4 }}>
+          <Edit2 size={13} />
         </button>
-        <button className="btn btn--danger btn--sm" onClick={del} title="Usuń">
-          <Trash2 size={12} />
+        <button className="btn btn--ghost btn--sm" onClick={del} title="Usuń" aria-label="Usuń"
+                style={{ width: 32, padding: 0, justifyContent: 'center', color: 'var(--color-error-text)', borderColor: 'var(--color-error)' }}>
+          <Trash2 size={13} />
         </button>
       </td>
     </tr>
@@ -285,7 +288,7 @@ function GroupAddPerm({ systemId, group, subgroup = '', label, onAdded }) {
 
   if (!open) {
     return (
-      <button className="btn btn--ghost btn--sm" style={{ marginLeft: 8, marginTop: 4 }}
+      <button className="btn btn--ghost btn--sm" style={{ minHeight: 36, borderStyle: 'dashed' }}
               onClick={() => setOpen(true)}>
         <Plus size={12} /> {label || `Dodaj uprawnienie${group ? ` do „${group}"` : ''}`}
       </button>
@@ -294,8 +297,8 @@ function GroupAddPerm({ systemId, group, subgroup = '', label, onAdded }) {
 
   return (
     <form onSubmit={submit} style={{
-      margin: '6px 0 4px 8px', padding: 8,
-      border: '1px dashed var(--color-border)', borderRadius: 6,
+      width: '100%', padding: 10,
+      border: '1px dashed var(--color-input-border)', borderRadius: 8,
       background: 'var(--bg-secondary)',
     }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
@@ -351,10 +354,10 @@ function BulkSubgroupBar({ systemId, selectedIds, onDone }) {
     <div style={{
       display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',
       background: 'var(--color-success-bg)', border: '1px solid var(--color-success)',
-      borderRadius: 6, padding: '6px 10px', margin: '4px 0 8px',
+      borderRadius: 8, padding: '8px 12px', margin: '0 12px 8px',
     }}>
-      <strong style={{ fontSize: 12 }}>Zaznaczono: {selectedIds.length}</strong>
-      <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>→ przypisz do podgrupy:</span>
+      <strong style={{ fontSize: 13 }}>Zaznaczono: {selectedIds.length}</strong>
+      <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>→ przypisz do podgrupy:</span>
       <input className="form-control" list="szup-perm-subgroups"
              style={{ maxWidth: 220, fontSize: 13 }} value={sub}
              onChange={e => setSub(e.target.value)}
@@ -386,15 +389,14 @@ function SoftwareGroup({ title, subtitle, count, tone = 'unit', children }) {
   return (
     <div>
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        marginBottom: 8, flexWrap: 'wrap',
-        borderBottom: '2px solid var(--color-border)', paddingBottom: 4,
+        display: 'flex', alignItems: 'baseline', gap: 10,
+        margin: '4px 0 10px', flexWrap: 'wrap',
       }}>
-        <Icon size={15} style={{ color }} />
-        <strong style={{ fontSize: 15, color }}>{title}</strong>
-        <span className="badge badge--neutral" style={{ fontSize: 10 }}>{count}</span>
+        <Icon size={15} aria-hidden="true" style={{ color, alignSelf: 'center' }} />
+        <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color }}>{title}</h2>
+        <span className="badge badge--neutral" style={{ fontSize: 12, fontWeight: 800 }}>{count}</span>
         {subtitle && (
-          <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>{subtitle}</span>
+          <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>{subtitle}</span>
         )}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -587,15 +589,27 @@ export default function SoftwareRegistry() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">Rejestr oprogramowania</div>
+          <div className="page-header__title">Oprogramowanie</div>
           <div className="page-header__sub">
             Systemy IT, ich uprawnienia i dostępność dla jednostek organizacyjnych
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn btn--ghost" onClick={load} disabled={loading}>
+            <RefreshCw size={14} /> Odśwież
+          </button>
+          <button className="btn btn--action" onClick={() => setShowAdd(v => !v)}>
+            <Plus size={14} /> Dodaj oprogramowanie
+          </button>
+        </div>
+      </div>
+
+      {/* Filtry (v3.0: osobny rząd pod nagłówkiem, wg projektu) */}
+      <section aria-label="Filtry" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 14, marginBottom: 16 }}>
           <select
             className="form-control"
-            style={{ maxWidth: 260, fontSize: 13 }}
+            aria-label="Jednostka"
+            style={{ width: 'auto', maxWidth: 300, minHeight: 44 }}
             value={filterUnit}
             onChange={e => setFilterUnit(e.target.value)}
             title="Pokaż oprogramowanie dostępne w wybranej jednostce"
@@ -604,44 +618,42 @@ export default function SoftwareRegistry() {
             {units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
           <label style={{
-            display: 'flex', alignItems: 'center', gap: 6, fontSize: 13,
+            display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: 44, fontSize: 14,
             cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
           }} title="Programy bez trybu „tylko dostęp”, bez pól wnioskodawcy i bez listy uprawnień">
-            <input type="checkbox" checked={onlyUnconfigured}
+            <input type="checkbox" checked={onlyUnconfigured} style={{ width: 18, height: 18, accentColor: 'var(--color-navy)' }}
                    onChange={e => setOnlyUnconfigured(e.target.checked)} />
             Bez uprawnień
             {unconfiguredCount > 0 && (
-              <span className="badge badge--warning" style={{ fontSize: 10 }}>
+              <span className="badge badge--warning" style={{ fontSize: 12, fontWeight: 800 }}>
                 {unconfiguredCount}
               </span>
             )}
           </label>
           <label style={{
-            display: 'flex', alignItems: 'center', gap: 6, fontSize: 13,
+            display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: 44, fontSize: 14,
             cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
           }} title="Programy bez przypisanego producenta — zaznacz je i przypisz zbiorczo">
-            <input type="checkbox" checked={onlyNoVendor}
+            <input type="checkbox" checked={onlyNoVendor} style={{ width: 18, height: 18, accentColor: 'var(--color-navy)' }}
                    onChange={e => setOnlyNoVendor(e.target.checked)} />
             Bez dostawcy
             {noVendorCount > 0 && (
-              <span className="badge badge--warning" style={{ fontSize: 10 }}>
+              <span className="badge badge--neutral" style={{ fontSize: 12, fontWeight: 800 }}>
                 {noVendorCount}
               </span>
             )}
           </label>
-          <button className="btn btn--ghost btn--sm" onClick={load} disabled={loading}>
-            <RefreshCw size={14} /> Odśwież
-          </button>
-          <button className="btn btn--action btn--sm" onClick={() => setShowAdd(v => !v)}>
-            <Plus size={14} /> Dodaj oprogramowanie
-          </button>
-        </div>
-      </div>
+          {!(filterUnit || onlyUnconfigured || onlyNoVendor) && !loading && (
+            <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
+              Pokazano {visibleSystems.length} z {systems.length}
+            </span>
+          )}
+      </section>
 
       {(filterUnit || onlyUnconfigured || onlyNoVendor) && !loading && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8,
-          fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 10, flexWrap: 'wrap',
+          fontSize: 13, color: 'var(--color-text-muted)', marginBottom: 12, flexWrap: 'wrap',
         }}>
           <Building2 size={13} />
           <span>
@@ -674,16 +686,17 @@ export default function SoftwareRegistry() {
 
       {/* Pasek zaznaczania / operacji zbiorczych */}
       {!loading && visibleSystems.length > 0 && (
-        <div className="card" style={{
-          padding: '10px 14px', marginBottom: 12,
-          display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-          borderLeft: selected.size > 0 ? '3px solid var(--color-gold)' : undefined,
+        <section className="card" aria-label="Akcje zbiorcze" style={{
+          padding: '12px 16px', marginBottom: 16,
+          display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 14,
+          borderColor: selected.size > 0 ? 'var(--color-navy)' : undefined,
         }}>
           <label style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            fontSize: 13, cursor: 'pointer', userSelect: 'none',
+            display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: 40,
+            fontSize: 14, cursor: 'pointer', userSelect: 'none',
           }}>
-            <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll} />
+            <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll}
+                   style={{ width: 18, height: 18, accentColor: 'var(--color-navy)' }} />
             {selected.size > 0
               ? <strong>Zaznaczono: {selected.size}</strong>
               : <span style={{ color: 'var(--color-text-muted)' }}>Zaznacz wszystkie</span>}
@@ -713,7 +726,7 @@ export default function SoftwareRegistry() {
                 <X size={13} /> Bez wymogu
               </button>
 
-              <span style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>albo</span>
+              <span style={{ color: 'var(--color-text-muted)', fontSize: 14 }}>albo</span>
 
               <select className="form-control" style={{ maxWidth: 300, fontSize: 13 }}
                       value={bulkSource} onChange={e => setBulkSource(e.target.value)}
@@ -732,7 +745,7 @@ export default function SoftwareRegistry() {
 
               <span style={{ flexBasis: '100%', height: 0 }} />
 
-              <span style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>
                 Producent:
               </span>
               <select className="form-control" style={{ maxWidth: 300, fontSize: 13 }}
@@ -752,13 +765,14 @@ export default function SoftwareRegistry() {
                 <Truck size={13} /> Przypisz
               </button>
 
-              <button className="btn btn--ghost btn--sm"
+              <button className="btn btn--sm"
+                      style={{ background: 'transparent', border: 0, color: 'var(--color-navy)', textDecoration: 'underline', fontWeight: 600 }}
                       onClick={() => setSelected(new Set())} disabled={bulkBusy}>
-                <X size={12} /> Odznacz
+                Odznacz
               </button>
             </>
           )}
-        </div>
+        </section>
       )}
 
       {loading ? (
@@ -870,7 +884,7 @@ function AddSystemForm({ units, vendors = [], allSystems = [], onCancel, onSaved
   }
 
   return (
-    <div className="card mb-4" style={{ borderTop: '3px solid var(--color-gold)' }}>
+    <div className="card mb-4" style={{ border: '2px solid var(--color-navy)' }}>
       <form onSubmit={submit}>
         <div className="form-row">
           <div className="form-group">
@@ -1157,75 +1171,82 @@ function SystemRow({ system: s, units, vendors = [], allSystems = [], selected =
   }
 
   return (
-    <div className="card" style={{
-      padding: 0,
-      borderLeft: selected ? '3px solid var(--color-gold)' : undefined,
+    <section className="card" aria-label={s.name} style={{
+      padding: 0, overflow: 'hidden',
+      // v3.0: zaznaczenie — granatowa ramka (bez lewego paska).
+      borderColor: selected ? 'var(--color-navy)' : undefined,
       // Nieaktywne oprogramowanie — lekko wyszarzone (ląduje też na dole listy).
       opacity: s.is_active === false ? 0.55 : 1,
     }}>
       <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '12px 16px',
+        display: 'flex', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12,
+        padding: '14px 16px',
       }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <input type="checkbox" checked={selected} onChange={onToggleSelect}
-                   title="Zaznacz do operacji zbiorczej"
-                   style={{ width: 15, height: 15, flexShrink: 0, cursor: 'pointer' }} />
-            <Package size={15} style={{ color: 'var(--color-gold)' }} />
+        <input type="checkbox" checked={selected} onChange={onToggleSelect}
+               title="Zaznacz do operacji zbiorczej" aria-label={`Zaznacz ${s.name}`}
+               style={{ width: 18, height: 18, marginTop: 8, flexShrink: 0, cursor: 'pointer', accentColor: 'var(--color-navy)' }} />
+        <span aria-hidden="true" style={{
+          width: 34, height: 34, borderRadius: 8, flexShrink: 0, background: 'var(--bg-secondary)',
+          color: 'var(--color-navy)', display: 'grid', placeItems: 'center',
+        }}>
+          <Package size={17} />
+        </span>
+        <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <strong style={{ fontSize: 15, color: 'var(--color-navy)' }}>{s.name}</strong>
             {/* Pozycja na wniosku — widoczna bez wchodzenia w edycję. */}
             {s.display_order != null && (
               <span className="badge badge--neutral"
-                    style={{ fontSize: 10, fontFamily: 'var(--font-mono)' }}
+                    style={{ fontSize: 11, borderRadius: 4, fontFamily: 'var(--font-mono)' }}
                     title="Pozycja na liście wniosku">
                 #{s.display_order}
               </span>
             )}
-            <span style={{ fontWeight: 700 }}>{s.name}</span>
             {s.default_checked && (
-              <span className="badge badge--warning" style={{ fontSize: 10 }}
+              <span className="badge badge--warning" style={{ fontSize: 11, fontWeight: 700 }}
                     title="Zaznaczone z góry na każdym wniosku">
                 domyślne
               </span>
             )}
             {s.vendor_name && (
-              <span className="badge badge--info" style={{ fontSize: 10 }}
+              <span className="badge badge--info" style={{ fontSize: 11, fontWeight: 700 }}
                     title="Dostawca ze słownika">
                 {s.vendor_name}
               </span>
             )}
             {!s.is_active && (
-              <span className="badge badge--neutral" style={{ fontSize: 10 }}>nieaktywny</span>
+              <span className="badge badge--neutral" style={{ fontSize: 11, fontWeight: 700 }}>nieaktywny</span>
             )}
             {s.access_only && (
-              <span className="badge badge--info" style={{ fontSize: 10 }}>
+              <span className="badge badge--info" style={{ fontSize: 11, fontWeight: 700 }}>
                 <KeyRound size={10} style={{ verticalAlign: 'middle' }} /> tylko dostęp
               </span>
             )}
             {s.all_units ? (
-              <span className="badge badge--success" style={{ fontSize: 10 }}>
+              <span className="badge badge--success" style={{ fontSize: 11, fontWeight: 700 }}>
                 <Building2 size={10} style={{ verticalAlign: 'middle' }} /> wszystkie jednostki
               </span>
             ) : (
-              <span className="badge badge--warning" style={{ fontSize: 10 }}>
+              <span className="badge badge--warning" style={{ fontSize: 11, fontWeight: 700 }}>
                 <Building2 size={10} style={{ verticalAlign: 'middle' }} /> {unitNames.length} jednostek
               </span>
             )}
           </div>
           {s.description && (
-            <div style={{ color: 'var(--color-text-muted)', fontSize: 12, marginTop: 4 }}>
+            <div style={{ color: 'var(--color-text-muted)', fontSize: 13, marginTop: 4 }}>
               {s.description}
             </div>
           )}
           {!s.all_units && unitNames.length > 0 && (
-            <div style={{ color: 'var(--color-text-muted)', fontSize: 11, marginTop: 4 }}>
+            <div style={{ color: 'var(--color-text-muted)', fontSize: 13, marginTop: 4 }}>
               Jednostki: {unitNames.join(', ')}
             </div>
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-          <button className="btn btn--ghost btn--sm" onClick={() => setOpen(o => !o)}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn btn--ghost btn--sm" onClick={() => setOpen(o => !o)} aria-expanded={open}
+                  style={open ? { minHeight: 36, borderColor: 'var(--color-navy)', background: 'var(--color-warning-bg)', fontWeight: 700 } : { minHeight: 36 }}>
             {open ? '▲' : '▼'} {s.access_only ? 'Szczegóły' : 'Uprawnienia'}
           </button>
           <button className="btn btn--ghost btn--sm" onClick={() => setEditing(e => !e)}>
@@ -1241,8 +1262,10 @@ function SystemRow({ system: s, units, vendors = [], allSystems = [], selected =
           <button className="btn btn--ghost btn--sm" onClick={toggleActive}>
             {s.is_active ? 'Dezaktywuj' : 'Aktywuj'}
           </button>
-          <button className="btn btn--danger btn--sm" onClick={del}>
-            <Trash2 size={12} />
+          <button className="btn btn--ghost btn--sm" onClick={del} aria-label="Usuń" title="Usuń"
+                  style={{ minHeight: 36, width: 36, padding: 0, justifyContent: 'center',
+                           color: 'var(--color-error-text)', borderColor: 'var(--color-error)' }}>
+            <Trash2 size={14} />
           </button>
         </div>
       </div>
@@ -1260,11 +1283,11 @@ function SystemRow({ system: s, units, vendors = [], allSystems = [], selected =
       )}
 
       {open && (
-        <div style={{ padding: '0 16px 16px', borderTop: '1px solid var(--color-border)' }}>
+        <div style={{ padding: '14px 16px', borderTop: '1px solid var(--color-border)', background: 'var(--color-table-head)' }}>
           <PermissionsPanel system={s} />
         </div>
       )}
-    </div>
+    </section>
   )
 }
 
@@ -1481,14 +1504,13 @@ function PermissionsPanel({ system: s }) {
   }
 
   return (
-    <div style={{ padding: '12px 0' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {loading ? (
         <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
       ) : (
         <>
           <div style={{
-            display: 'flex', gap: 8, alignItems: 'center',
-            marginBottom: 10, flexWrap: 'wrap',
+            display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
           }}>
             <button className="btn btn--action btn--sm" onClick={() => setShowGroup(true)}>
               <ListPlus size={13} /> Nowa grupa uprawnień
@@ -1500,11 +1522,12 @@ function PermissionsPanel({ system: s }) {
               <Copy size={13} /> Kopiuj grupę z programu
             </button>
             {ownPerms.length > 12 && (
-              <input className="form-control" style={{ maxWidth: 260, fontSize: 13 }}
+              <input className="form-control" style={{ flex: '1 1 200px', fontSize: 13 }}
+                     aria-label="Szukaj w uprawnieniach" type="search"
                      placeholder="Szukaj w uprawnieniach…"
                      value={permQuery} onChange={e => setPermQuery(e.target.value)} />
             )}
-            <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+            <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
               pozycji: {ownPerms.length}
             </span>
           </div>
@@ -1545,14 +1568,14 @@ function PermissionsPanel({ system: s }) {
               })
               return (
                 <div key={group || '_'} style={{
-                  marginBottom: 16,
+                  background: 'var(--color-card)',
                   border: '1px solid var(--color-border)', borderRadius: 8,
-                  padding: '8px 10px',
+                  overflow: 'hidden',
                 }}>
                   {group ? (
                     <div style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      marginBottom: 6, flexWrap: 'wrap',
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '8px 12px', borderBottom: '1px solid var(--color-border)', flexWrap: 'wrap',
                     }}>
                       {renaming === group ? (
                         <>
@@ -1575,9 +1598,8 @@ function PermissionsPanel({ system: s }) {
                         </>
                       ) : (
                         <>
-                          <ListPlus size={14} style={{ color: 'var(--color-navy)' }} />
                           <strong style={{ color: 'var(--color-navy)', fontSize: 14 }}>{group}</strong>
-                          <span className="badge badge--info" style={{ fontSize: 10 }}>
+                          <span className="badge badge--neutral" style={{ fontSize: 11, fontWeight: 800 }}>
                             {items.length}
                           </span>
                           {activeCount === 0 && (
@@ -1587,12 +1609,12 @@ function PermissionsPanel({ system: s }) {
                           )}
                           {namedGroups.length > 1 && (
                             <>
-                              <button className="btn btn--ghost btn--sm" title="W górę"
+                              <button className="btn btn--ghost btn--sm" title="W górę" aria-label="W górę"
                                       disabled={gi <= 0}
                                       onClick={() => moveGroup(group, -1)}>
                                 <ArrowUp size={13} />
                               </button>
-                              <button className="btn btn--ghost btn--sm" title="W dół"
+                              <button className="btn btn--ghost btn--sm" title="W dół" aria-label="W dół"
                                       disabled={gi >= namedGroups.length - 1}
                                       onClick={() => moveGroup(group, 1)}>
                                 <ArrowDown size={13} />
@@ -1608,7 +1630,8 @@ function PermissionsPanel({ system: s }) {
                                   onClick={() => toggleGroup(group, activeCount === 0)}>
                             {activeCount === 0 ? 'Przywróć grupę' : 'Wygaś grupę'}
                           </button>
-                          <button className="btn btn--danger btn--sm"
+                          <button className="btn btn--ghost btn--sm"
+                                  style={{ color: 'var(--color-error-text)', borderColor: 'var(--color-error)' }}
                                   onClick={() => removeGroup(group, items.length)}>
                             <Trash2 size={12} /> Usuń grupę
                           </button>
@@ -1617,9 +1640,10 @@ function PermissionsPanel({ system: s }) {
                     </div>
                   ) : (
                     <div style={{
-                      display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap',
+                      display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                      padding: '8px 12px', borderBottom: '1px solid var(--color-border)',
                     }}>
-                      <strong style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>Bez grupy</strong>
+                      <strong style={{ color: 'var(--color-text-muted)', fontSize: 14 }}>Bez grupy</strong>
                       <span className="badge badge--neutral" style={{ fontSize: 10 }}>{items.length}</span>
                       <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
                         — pozycje bez grupy; w edycji możesz przypisać je do grupy
@@ -1629,12 +1653,13 @@ function PermissionsPanel({ system: s }) {
 
                   {shown.length > 0 && (
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center',
-                                  flexWrap: 'wrap', margin: '2px 0 6px 2px' }}>
-                      <button className="btn btn--ghost btn--sm" style={{ fontSize: 11 }}
+                                  flexWrap: 'wrap', padding: '8px 12px' }}>
+                      <button className="btn btn--sm"
+                              style={{ background: 'transparent', border: 0, padding: 0, color: 'var(--color-navy)', textDecoration: 'underline', fontWeight: 600, fontSize: 13 }}
                               onClick={toggleAllInGroup}>
                         {allShownSel ? 'Odznacz wszystkie' : 'Zaznacz wszystkie'}
                       </button>
-                      <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
+                      <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
                         — zaznacz pozycje, aby masowo przypisać je do podgrupy
                       </span>
                     </div>
@@ -1645,11 +1670,12 @@ function PermissionsPanel({ system: s }) {
                   )}
 
                   {shown.length === 0 ? (
-                    <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginLeft: 8 }}>
+                    <div style={{ fontSize: 13, color: 'var(--color-text-muted)', padding: '8px 12px' }}>
                       Brak pozycji pasujących do wyszukiwania.
                     </div>
                   ) : (
-                    <table className="data-table">
+                    <div style={{ overflowX: 'auto' }}>
+                    <table className="data-table" style={{ minWidth: 640 }}>
                       <thead>
                         <tr>
                           <th style={{ width: '35%' }}>Uprawnienie</th>
@@ -1665,9 +1691,9 @@ function PermissionsPanel({ system: s }) {
                             {subgroup && (
                               <tr>
                                 <td colSpan={3} style={{
-                                  background: 'var(--bg-primary)', padding: '4px 8px 4px 24px',
-                                  fontSize: 11, textTransform: 'uppercase', letterSpacing: '.03em',
-                                  color: 'var(--color-text-muted)', fontWeight: 600,
+                                  background: 'var(--bg-secondary)', padding: '6px 12px',
+                                  fontSize: 12, textTransform: 'uppercase', letterSpacing: '.06em',
+                                  color: 'var(--color-text-muted)', fontWeight: 700,
                                 }}>
                                   ↳ {subgroup}
                                   <span className="badge badge--neutral"
@@ -1686,9 +1712,10 @@ function PermissionsPanel({ system: s }) {
                         ))}
                       </tbody>
                     </table>
+                    </div>
                   )}
 
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', padding: '10px 12px' }}>
                     <GroupAddPerm systemId={s.id} group={group} onAdded={load} />
                     {subgroupPerms(items).filter(x => x.subgroup).map(({ subgroup }) => (
                       <GroupAddPerm key={subgroup} systemId={s.id} group={group}
@@ -1701,7 +1728,7 @@ function PermissionsPanel({ system: s }) {
             })
           )}
 
-          <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 6 }}>
+          <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
             Każde uprawnienie należy do grupy — pozycje dodajesz przyciskiem
             „Dodaj uprawnienie" wewnątrz grupy, a nową grupę zakładasz przyciskiem
             „Nowa grupa uprawnień". „Zwykły checkbox" to pozycja bez doprecyzowania

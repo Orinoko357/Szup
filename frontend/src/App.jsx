@@ -140,9 +140,11 @@ function AuthGate() {
         <Header />
         <Sidebar />
         <main className="app-main">
-          <div style={{ padding: 24 }}>
-            <h2>Wymagana zmiana hasła</h2>
-            <p style={{ color: 'var(--color-text-muted)' }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: 'var(--color-navy)' }}>
+              Wymagana zmiana hasła
+            </h2>
+            <p style={{ margin: '6px 0 0', fontSize: 14, color: 'var(--color-text-muted)' }}>
               Polityka bezpieczeństwa (NIS2/KSC) wymaga zmiany hasła przed dalszym korzystaniem z systemu.
             </p>
           </div>

@@ -5,9 +5,9 @@ import { syncServerTime } from '../serverTime'
 import WodsLogo from '../components/Layout/WodsLogo'
 import '../styles/login.css'
 
-// Ekran logowania wzorem intranetu / wods-transfer / dbac:
-// [Windows] na górze (złoty CTA) → "— lub — logowanie klasyczne" (rozwijane)
-// → login / hasło / domena. Nota RODO w karcie.
+// Ekran logowania (v3.0, wg projektu): karta na jasnym tle, herb + sygnet +
+// nazwa w jednym rzędzie, [Windows] na górze (złoty CTA) → „— lub — logowanie
+// klasyczne” (rozwijane) → login / hasło / domena. Nota RODO pod kartą.
 
 const SSO_MESSAGES = {
   off:      'Logowanie poświadczeniami Windows jest wyłączone.',
@@ -129,14 +129,17 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
 
   return (
     <div className="wl-page">
-      <main className="wl-card">
+      <main className="wl-wrap">
+      <section className="wl-card" aria-label="Logowanie">
         <div className="wl-lockup">
           <img className="wl-herb wl-herb--light" src="/img/herb-ciemny.png"
                alt="Herb Miasta Wodzisławia Śląskiego" />
           <img className="wl-herb wl-herb--dark" src="/img/herb-bialy.png" alt="" aria-hidden="true" />
           <WodsLogo size={44} />
-          <span className="wl-name">szup</span>
-          <span className="wl-sub">WODS · URZĄD MIASTA WODZISŁAWIA ŚLĄSKIEGO</span>
+          <div className="wl-names">
+            <span className="wl-name">szup</span>
+            <span className="wl-sub">WODS · URZĄD MIASTA WODZISŁAWIA ŚLĄSKIEGO</span>
+          </div>
         </div>
 
         <div className="wl-body">
@@ -154,12 +157,18 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
           {ssoEnabled && (
             <>
               <button type="button" className="wl-sso" onClick={startSso}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M3 5l8-1v8H3zM13 3.8L21 3v9h-8zM3 13h8v7l-8-1zM13 13h8v8l-8-1z" />
+                </svg>
                 Zaloguj poświadczeniami Windows
               </button>
-              {ssoInfo && <div className="wl-msg wl-msg--error" role="alert">{ssoInfo}</div>}
+              {ssoInfo && <div className="wl-msg" role="status">{ssoInfo}</div>}
               <button type="button" className={`wl-toggle${open ? ' is-open' : ''}`}
                       aria-expanded={open} aria-controls="wl-classic" onClick={toggleClassic}>
-                <span className="wl-or">— lub —</span> logowanie klasyczne
+                <span className="wl-rule" aria-hidden="true" />
+                <span><span className="wl-or">— lub —</span> logowanie klasyczne</span>
+                <span className="wl-rule" aria-hidden="true" />
               </button>
             </>
           )}
@@ -169,7 +178,7 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
                aria-hidden={collapsible && !open}>
             <form onSubmit={submit}>
               <div className="wl-field">
-                <label htmlFor="login">{loginLabel}</label>
+                <label htmlFor="login">{loginLabel} <span className="wl-req" aria-hidden="true">*</span></label>
                 <input id="login" ref={loginRef} className="wl-input"
                        value={form.username} required autoComplete="username"
                        autoFocus={!collapsible} tabIndex={tabIdx}
@@ -178,7 +187,7 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
 
               {!passwordless && (
                 <div className="wl-field">
-                  <label htmlFor="password">Hasło</label>
+                  <label htmlFor="password">Hasło <span className="wl-req" aria-hidden="true">*</span></label>
                   <div className="wl-pw">
                     <input id="password" className="wl-input" type={showPw ? 'text' : 'password'}
                            value={form.password} required autoComplete="current-password"
@@ -207,7 +216,7 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
 
               {error && <div className="wl-msg wl-msg--error" role="alert">{error}</div>}
 
-              <button type="submit" className={`wl-submit${ssoEnabled ? '' : ' wl-submit--primary'}`}
+              <button type="submit" className="wl-submit"
                       disabled={loading} tabIndex={tabIdx}>
                 {loading ? 'Logowanie…' : (passwordless ? 'Zaloguj się (tryb testowy)' : 'Zaloguj się')}
               </button>
@@ -221,6 +230,8 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
             </form>
           </div>
         </div>
+
+      </section>
 
         <div className="wl-rodo">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">

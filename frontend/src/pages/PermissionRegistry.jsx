@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  ClipboardList, RefreshCw, Download, Search, X, FileText, Camera, PlayCircle,
+  RefreshCw, Download, Search, X, FileText, PlayCircle,
 } from 'lucide-react'
 import {
   listGrantedRegistry, grantedRegistryCsvUrl, getDeclaration,
@@ -29,24 +29,23 @@ export default function PermissionRegistry() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-header__title">
-            <ClipboardList size={18} style={{ verticalAlign: 'middle', marginRight: 8 }} />
-            Rejestr uprawnień
-          </div>
+          <div className="page-header__title">Rejestr uprawnień</div>
           <div className="page-header__sub">
             Nadane uprawnienia i historyczne migawki stanu — do audytu (NIS2 / KSC / RODO)
           </div>
         </div>
       </div>
 
-      <div className="tabs" style={{ marginTop: 0 }}>
-        <button className={`tab-btn${mode === 'current' ? ' active' : ''}`}
+      <div className="tabs" role="tablist" aria-label="Widok rejestru" style={{ marginTop: 0 }}>
+        <button role="tab" aria-selected={mode === 'current'}
+                className={`tab-btn${mode === 'current' ? ' active' : ''}`}
                 onClick={() => setMode('current')}>
-          <ClipboardList size={13} /> Stan bieżący
+          Stan bieżący
         </button>
-        <button className={`tab-btn${mode === 'snapshots' ? ' active' : ''}`}
+        <button role="tab" aria-selected={mode === 'snapshots'}
+                className={`tab-btn${mode === 'snapshots' ? ' active' : ''}`}
                 onClick={() => setMode('snapshots')}>
-          <Camera size={13} /> Migawki 23:50
+          Migawki 23:50
         </button>
       </div>
 
@@ -62,10 +61,15 @@ function DeclarationDetail({ detail, onClose }) {
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: 760, width: '92vw' }}>
-        <div className="modal__header">
-          <div><FileText size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-            Oświadczenie — {detail.reference_code}</div>
-          <button className="btn btn--ghost btn--sm" onClick={onClose}><X size={14} /></button>
+        <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-navy)', padding: '12px 12px 12px 20px', gap: 12 }}>
+          <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-navy)' }}>
+            Oświadczenie — {detail.reference_code}
+          </h2>
+          <button type="button" onClick={onClose} aria-label="Zamknij" title="Zamknij"
+                  style={{ width: 44, height: 44, display: 'grid', placeItems: 'center', border: 0, borderRadius: 8,
+                           background: 'transparent', color: 'var(--color-text-muted)', cursor: 'pointer', flexShrink: 0 }}>
+            <X size={18} />
+          </button>
         </div>
         <div className="modal__body" style={{ maxHeight: '72vh', overflowY: 'auto' }}>
           <div style={{ fontSize: 12.5, color: 'var(--color-text-muted)', marginBottom: 10 }}>
@@ -123,26 +127,26 @@ function CurrentRegistry() {
 
   return (
     <>
-      <div className="card" style={{ marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <div style={{ position: 'relative' }}>
-          <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-muted)' }} />
-          <input className="form-control" style={{ paddingLeft: 30, maxWidth: 240, fontSize: 13 }}
+      <section className="card" aria-label="Filtry" style={{ marginBottom: 16, padding: '14px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative', flex: '1 1 220px' }}>
+          <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-muted)' }} />
+          <input className="form-control" aria-label="Szukaj pracownika" style={{ paddingLeft: 34, minHeight: 44 }}
                  placeholder="Szukaj pracownika…" value={f.q}
                  onChange={e => setF(x => ({ ...x, q: e.target.value }))}
                  onKeyDown={e => e.key === 'Enter' && load()} />
         </div>
-        <select className="form-control" style={{ maxWidth: 220, fontSize: 13 }}
+        <select className="form-control" aria-label="Jednostka" style={{ flex: '0 1 200px', minHeight: 44 }}
                 value={f.unit_id} onChange={e => setF(x => ({ ...x, unit_id: e.target.value }))}>
           <option value="">Wszystkie jednostki</option>
           {units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
         </select>
-        <select className="form-control" style={{ maxWidth: 220, fontSize: 13 }}
+        <select className="form-control" aria-label="System" style={{ flex: '0 1 200px', minHeight: 44 }}
                 value={f.system_id} onChange={e => setF(x => ({ ...x, system_id: e.target.value }))}>
           <option value="">Wszystkie systemy</option>
           {systems.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-          <input type="checkbox" checked={f.only_with_declaration}
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: 44, fontSize: 14, cursor: 'pointer' }}>
+          <input type="checkbox" style={{ width: 18, height: 18, accentColor: 'var(--color-navy)' }} checked={f.only_with_declaration}
                  onChange={e => setF(x => ({ ...x, only_with_declaration: e.target.checked }))} />
           Tylko z oświadczeniem
         </label>
@@ -153,8 +157,8 @@ function CurrentRegistry() {
           </button>
         )}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>Pozycji: {total}</span>
-          <a className="btn btn--action btn--sm" href={grantedRegistryCsvUrl(params())}
+          <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>Pozycji: <strong style={{ color: 'var(--color-navy)' }}>{total}</strong></span>
+          <a className="btn btn--ghost btn--sm" href={grantedRegistryCsvUrl(params())}
              target="_blank" rel="noopener noreferrer">
             <Download size={14} /> CSV
           </a>
@@ -162,7 +166,7 @@ function CurrentRegistry() {
             <RefreshCw size={14} /> Odśwież
           </button>
         </div>
-      </div>
+      </section>
 
       <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
         {loading ? (
@@ -181,13 +185,13 @@ function CurrentRegistry() {
               {rows.map((r, i) => (
                 <tr key={i}>
                   <td style={{ fontWeight: 600 }}>{r.worker_name}</td>
-                  <td style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                  <td style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
                     {r.unit_name || '—'}{r.department_name ? ` / ${r.department_name}` : ''}
                   </td>
                   <td>{r.system_name || '—'}</td>
                   <td>
-                    {r.permission_name || '—'}
-                    {r.group_name && <span className="badge badge--info" style={{ fontSize: 9, marginLeft: 6 }}>{r.group_name}</span>}
+                    {r.group_name && <span className="badge badge--neutral" style={{ borderRadius: 4, fontSize: 11, fontWeight: 700, marginRight: 6 }}>{r.group_name}</span>}
+                    <span style={{ fontWeight: 600 }}>{r.permission_name || '—'}</span>
                     {r.custom_values && Object.keys(r.custom_values).length > 0 && (
                       <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
                         {Object.entries(r.custom_values).map(([k, v]) => `${k}: ${v}`).join(' · ')}
@@ -195,15 +199,15 @@ function CurrentRegistry() {
                     )}
                   </td>
                   <td style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{r.granted_at ? fmtDate(r.granted_at) : '—'}</td>
-                  <td style={{ fontSize: 12 }}>
+                  <td style={{ fontSize: 13 }}>
                     {r.declared_by_name ? (
-                      <><div>{r.declared_by_name}</div>
+                      <><div style={{ fontWeight: 600 }}>{r.declared_by_name}</div>
                         <div style={{ color: 'var(--color-text-muted)' }}>{r.declared_date || (r.declaration_at ? fmtDate(r.declaration_at) : '')}</div></>
-                    ) : <span className="badge badge--neutral" style={{ fontSize: 9 }} title="Nadanie sprzed wdrożenia oświadczeń">brak</span>}
+                    ) : <span className="badge badge--neutral" style={{ fontWeight: 700 }} title="Nadanie sprzed wdrożenia oświadczeń">brak</span>}
                   </td>
                   <td>
                     {r.reference_code ? (
-                      <button className="btn btn--ghost btn--sm" style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}
+                      <button className="btn btn--ghost btn--sm" style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
                               title="Podgląd oświadczenia"
                               onClick={() => getDeclaration(r.reference_code).then(x => setDetail(x.data)).catch(() => {})}>
                         <FileText size={11} /> {r.reference_code}
@@ -265,15 +269,15 @@ function SnapshotsRegistry({ isAdmin }) {
 
   return (
     <>
-      <div className="alert alert--info" style={{ fontSize: 12.5, marginBottom: 12 }}>
+      <div className="alert alert--info" style={{ fontSize: 13, marginBottom: 16 }}>
         Migawki tworzą się <strong>automatycznie codziennie o 23:50</strong> i pozostają
         dostępne bezterminowo (retencja ≥ 5 lat) — pozwalają odtworzyć, kto jakie
         uprawnienia miał danego dnia. Każda migawka ma sumę kontrolną SHA-256.
       </div>
 
-      <div className="card" style={{ marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <label style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>Dzień:</label>
-        <select className="form-control" style={{ maxWidth: 260, fontSize: 13 }}
+      <section className="card" aria-label="Filtry" style={{ marginBottom: 16, padding: '14px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label htmlFor="snap-day" style={{ fontSize: 14, fontWeight: 700 }}>Dzień:</label>
+        <select id="snap-day" className="form-control" style={{ flex: '0 1 300px', minHeight: 44 }}
                 value={date} onChange={e => setDate(e.target.value)}>
           {list.length === 0 && <option value="">— brak migawek —</option>}
           {list.map(s => (
@@ -282,9 +286,9 @@ function SnapshotsRegistry({ isAdmin }) {
             </option>
           ))}
         </select>
-        <div style={{ position: 'relative' }}>
-          <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-muted)' }} />
-          <input className="form-control" style={{ paddingLeft: 30, maxWidth: 220, fontSize: 13 }}
+        <div style={{ position: 'relative', flex: '1 1 200px' }}>
+          <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-muted)' }} />
+          <input className="form-control" aria-label="Szukaj pracownika" style={{ paddingLeft: 34, minHeight: 44 }}
                  placeholder="Szukaj pracownika…" value={q}
                  onChange={e => setQ(e.target.value)}
                  onKeyDown={e => e.key === 'Enter' && loadSnap(date, q)} />
@@ -294,7 +298,7 @@ function SnapshotsRegistry({ isAdmin }) {
         </button>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
           {date && (
-            <a className="btn btn--action btn--sm"
+            <a className="btn btn--ghost btn--sm"
                href={snapshotCsvUrl(date, q.trim() ? { q: q.trim() } : {})}
                target="_blank" rel="noopener noreferrer">
               <Download size={14} /> CSV
@@ -309,10 +313,10 @@ function SnapshotsRegistry({ isAdmin }) {
             <RefreshCw size={14} /> Odśwież
           </button>
         </div>
-      </div>
+      </section>
 
       {meta && (
-        <div style={{ fontSize: 11.5, color: 'var(--color-text-muted)', margin: '0 2px 8px' }}>
+        <div style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--color-text-muted)', margin: '0 2px 12px' }}>
           Migawka z {fmtDate(meta.created_at)} · autor: {meta.generated_by} ·
           {' '}SHA-256: <span style={{ fontFamily: 'var(--font-mono)' }}>{meta.content_sha256.slice(0, 16)}…</span>
         </div>
@@ -339,9 +343,9 @@ function SnapshotsRegistry({ isAdmin }) {
               {snap.rows.map((r, i) => (
                 <tr key={i}>
                   <td style={{ fontWeight: 600 }}>{r.worker_name}
-                    <span style={{ color: 'var(--color-text-muted)', fontWeight: 400, fontSize: 11 }}> ({r.username})</span>
+                    <span style={{ color: 'var(--color-text-muted)', fontWeight: 400, fontSize: 12 }}> ({r.username})</span>
                   </td>
-                  <td style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                  <td style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
                     {r.unit_name || '—'}{r.department_name ? ` / ${r.department_name}` : ''}
                   </td>
                   <td>{r.system_name || '—'}</td>

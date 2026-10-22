@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import WodsLogo from '../components/Layout/WodsLogo'
 import { setupAdmin } from '../api'
+import '../styles/login.css'
 
 export default function Setup({ onSetup }) {
   const [username, setUsername] = useState('')
@@ -31,58 +32,48 @@ export default function Setup({ onSetup }) {
     }
   }
 
+  // v3.0 — wygląd wg projektu (wspólne klasy z ekranem logowania).
   return (
-    <div style={{
-      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: 'var(--color-bg)', padding: 20,
-    }}>
-      <div style={{ width: '100%', maxWidth: 460 }}>
-        <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
-            <WodsLogo size={56} />
-          </div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--color-navy)' }}>
-            Pierwsze uruchomienie
-          </div>
-          <div style={{ fontSize: 13, color: 'var(--color-text-muted)', marginTop: 4 }}>
-            Utwórz konto administratora systemu szup · WODS
-          </div>
+    <div className="wl-page">
+      <main className="wl-wrap wl-wrap--wide">
+        <div className="wl-head">
+          <WodsLogo size={56} />
+          <h1>Pierwsze uruchomienie</h1>
+          <p>Utwórz konto administratora systemu szup · WODS</p>
         </div>
 
-        <div className="card">
-          <form onSubmit={submit}>
-            <div className="form-group">
-              <label className="form-label">Login administratora</label>
-              <input className="form-control" type="text" required autoFocus
-                     value={username} onChange={e => setUsername(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Imię i nazwisko (opcjonalne)</label>
-              <input className="form-control" type="text"
-                     value={fullName} onChange={e => setFullName(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Hasło</label>
-              <input className="form-control" type="password" required
-                     autoComplete="new-password"
-                     value={password} onChange={e => setPassword(e.target.value)} />
-              <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
-                Min. 12 znaków, co najmniej 3 z 4 klas: małe litery, wielkie, cyfry, specjalne.
-              </div>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Powtórz hasło</label>
-              <input className="form-control" type="password" required
-                     autoComplete="new-password"
-                     value={password2} onChange={e => setPassword2(e.target.value)} />
-            </div>
-            {err && <div className="alert alert--error" style={{ marginBottom: 16 }}>{err}</div>}
-            <button type="submit" className="btn btn--primary w-full" disabled={busy}>
-              {busy ? 'Tworzenie konta…' : 'Utwórz konto i zaloguj'}
-            </button>
-          </form>
-        </div>
-      </div>
+        <form onSubmit={submit} className="wl-card wl-card--form">
+          <div className="wl-field">
+            <label htmlFor="setup-login">Login administratora <span className="wl-req" aria-hidden="true">*</span></label>
+            <input id="setup-login" className="wl-input" type="text" required autoFocus
+                   value={username} onChange={e => setUsername(e.target.value)} />
+          </div>
+          <div className="wl-field">
+            <label htmlFor="setup-name">Imię i nazwisko (opcjonalne)</label>
+            <input id="setup-name" className="wl-input" type="text"
+                   value={fullName} onChange={e => setFullName(e.target.value)} />
+          </div>
+          <div className="wl-field">
+            <label htmlFor="setup-pw">Hasło <span className="wl-req" aria-hidden="true">*</span></label>
+            <input id="setup-pw" className="wl-input" type="password" required
+                   autoComplete="new-password"
+                   value={password} onChange={e => setPassword(e.target.value)} />
+            <span className="wl-help">
+              Min. 12 znaków, co najmniej 3 z 4 klas: małe litery, wielkie, cyfry, specjalne.
+            </span>
+          </div>
+          <div className="wl-field">
+            <label htmlFor="setup-pw2">Powtórz hasło <span className="wl-req" aria-hidden="true">*</span></label>
+            <input id="setup-pw2" className="wl-input" type="password" required
+                   autoComplete="new-password"
+                   value={password2} onChange={e => setPassword2(e.target.value)} />
+          </div>
+          {err && <div className="wl-msg wl-msg--error" role="alert">{err}</div>}
+          <button type="submit" className="wl-submit" disabled={busy}>
+            {busy ? 'Tworzenie konta…' : 'Utwórz konto i zaloguj'}
+          </button>
+        </form>
+      </main>
     </div>
   )
 }

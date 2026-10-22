@@ -102,38 +102,41 @@ function WorkersTab({ renderHeader }) {
     <div>
       {renderHeader(load, loading)}
 
-      <div className="card" style={{ marginBottom: 12 }}>
-        <div style={{ position: 'relative', maxWidth: 420 }}>
-          <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-muted)' }} />
-          <input
-            className="form-input"
-            style={{ paddingLeft: 30 }}
-            placeholder="Szukaj: imię, login, e-mail, wydział…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
-        </div>
-      </div>
-
       {err && <div className="alert alert--error mb-4">{err}</div>}
 
-      <div className="card">
+      {/* v3.0: wyszukiwarka w nagłówku karty listy (wg projektu). */}
+      <section aria-label="Pracownicy" className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)' }}>
+          <div style={{ position: 'relative', maxWidth: 420 }}>
+            <Search size={15} aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-muted)' }} />
+            <input
+              type="search"
+              className="form-input"
+              aria-label="Szukaj pracownika"
+              style={{ paddingLeft: 36, minHeight: 44, borderRadius: 8, fontSize: 14 }}
+              placeholder="Szukaj: imię, login, e-mail, wydział…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+        </div>
         {loading ? (
-          <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
+          <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Ładowanie…</div>
         ) : workers.length === 0 ? (
-          <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>
+          <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>
             <Users size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
             Nie kierujesz żadnym wydziałem albo nie ma przypisanych do
             niego aktywnych pracowników. Sprawdź konfigurację wydziałów
             w panelu administracyjnym.
           </div>
         ) : filtered.length === 0 ? (
-          <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>
+          <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>
             <Search size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
             Brak wyników dla „{search}"
           </div>
         ) : (
-          <table className="data-table">
+          <div style={{ overflowX: 'auto' }}>
+          <table className="data-table" style={{ minWidth: 1000 }}>
             <thead>
               <tr>
                 <th>Imię i nazwisko</th>
@@ -151,43 +154,49 @@ function WorkersTab({ renderHeader }) {
                 const open  = expanded.has(w.id)
                 return [
                   <tr key={w.id} style={w.is_self ? { background: 'var(--bg-secondary)' } : undefined}>
-                    <td style={{ fontWeight: 600 }}>
+                    <td style={{ fontWeight: 700 }}>
                       {w.full_name || '—'}
                       {w.is_self && (
-                        <span className="badge badge--info" style={{ fontSize: 10, marginLeft: 8 }}
-                              title="Możesz złożyć wniosek sam dla siebie">
+                        <span title="Możesz złożyć wniosek sam dla siebie" style={{
+                          marginLeft: 8, padding: '1px 7px', borderRadius: 4, fontSize: 11, fontWeight: 800,
+                          background: 'var(--color-info-bg)', color: 'var(--color-info-text)',
+                        }}>
                           Ja
                         </span>
                       )}
                     </td>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{w.username}</td>
-                    <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{w.email || '—'}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--color-text-muted)' }}>{w.username}</td>
+                    <td style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>{w.email || '—'}</td>
                     <td>{deptFull(w.department_name, w.department_description)}</td>
-                    <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{w.unit_name || '—'}</td>
+                    <td style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>{w.unit_name || '—'}</td>
                     <td>
                       {perms.length === 0 ? (
-                        <span style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>brak</span>
+                        <span style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>brak</span>
                       ) : (
                         <button
+                          type="button"
                           className="btn btn--ghost btn--sm"
+                          aria-expanded={open}
+                          style={{ minHeight: 36, fontSize: 13 }}
                           onClick={() => toggleExpand(w.id)}
                           title={open ? 'Zwiń' : 'Pokaż uprawnienia'}
                         >
                           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                          <span className="badge badge--info" style={{ marginLeft: 4 }}>{perms.length}</span>
+                          Uprawnienia
+                          <span className="tab-count">{perms.length}</span>
                         </button>
                       )}
                     </td>
-                    <td>
-                      <button className="btn btn--action btn--sm" onClick={() => setRequestFor(w)}>
+                    <td style={{ textAlign: 'right' }}>
+                      <button className="btn btn--action btn--sm" style={{ minHeight: 36 }} onClick={() => setRequestFor(w)}>
                         <FilePlus size={13} /> Nowy wniosek
                       </button>
                     </td>
                   </tr>,
                   open && perms.length > 0 && (
                     <tr key={`${w.id}-perms`}>
-                      <td colSpan={7} style={{ background: 'var(--bg-secondary)' }}>
-                        <div style={{ padding: '8px 4px' }}>
+                      <td colSpan={7}>
+                        <div style={{ padding: '4px 0 6px' }}>
                           <div className="form-label" style={{ marginBottom: 6 }}>
                             Aktualnie posiadane uprawnienia
                           </div>
@@ -195,10 +204,10 @@ function WorkersTab({ renderHeader }) {
                             {perms.map(p => (
                               <span key={`${p.system_id}:${p.permission_id}`}
                                     style={{
-                                      fontSize: 12, padding: '4px 10px',
+                                      fontSize: 13, padding: '4px 10px',
                                       border: '1px solid var(--color-border)',
-                                      borderRadius: 'var(--radius-control)',
-                                      background: 'var(--bg-primary)',
+                                      borderRadius: 6,
+                                      background: 'var(--bg-secondary)',
                                     }}>
                                 <strong style={{ color: 'var(--color-navy)' }}>{p.system_name}</strong>
                                 <span style={{ color: 'var(--color-text-muted)' }}> › </span>
@@ -214,8 +223,9 @@ function WorkersTab({ renderHeader }) {
               })}
             </tbody>
           </table>
+          </div>
         )}
-      </div>
+      </section>
     </div>
   )
 }
@@ -487,8 +497,8 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
           </Section>
 
           <Section n={2} title="Uprawnienia — stan docelowy">
-          <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 8 }}>
-            Zaznaczone i oznaczone <span className="badge badge--success" style={{ fontSize: 9 }}>posiada</span>{' '}
+          <div style={{ fontSize: 13, color: 'var(--color-text-muted)', marginBottom: 10 }}>
+            Zaznaczone i oznaczone <span className="badge badge--neutral" style={{ fontSize: 11 }}>posiada</span>{' '}
             to uprawnienia, które pracownik ma obecnie. To <strong>stan docelowy</strong>:
             zaznacz dodatkowe, aby je <strong>nadać</strong>; odznacz posiadane, aby je <strong>odebrać</strong>.
           </div>
@@ -499,7 +509,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
               Brak zdefiniowanych systemów — poproś administratora o konfigurację.
             </div>
           ) : (
-            <div style={{ maxHeight: 'min(62vh, 640px)', overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 6, padding: 8, background: 'var(--bg-secondary)' }}>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
               {systems.map(s => {
                 const perms = permsBySys[s.id] || []
                 // „Tylko dostęp" = jedna pozycja na cały program.
@@ -519,11 +529,11 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
                         textDecoration: permState(key) === 'revoke' ? 'line-through' : 'none',
                       }}
                       badges={<>
-                        <span className="badge badge--info" style={{ fontSize: 9 }}>
+                        <span className="badge badge--info" style={{ fontSize: 11 }}>
                           dostęp
                         </span>
                         {s.default_checked && (
-                          <span className="badge badge--warning" style={{ fontSize: 9 }}
+                          <span className="badge badge--warning" style={{ fontSize: 11 }}
                                 title="Zaznaczone automatycznie — możesz odznaczyć">
                             domyślne
                           </span>
@@ -558,12 +568,12 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
                       ? 'Zaznacz program, aby wybrać zakres uprawnień.' : null}
                     badges={<>
                       {selHere > 0 && (
-                        <span className="badge badge--success" style={{ fontSize: 9 }}>
+                        <span className="badge badge--success" style={{ fontSize: 11 }}>
                           wybrano: {selHere}
                         </span>
                       )}
                       {gated && active && !anySel && (
-                        <span className="badge badge--warning" style={{ fontSize: 9 }}
+                        <span className="badge badge--warning" style={{ fontSize: 11 }}
                               title="Wybierz co najmniej jedno uprawnienie">
                           wybierz zakres
                         </span>
@@ -626,7 +636,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
                               }}>{p.permission_name}</span>
                               <StateBadge st={permState(key)} />
                               {p.is_active === false && (
-                                <span className="badge badge--warning" style={{ fontSize: 9 }}
+                                <span className="badge badge--warning" style={{ fontSize: 11 }}
                                       title="Pozycja wycofana w systemie źródłowym">
                                   wycofane
                                 </span>
@@ -664,8 +674,8 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
 
           {/* Podsumowanie: co wniosek faktycznie zmieni */}
           {!loading && (
-            <div className={`alert ${noChange ? 'alert--info' : 'alert--success'}`}
-                 style={{ fontSize: 12, marginTop: 12 }}>
+            <div role="status" className={`alert ${noChange ? 'alert--info' : 'alert--success'}`}
+                 style={{ fontSize: 13, marginTop: 12, border: 'none', borderRadius: 8, padding: '10px 14px' }}>
               {noChange ? (
                 <>Brak zmian względem obecnego stanu — zaznacz nowe uprawnienia lub odznacz posiadane.</>
               ) : (

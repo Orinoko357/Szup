@@ -129,12 +129,15 @@ export default function PermissionImportModal({ system, onClose, onDone }) {
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: 900, width: '92vw' }}>
-        <div className="modal__header">
-          <div>
-            <FileSpreadsheet size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+        <div className="modal__header" style={{ background: 'var(--color-card)', color: 'var(--color-navy)', padding: '12px 12px 12px 20px', gap: 12 }}>
+          <h2 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 800, color: 'var(--color-navy)' }}>
             Import uprawnień — {system.name}
-          </div>
-          <button className="btn btn--ghost btn--sm" onClick={onClose}><X size={14} /></button>
+          </h2>
+          <button type="button" onClick={onClose} aria-label="Zamknij" title="Zamknij"
+                  style={{ width: 44, height: 44, display: 'grid', placeItems: 'center', border: 0, borderRadius: 8,
+                           background: 'transparent', color: 'var(--color-text-muted)', cursor: 'pointer', flexShrink: 0 }}>
+            <X size={18} />
+          </button>
         </div>
 
         <div className="modal__body" style={{ maxHeight: '70vh', overflowY: 'auto' }}>

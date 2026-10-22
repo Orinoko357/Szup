@@ -87,7 +87,7 @@ function groupBySystemAndGroup(items) {
     }))
 }
 
-function PermRow({ it, isRevoke, deny, fulfill }) {
+function PermRow({ it, isRevoke, deny, fulfill, crumb }) {
   const cv = it.custom_values && typeof it.custom_values === 'object'
     ? Object.entries(it.custom_values).filter(([, v]) => v)
     : []
@@ -101,102 +101,117 @@ function PermRow({ it, isRevoke, deny, fulfill }) {
   const busy = (deny?.busyId ?? fulfill?.busyId) === it.id
   const canSave = typeof deny?.save === 'function'       // natychmiastowy zapis dostępny
   const canUndo = typeof deny?.remove === 'function'
-  const struck = isRevoke || persistedDenied || denyingNow
+  const struck = persistedDenied || denyingNow
+  const undecided = canFulfill && !persistedFulfilled && !persistedDenied && !denyingNow
   const rowBg = persistedFulfilled ? 'var(--color-success-bg)'
-    : (persistedDenied || denyingNow) ? 'var(--color-error-bg)' : 'transparent'
+    : (persistedDenied || denyingNow || isRevoke) ? 'var(--color-error-bg)' : 'transparent'
+  const btn = { minHeight: 38, fontSize: 13 }
   return (
-    <div style={{ padding: '5px 12px 5px 40px', fontSize: 14,
-                  borderTop: '0.5px solid var(--color-border)', background: rowBg }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ textDecoration: struck ? 'line-through' : 'none',
-                       color: (persistedDenied || denyingNow) ? 'var(--color-error-text)' : 'inherit' }}>
-          {it.permission_name}
+    <div style={{ padding: '12px 14px', fontSize: 14,
+                  borderTop: '1px solid var(--color-border)', background: rowBg }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ flex: '1 1 240px', minWidth: 0 }}>
+          {crumb && (
+            <span style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.07em',
+                           textTransform: 'uppercase', color: 'var(--color-text-muted)' }}>
+              {crumb}
+            </span>
+          )}
+          <span style={{ display: 'block', fontWeight: 600,
+                         textDecoration: struck ? 'line-through' : 'none',
+                         color: struck ? 'var(--color-error-text)' : 'inherit' }}>
+            {it.permission_name}
+          </span>
+          {persistedFulfilled && (it.fulfilled_by_name || it.fulfilled_at) && (
+            <span style={{ display: 'block', fontSize: 12, color: 'var(--color-success-text)' }}>
+              Zrobione{it.fulfilled_by_name ? ` · ${it.fulfilled_by_name}` : ''}{it.fulfilled_at ? ` · ${fmtDT(it.fulfilled_at)}` : ''}
+            </span>
+          )}
         </span>
         {it.added_by_name && (
           <span className="badge badge--warning"
-                style={{ fontSize: 10, textDecoration: 'none' }}
                 title={`Dodane przez IT: ${it.added_by_name}`}>
             dodane przez IT
           </span>
         )}
+        {undecided && <span className="badge badge--neutral">bez decyzji</span>}
         {persistedDenied && (
-          <span className="badge badge--error" style={{ fontSize: 10, textDecoration: 'none' }}
+          <span className="badge" style={{ background: 'var(--color-error)', color: '#fff' }}
                 title={actorTitle(it.denied_by_name, it.denied_at)}>
             odmówiono
           </span>
         )}
         {persistedFulfilled && (
-          <span className="badge badge--success" style={{ fontSize: 10, textDecoration: 'none' }}
+          <span className="badge" style={{ background: 'var(--color-success)', color: '#fff' }}
                 title={actorTitle(it.fulfilled_by_name, it.fulfilled_at)}>
-            zrealizowano
+            ✓ zrealizowano
           </span>
         )}
         {/* Przyciski akcji — po prawej. */}
-        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
-          {persistedFulfilled && canFulfill && (
-            <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
-                    style={{ fontSize: 11 }} onClick={() => fulfill.set(it.id, false)}>
-              {busy ? 'Cofam…' : 'Cofnij'}
-            </button>
-          )}
-          {canFulfill && !persistedFulfilled && !persistedDenied && !denyingNow && (
-            <button type="button" className="btn btn--success btn--sm" disabled={busy}
-                    style={{ fontSize: 11 }} onClick={() => fulfill.set(it.id, true)}>
-              {busy ? 'Zapisuję…' : '✓ Zrobione'}
-            </button>
-          )}
-          {persistedDenied && canUndo && (
-            <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
-                    style={{ fontSize: 11 }} onClick={() => deny.remove(it.id)}>
-              {busy ? 'Cofam…' : 'Cofnij odmowę'}
-            </button>
-          )}
-          {canDenyNow && !denyingNow && (
-            <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
-                    style={{ fontSize: 11 }} onClick={() => deny.toggle(it.id)}>
-              Odmów
-            </button>
-          )}
-        </span>
+        {persistedFulfilled && canFulfill && (
+          <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
+                  style={btn} onClick={() => fulfill.set(it.id, false)}>
+            {busy ? 'Cofam…' : 'Cofnij'}
+          </button>
+        )}
+        {undecided && (
+          <button type="button" className="btn btn--success btn--sm" disabled={busy}
+                  style={btn} onClick={() => fulfill.set(it.id, true)}>
+            {busy ? 'Zapisuję…' : '✓ Zrobione'}
+          </button>
+        )}
+        {persistedDenied && canUndo && (
+          <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
+                  style={btn} onClick={() => deny.remove(it.id)}>
+            {busy ? 'Cofam…' : 'Cofnij odmowę'}
+          </button>
+        )}
+        {canDenyNow && !denyingNow && (
+          <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
+                  style={btn} onClick={() => deny.toggle(it.id)}>
+            Odmów
+          </button>
+        )}
       </div>
       {/* Komentarz do odmowy — zapisany (read-only) albo wpisywany teraz. */}
       {persistedDenied && it.deny_comment && (
-        <div style={{ fontSize: 11, color: 'var(--color-error-text)', marginTop: 3 }}>
-          Powód odmowy: {it.deny_comment}
+        <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 6, fontSize: 13,
+                      background: 'var(--color-card)', border: '1px solid var(--color-error)' }}>
+          <strong style={{ color: 'var(--color-error-text)' }}>Powód odmowy:</strong> {it.deny_comment}
         </div>
       )}
       {denyingNow && (
-        <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <input className="form-control" style={{ fontSize: 12 }}
+        <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <input className="form-control" style={{ fontSize: 13, flex: '1 1 260px' }}
                  placeholder="Powód odmowy (opcjonalnie)" autoFocus disabled={busy}
+                 aria-label="Powód odmowy"
                  value={deny.map[it.id] || ''}
                  onChange={e => deny.setComment(it.id, e.target.value)}
                  onKeyDown={e => { if (e.key === 'Enter' && canSave && !busy) deny.save(it.id) }} />
           {canSave ? (
-            <div style={{ display: 'flex', gap: 8 }}>
+            <>
               <button type="button" className="btn btn--danger btn--sm" disabled={busy}
-                      style={{ fontSize: 11 }} onClick={() => deny.save(it.id)}>
+                      style={btn} onClick={() => deny.save(it.id)}>
                 {busy ? 'Zapisuję…' : 'Zapisz odmowę'}
               </button>
               <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
-                      style={{ fontSize: 11 }} onClick={() => deny.toggle(it.id)}>
+                      style={btn} onClick={() => deny.toggle(it.id)}>
                 Anuluj
               </button>
-            </div>
+            </>
           ) : (
             // Tryb zgodności: brak natychmiastowego zapisu → odmowa poleci z całą akcją.
             <button type="button" className="btn btn--ghost btn--sm"
-                    style={{ fontSize: 11, alignSelf: 'flex-start' }}
-                    onClick={() => deny.toggle(it.id)}>
+                    style={btn} onClick={() => deny.toggle(it.id)}>
               Cofnij odmowę
             </button>
           )}
         </div>
       )}
       {cv.length > 0 && !struck && (
-        <div style={{ marginTop: 4, textDecoration: 'none' }}>
+        <div style={{ marginTop: 4 }}>
           {cv.map(([k, v]) => (
-            <div key={k} style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
+            <div key={k} style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
               <span style={{ fontWeight: 600 }}>{k}:</span>{' '}
               <span style={{ whiteSpace: 'pre-wrap' }}>{v}</span>
             </div>
@@ -209,64 +224,27 @@ function PermRow({ it, isRevoke, deny, fulfill }) {
 
 function Group({ kind, items, deny, fulfill }) {
   const isRevoke = kind === 'revoke'
-  const color = isRevoke ? 'var(--color-error)'    : 'var(--color-success)'
-  const bg    = isRevoke ? 'var(--color-error-bg)' : 'var(--color-success-bg)'
+  const color = isRevoke ? 'var(--color-error)'      : 'var(--color-success)'
+  const text  = isRevoke ? 'var(--color-error-text)' : 'var(--color-success-text)'
+  const bg    = isRevoke ? 'var(--color-error-bg)'   : 'var(--color-success-bg)'
   const label = isRevoke ? 'Do odebrania' : 'Do nadania'
   const sign  = isRevoke ? '−' : '+'
   const systems = groupBySystemAndGroup(items)
+  // v3.0 (wg projektu): pasmo kierunku, a w wierszu nad nazwą uprawnienia
+  // ścieżka „PROGRAM · GRUPA · PODGRUPA” zamiast osobnych pasm nagłówków.
   return (
-    <div style={{
-      border: `1px solid ${color}`, borderLeftWidth: 3,
-      borderRadius: 'var(--radius-control)', overflow: 'hidden',
-    }}>
-      <div style={{ background: bg, padding: '6px 10px', fontWeight: 700, fontSize: 12, color }}>
-        {sign} {label} ({items.length})
+    <div style={{ border: `1px solid ${color}`, borderRadius: 8, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px',
+                    background: bg, color: text, fontWeight: 800, fontSize: 13 }}>
+        <span aria-hidden="true" style={{ width: 18, height: 18, borderRadius: 4, background: color,
+                                          color: '#fff', display: 'grid', placeItems: 'center' }}>{sign}</span>
+        {label} · {items.length}
       </div>
-      {/* Pasma nagłówków: program (mocne) → grupa uprawnień (jaśniejsze, wcięte)
-          → uprawnienia (wiersze z wcięciem). */}
-      {systems.map(sys => (
-        <div key={sys.system_name}>
-          <div style={{
-            background: 'var(--bg-secondary)', padding: '7px 12px',
-            fontWeight: 700, fontSize: 13, color: 'var(--color-navy)',
-            borderTop: '1px solid var(--color-border)',
-          }}>
-            {sys.system_name}
-          </div>
-          {sys.groups.map(g => (
-            <div key={g.group_name || '_nogrp'}>
-              {g.group_name && (
-                <div style={{
-                  padding: '4px 12px 4px 26px', fontSize: 11,
-                  textTransform: 'uppercase', letterSpacing: '.03em',
-                  color: 'var(--color-text-muted)', background: 'var(--bg-primary)',
-                  borderTop: '0.5px solid var(--color-border)',
-                }}>
-                  {g.group_name}
-                </div>
-              )}
-              {g.subgroups.map(sg => (
-                <div key={sg.subgroup_name || '_nosub'}>
-                  {sg.subgroup_name && (
-                    <div style={{
-                      padding: '3px 12px 3px 40px', fontSize: 10.5,
-                      letterSpacing: '.02em', fontStyle: 'italic',
-                      color: 'var(--color-text-muted)', background: 'var(--bg-primary)',
-                      borderTop: '0.5px solid var(--color-border)',
-                    }}>
-                      ↳ {sg.subgroup_name}
-                    </div>
-                  )}
-                  {sg.items.map(it => (
-                    <PermRow key={it.id ?? `${it.system_id}:${it.permission_id}`}
-                             it={it} isRevoke={isRevoke} deny={deny} fulfill={fulfill} />
-                  ))}
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      ))}
+      {systems.map(sys => sys.groups.map(g => g.subgroups.map(sg => sg.items.map(it => (
+        <PermRow key={it.id ?? `${it.system_id}:${it.permission_id}`}
+                 it={it} isRevoke={isRevoke} deny={deny} fulfill={fulfill}
+                 crumb={[sys.system_name, g.group_name, sg.subgroup_name].filter(Boolean).join(' · ')} />
+      )))))}
     </div>
   )
 }
@@ -285,12 +263,10 @@ export function permChangeState(key, held, picked) {
 export function changeStyle(st) {
   if (st === 'revoke') return {
     background: 'var(--color-error-bg)',
-    borderLeft: '3px solid var(--color-error)',
     padding: '3px 6px', borderRadius: 4,
   }
   if (st === 'grant') return {
     background: 'var(--color-success-bg)',
-    borderLeft: '3px solid var(--color-success)',
     padding: '3px 6px', borderRadius: 4,
   }
   return {}
@@ -305,8 +281,8 @@ export function changeTextStyle(st) {
 }
 
 export function ChangeBadge({ st }) {
-  if (st === 'revoke') return <span className="badge badge--error"   style={{ fontSize: 10 }}>− odebranie</span>
-  if (st === 'grant')  return <span className="badge badge--success" style={{ fontSize: 10 }}>+ nadanie</span>
-  if (st === 'kept')   return <span className="badge badge--neutral" style={{ fontSize: 10 }}>posiada</span>
+  if (st === 'revoke') return <span className="badge badge--error"   style={{ fontSize: 11 }}>− odebranie</span>
+  if (st === 'grant')  return <span className="badge badge--success" style={{ fontSize: 11 }}>+ nadanie</span>
+  if (st === 'kept')   return <span className="badge badge--neutral" style={{ fontSize: 11 }}>posiada</span>
   return null
 }

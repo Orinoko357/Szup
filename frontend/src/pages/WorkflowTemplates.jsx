@@ -160,10 +160,10 @@ export default function WorkflowTemplates() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn--ghost btn--sm" onClick={load} disabled={loading}>
+          <button className="btn btn--ghost" onClick={load} disabled={loading}>
             <RefreshCw size={14} /> Odśwież
           </button>
-          <button className="btn btn--action btn--sm" onClick={() => setEditing({ mode: 'add' })}>
+          <button className="btn btn--action" onClick={() => setEditing({ mode: 'add' })}>
             <Plus size={14} /> Nowy szablon
           </button>
         </div>
@@ -171,7 +171,7 @@ export default function WorkflowTemplates() {
 
       {err && <div className="alert alert--error mb-4">{err}</div>}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {loading && <div className="card" style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>}
         {!loading && items.length === 0 && (
           <div className="card" style={{ color: 'var(--color-text-muted)', padding: 16 }}>
@@ -198,54 +198,55 @@ function TemplateCard({ tpl, onEdit, onReload }) {
     catch (ex) { alert(ex.response?.data?.detail || 'Błąd') }
   }
   return (
-    <div className="card" style={{ padding: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'start', gap: 8 }}>
-        <div style={{ flex: 1 }}>
-          <strong style={{ fontSize: 14 }}>{tpl.name}</strong>
-          <span style={{ fontSize: 11, color: 'var(--color-text-muted)', marginLeft: 8 }}>v{tpl.version}</span>
-          {!tpl.is_active && (
-            <span className="badge badge--neutral" style={{ fontSize: 10, marginLeft: 6 }}>nieaktywny</span>
-          )}
+    <section className="card" style={{ padding: '18px 20px', opacity: tpl.is_active ? 1 : 0.8 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 12 }}>
+        <div style={{ flex: '1 1 360px', minWidth: 0 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: 'var(--color-navy)' }}>{tpl.name}</h2>
+            <span style={{ padding: '1px 8px', borderRadius: 10, background: 'var(--color-neutral-bg)',
+                           color: 'var(--color-neutral-text)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700 }}>
+              v{tpl.version}
+            </span>
+            {!tpl.is_active && <span className="badge badge--neutral">nieaktywny</span>}
+          </div>
           {tpl.description && (
-            <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 4 }}>{tpl.description}</div>
+            <p style={{ margin: '4px 0 0', fontSize: 14, color: 'var(--color-text)' }}>{tpl.description}</p>
           )}
-          <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
-            Używany przez {tpl.used_by_request_types_count} typów wniosków ·
-            {tpl.active_instances_count} aktywnych instancji ·
+          <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--color-text-muted)' }}>
+            Używany przez {tpl.used_by_request_types_count} typów wniosków ·{' '}
+            {tpl.active_instances_count} aktywnych instancji ·{' '}
             utworzony {fmtDateTime(tpl.created_at)}
             {tpl.created_by_name && ` przez ${tpl.created_by_name}`}
-          </div>
+          </p>
         </div>
-        <button className="btn btn--action btn--sm" onClick={onEdit}>
-          <LayoutList size={12} /> Otwórz w edytorze
+        <button className="btn btn--action" onClick={onEdit}>
+          <LayoutList size={14} /> Otwórz w edytorze
         </button>
-        <button className="btn btn--ghost btn--sm" onClick={del}><Trash2 size={12} /></button>
+        <button className="btn btn--ghost" onClick={del} aria-label="Usuń szablon" title="Usuń szablon"
+                style={{ color: 'var(--color-error-text)' }}><Trash2 size={15} /></button>
       </div>
 
       {graph && graph.nodes && (
-        <div style={{ marginTop: 10, padding: 10, background: 'var(--bg-secondary)', borderRadius: 6, overflowX: 'auto' }}>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 'max-content' }}>
-            {graph.nodes.map((n, idx) => {
-              const Icon = NODE_ICONS[n.type] || GitBranch
-              return (
-                <div key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <div style={{
-                    padding: '6px 10px', border: '1px solid var(--color-border)',
-                    borderRadius: 4, background: 'var(--bg-primary)', minWidth: 120, textAlign: 'center',
-                  }}>
-                    <Icon size={12} style={{ verticalAlign: 'middle', color: 'var(--color-navy)', marginRight: 4 }} />
-                    <span style={{ fontSize: 11, fontWeight: 600 }}>{n.label || n.type}</span>
-                  </div>
-                  {idx < graph.nodes.length - 1 && (
-                    <span style={{ fontSize: 14, color: 'var(--color-text-muted)' }}>→</span>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </div>
+        <ol aria-label="Kroki obiegu" style={{ listStyle: 'none', margin: '14px 0 0', padding: 12,
+                                               background: 'var(--bg-secondary)', borderRadius: 8,
+                                               display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+          {graph.nodes.map((n, idx) => (
+            <li key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px',
+                             borderRadius: 6, background: 'var(--color-card)', border: '1px solid var(--color-border)',
+                             fontSize: 13, fontWeight: 600 }}>
+                <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: '50%',
+                                                  background: NODE_ACCENT[n.type] || 'var(--color-text-muted)' }} />
+                {n.label || n.type}
+              </span>
+              {idx < graph.nodes.length - 1 && (
+                <span aria-hidden="true" style={{ color: 'var(--color-text-muted)' }}>→</span>
+              )}
+            </li>
+          ))}
+        </ol>
       )}
-    </div>
+    </section>
   )
 }
 
@@ -343,11 +344,11 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn--action btn--sm" onClick={save} disabled={saving}>
-            <Save size={14} /> {saving ? 'Zapis…' : 'Zapisz'}
-          </button>
-          <button className="btn btn--ghost btn--sm" onClick={onCancel}>
+          <button className="btn btn--ghost" onClick={onCancel}>
             <X size={14} /> Anuluj
+          </button>
+          <button className="btn btn--action" onClick={save} disabled={saving}>
+            <Save size={14} /> {saving ? 'Zapis…' : 'Zapisz'}
           </button>
         </div>
       </div>
@@ -359,27 +360,28 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
       )}
 
       {/* Metadane */}
-      <div className="card" style={{ padding: 12, marginBottom: 12, display: 'grid',
-                                     gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8 }}>
+      <section aria-label="Dane szablonu" className="card" style={{ padding: '18px 20px', marginBottom: 18, display: 'grid',
+                                     gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
         <Field label="Nazwa *">
-          <input className="input input--sm" value={meta.name}
+          <input className="form-control" style={INP} value={meta.name}
                  onChange={e => setMeta(m => ({ ...m, name: e.target.value }))} />
         </Field>
         <Field label="Opis">
-          <input className="input input--sm" value={meta.description}
+          <input className="form-control" style={INP} value={meta.description}
                  onChange={e => setMeta(m => ({ ...m, description: e.target.value }))} />
         </Field>
         <Field label="Stan">
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, paddingTop: 4 }}>
-            <input type="checkbox" checked={meta.is_active}
+          <span className="form-check" style={{ minHeight: 44, fontSize: 14, fontWeight: 400, letterSpacing: 0,
+                                                 textTransform: 'none', color: 'var(--color-text)' }}>
+            <input type="checkbox" checked={meta.is_active} style={{ width: 18, height: 18 }}
                    onChange={e => setMeta(m => ({ ...m, is_active: e.target.checked }))} />
             Aktywny — dostępny do wyboru
-          </label>
+          </span>
         </Field>
-      </div>
+      </section>
 
       {/* Lista kroków */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 720 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 0, maxWidth: 760, margin: '0 auto' }}>
         <StepTile fixed type="start" label="Zgłoszenie pracownika (HR)"
                   sub="Dział kadr zgłasza pracownika i wskazuje komórkę organizacyjną." />
         <Arrow />
@@ -397,8 +399,8 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
               onDown={i < middle.length - 1 ? () => move(i, +1) : null}
               onRemove={() => removeAt(i)}
               extra={s.type === 'higher_manager_approve' ? (
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, marginTop: 6 }}>
-                  <input type="checkbox"
+                <label className="form-check" style={{ fontSize: 13, marginTop: 6 }}>
+                  <input type="checkbox" style={{ width: 18, height: 18 }}
                          checked={!!s.props?.skip_if_not_required}
                          onChange={e => setProp(i, 'skip_if_not_required', e.target.checked)} />
                   Pomijaj, gdy komórka nie wymaga akceptacji wyższego rzędu
@@ -414,15 +416,19 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
       </div>
 
       {/* Dodaj krok */}
-      <div className="card" style={{ padding: 12, marginTop: 12, maxWidth: 720,
-                                     display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-muted)' }}>Dodaj krok:</span>
-        <select className="input input--sm" style={{ maxWidth: 340 }}
-                value={addType} onChange={e => setAddType(e.target.value)}>
-          {STEP_CATALOG.map(s => <option key={s.type} value={s.type}>{s.label}</option>)}
-        </select>
-        <button className="btn btn--ghost btn--sm" onClick={addStep}>
-          <Plus size={12} /> Dodaj na końcu
+      <div style={{ margin: '18px auto 0', maxWidth: 760, boxSizing: 'border-box', display: 'flex', gap: 10,
+                    alignItems: 'center', flexWrap: 'wrap', padding: '14px 16px', background: 'var(--color-card)',
+                    border: '1px dashed var(--color-input-border)', borderRadius: 10 }}>
+        <label style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, flex: '1 1 360px',
+                        fontSize: 14, fontWeight: 700, color: 'var(--color-navy)' }}>
+          Dodaj krok:
+          <select className="form-control" style={{ ...INP, flex: 1 }}
+                  value={addType} onChange={e => setAddType(e.target.value)}>
+            {STEP_CATALOG.map(s => <option key={s.type} value={s.type}>{s.label}</option>)}
+          </select>
+        </label>
+        <button className="btn btn--ghost" onClick={addStep}>
+          <Plus size={14} /> Dodaj na końcu
         </button>
       </div>
     </div>
@@ -431,55 +437,60 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
 
 function StepTile({ fixed, type, index, label, sub, hint, editable, onLabel,
                     onUp, onDown, onRemove, extra }) {
-  const Icon = NODE_ICONS[type] || GitBranch
   const accent = NODE_ACCENT[type] || 'var(--color-text-muted)'
+  // v3.0: kolor kroku = pasek u góry kafla + kółko z numerem (bez lewej krawędzi).
+  const ICONBTN = { width: 40, height: 40, padding: 0, display: 'grid', placeItems: 'center' }
   return (
-    <div className="card" style={{
-      padding: 12, borderLeft: `3px solid ${accent}`,
-      background: fixed ? 'var(--bg-secondary)' : 'var(--bg-primary)',
-      display: 'flex', gap: 12, alignItems: 'flex-start',
+    <div style={{
+      background: fixed ? 'var(--bg-secondary)' : 'var(--color-card)',
+      border: '1px solid var(--color-border)', borderRadius: 10, overflow: 'hidden',
     }}>
-      <div style={{
-        width: 34, height: 34, flex: 'none', borderRadius: 4,
-        background: 'var(--bg-secondary)', display: 'grid', placeItems: 'center', color: accent,
-      }}>
-        <Icon size={17} />
-      </div>
+      <div style={{ height: 4, background: accent }} />
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 12, padding: '14px 16px' }}>
+        <span aria-hidden="true" style={{
+          flexShrink: 0, width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center',
+          fontSize: 13, fontWeight: 800, color: '#fff', background: accent,
+        }}>
+          {fixed ? (type === 'start' ? 'S' : 'K') : index}
+        </span>
 
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.5px',
-                      textTransform: 'uppercase', color: 'var(--color-text-muted)' }}>
-          {fixed ? (type === 'start' ? 'Start' : 'Koniec') : `Krok ${index}`}
+        <div style={{ flex: '1 1 300px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.08em',
+                         textTransform: 'uppercase', color: 'var(--color-text-muted)' }}>
+            {fixed ? (type === 'start' ? 'Start' : 'Koniec') : `Krok ${index}`}
+          </span>
+          {editable ? (
+            <input className="form-control" aria-label="Nazwa kroku"
+                   style={{ minHeight: 40, fontSize: 14, fontWeight: 700, color: 'var(--color-navy)' }}
+                   value={label} onChange={e => onLabel(e.target.value)} />
+          ) : (
+            <strong style={{ fontSize: 15, color: 'var(--color-navy)' }}>{label}</strong>
+          )}
+          {(sub || hint) && (
+            <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>{sub || hint}</span>
+          )}
+          {extra}
         </div>
-        {editable ? (
-          <input className="input input--sm" style={{ marginTop: 4 }}
-                 value={label} onChange={e => onLabel(e.target.value)} />
-        ) : (
-          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-navy)', marginTop: 2 }}>{label}</div>
-        )}
-        {(sub || hint) && (
-          <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>{sub || hint}</div>
-        )}
-        {extra}
-      </div>
 
-      {!fixed && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 'none' }}>
-          <button className="btn btn--ghost btn--sm" style={{ padding: '2px 6px' }}
-                  onClick={onUp} disabled={!onUp} title="W górę"><ChevronUp size={13} /></button>
-          <button className="btn btn--ghost btn--sm" style={{ padding: '2px 6px' }}
-                  onClick={onDown} disabled={!onDown} title="W dół"><ChevronDown size={13} /></button>
-          <button className="btn btn--ghost btn--sm" style={{ padding: '2px 6px', color: 'var(--color-danger)' }}
-                  onClick={onRemove} title="Usuń krok"><Trash2 size={13} /></button>
-        </div>
-      )}
+        {!fixed && (
+          <span style={{ display: 'flex', gap: 2, flex: 'none' }}>
+            <button className="btn btn--ghost btn--sm" style={ICONBTN}
+                    onClick={onUp} disabled={!onUp} title="W górę" aria-label="W górę"><ChevronUp size={15} /></button>
+            <button className="btn btn--ghost btn--sm" style={ICONBTN}
+                    onClick={onDown} disabled={!onDown} title="W dół" aria-label="W dół"><ChevronDown size={15} /></button>
+            <button className="btn btn--ghost btn--sm" style={{ ...ICONBTN, color: 'var(--color-error-text)' }}
+                    onClick={onRemove} title="Usuń krok" aria-label="Usuń krok"><Trash2 size={15} /></button>
+          </span>
+        )}
+      </div>
     </div>
   )
 }
 
 function Arrow() {
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', color: 'var(--color-text-muted)' }}>
+    <div aria-hidden="true" style={{ display: 'flex', justifyContent: 'center', padding: '4px 0',
+                                     color: 'var(--color-text-muted)' }}>
       <ChevronDown size={18} />
     </div>
   )
@@ -487,9 +498,12 @@ function Arrow() {
 
 function Field({ label, children }) {
   return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11 }}>
-      <span style={{ color: 'var(--color-text-muted)' }}>{label}</span>
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11, fontWeight: 700,
+                    letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--color-text-muted)' }}>
+      {label}
       {children}
     </label>
   )
 }
+
+const INP = { minHeight: 44, fontSize: 14, fontWeight: 400, letterSpacing: 0, textTransform: 'none' }

@@ -80,12 +80,12 @@ export default function Units() {
           <div className="page-header__sub">Struktura organizacyjna — jednostki i podległe wydziały</div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className="btn btn--action btn--sm" onClick={() => setShowLdapImport(true)}>
-            <Download size={13} /> Importuj strukturę z AD
-          </button>
-          <button className="btn btn--ghost btn--sm" onClick={runDedupe} disabled={dedupeBusy}
+          <button className="btn btn--ghost" onClick={runDedupe} disabled={dedupeBusy}
                   title="Usuń zduplikowane komórki powstałe przy ponownym imporcie struktury">
-            <Trash2 size={13} /> {dedupeBusy ? 'Czyszczenie…' : 'Usuń duplikaty'}
+            <Trash2 size={14} /> {dedupeBusy ? 'Czyszczenie…' : 'Usuń duplikaty'}
+          </button>
+          <button className="btn btn--action" onClick={() => setShowLdapImport(true)}>
+            <Download size={14} /> Importuj strukturę z AD
           </button>
         </div>
       </div>
@@ -99,7 +99,7 @@ export default function Units() {
         // Spinner tylko przy PIERWSZYM ładowaniu. Przy odświeżeniu (po zapisie)
         // zostawiamy akordeony zamontowane — inaczej traciłyby stan rozwinięcia
         // i cała struktura by się zwijała.
-        <div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {units.map(u => (
             <UnitAccordion key={u.id} unit={u}
               depts={depts.filter(d => d.unit_id === u.id)}
@@ -143,82 +143,95 @@ function UnitAccordion({ unit: u, depts, users, onChanged }) {
     catch (ex) { alert(ex.response?.data?.detail || 'Błąd usuwania') }
   }
 
+  // v3.0 — jednostka jako karta: nagłówek (rozwiń/zwiń) + osobne przyciski
+  // edycji/usuwania, pasek kierownika jednostki, tabela wydziałów.
+  const ICONBTN = { width: 44, height: 44, padding: 0, display: 'grid', placeItems: 'center', border: 0 }
   return (
-    <div className="accordion-item">
-      <button type="button" className={`accordion-trigger${open ? ' open' : ''}`} onClick={() => setOpen(v => !v)}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Building2 size={15} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
-          <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--color-navy)' }}>{u.name}</span>
-          <span className="badge badge--neutral" style={{ fontSize: 10 }}>{depts.length} wydziałów</span>
+    <section aria-label={`Jednostka ${u.name}`} style={{ background: 'var(--color-card)', border: '1px solid var(--color-border)',
+                                                         borderRadius: 10, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '6px 8px 6px 18px',
+                    minHeight: 56, borderBottom: open ? '1px solid var(--color-border)' : 0 }}>
+        <button type="button" aria-expanded={open} onClick={() => setOpen(v => !v)}
+                style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, flex: '1 1 300px', minHeight: 44,
+                         border: 0, background: 'transparent', font: 'inherit', color: 'inherit', cursor: 'pointer',
+                         textAlign: 'left', padding: 0 }}>
+          {open ? <ChevronDown size={18} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />
+                : <ChevronRight size={18} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />}
+          <Building2 size={18} aria-hidden="true" style={{ color: 'var(--color-navy)', flexShrink: 0 }} />
+          <strong style={{ fontSize: 16, color: 'var(--color-navy)' }}>{u.name}</strong>
+          <span className="badge badge--neutral">{depts.length} wydziałów</span>
           {u.description && (
-            <span style={{ fontSize: 12, color: 'var(--color-text-muted)', fontWeight: 400 }}>
-              — {u.description}
-            </span>
+            <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>— {u.description}</span>
           )}
-        </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={e => { e.stopPropagation(); setEditing(v => !v); setOpen(true) }}>
-            <Edit2 size={12} />
-          </button>
-          <button type="button" className="btn btn--danger btn--sm" onClick={e => { e.stopPropagation(); delUnit() }}>
-            <Trash2 size={12} />
-          </button>
-          {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-        </div>
-      </button>
+        </button>
+        <button type="button" className="btn btn--ghost" style={ICONBTN} aria-label="Edytuj jednostkę" title="Edytuj jednostkę"
+                onClick={() => { setEditing(v => !v); setOpen(true) }}>
+          <Edit2 size={16} />
+        </button>
+        <button type="button" className="btn btn--ghost" style={{ ...ICONBTN, color: 'var(--color-error-text)' }}
+                aria-label="Usuń jednostkę" title="Usuń jednostkę" onClick={delUnit}>
+          <Trash2 size={16} />
+        </button>
+      </div>
 
       {open && (
-        <div className="accordion-content" style={{ padding: 16 }}>
+        <div>
           {editing && (
-            <form onSubmit={saveUnit} style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'flex-end' }}>
-              <div className="form-group" style={{ margin: 0, flex: 1 }}>
+            <form onSubmit={saveUnit} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '14px 18px',
+                                               alignItems: 'flex-end', borderBottom: '1px solid var(--color-border)' }}>
+              <div className="form-group" style={{ margin: 0, flex: '1 1 260px' }}>
                 <label className="form-label">Nazwa jednostki</label>
                 <input className="form-control" required value={name} onChange={e => setName(e.target.value)} />
               </div>
-              <button type="submit" className="btn btn--primary btn--sm">Zapisz</button>
-              <button type="button" className="btn btn--ghost btn--sm" onClick={() => { setEditing(false); setName(u.name) }}>Anuluj</button>
+              <button type="button" className="btn btn--ghost" onClick={() => { setEditing(false); setName(u.name) }}>Anuluj</button>
+              <button type="submit" className="btn btn--primary">Zapisz</button>
               {err && <div className="alert alert--error">{err}</div>}
             </form>
           )}
 
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16,
-            flexWrap: 'wrap', padding: '8px 10px', background: 'var(--bg-secondary)',
-            border: '1px solid var(--color-border)', borderRadius: 6,
+            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '12px 18px',
+            background: 'var(--bg-secondary)', borderBottom: '1px solid var(--color-border)',
           }}>
-            <Building2 size={15} style={{ color: 'var(--color-navy)' }} />
-            <strong style={{ fontSize: 13 }}>Kierownik jednostki:</strong>
-            <select className="form-control" style={{ maxWidth: 320, fontSize: 13 }}
-                    value={u.manager_user_id || ''} disabled={mgrBusy}
-                    onChange={e => saveUnitManager(e.target.value)}>
-              <option value="">— brak —</option>
-              {users.filter(x => x.is_active).map(x => (
-                <option key={x.id} value={x.id}>{x.full_name || x.username}</option>
-              ))}
-            </select>
-            <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, fontWeight: 700,
+                            color: 'var(--color-navy)' }}>
+              Kierownik jednostki:
+              <select className="form-control" style={{ maxWidth: 320, fontSize: 14, fontWeight: 400 }}
+                      value={u.manager_user_id || ''} disabled={mgrBusy}
+                      onChange={e => saveUnitManager(e.target.value)}>
+                <option value="">— brak —</option>
+                {users.filter(x => x.is_active).map(x => (
+                  <option key={x.id} value={x.id}>{x.full_name || x.username}</option>
+                ))}
+              </select>
+            </label>
+            <span style={{ flex: '1 1 360px', fontSize: 12, color: 'var(--color-text-muted)' }}>
               Widzi uprawnienia wszystkich pracowników jednostki i może dla nich
               składać wnioski (bez akceptacji — ta zostaje przy kierownikach komórek).
             </span>
           </div>
 
-          <table className="data-table" style={{ marginBottom: 16 }}>
-            <thead><tr><th>Nazwa</th><th>Typ</th><th>Kierownik</th><th>Aktywny</th><th title="Wymaga zatwierdzenia kierownika wydziału nadrzędnego">Wyższa akcept.</th><th title="Komórka kadrowa — jej pracownicy mogą zgłaszać nowych pracowników i ustania">Kadry</th><th></th></tr></thead>
-            <tbody>
-              {flattenDeptTree(depts).map(({ dept: d, depth }) => (
-                <DeptRow key={d.id} dept={d} depth={depth} users={users}
-                         unitId={u.id} unitDepts={depts} onChanged={onChanged} />
-              ))}
-              {depts.length === 0 && (
-                <tr><td colSpan={7} style={{ color: 'var(--color-text-muted)', padding: '10px 12px' }}>Brak wydziałów</td></tr>
-              )}
-            </tbody>
-          </table>
+          <div style={{ overflowX: 'auto' }}>
+            <table className="data-table" style={{ minWidth: 1040 }}>
+              <thead><tr><th>Nazwa</th><th>Typ</th><th>Kierownik</th><th>Aktywny</th><th title="Wymaga zatwierdzenia kierownika wydziału nadrzędnego">Wyższa akcept.</th><th title="Komórka kadrowa — jej pracownicy mogą zgłaszać nowych pracowników i ustania">Kadry</th><th></th></tr></thead>
+              <tbody>
+                {flattenDeptTree(depts).map(({ dept: d, depth }) => (
+                  <DeptRow key={d.id} dept={d} depth={depth} users={users}
+                           unitId={u.id} unitDepts={depts} onChanged={onChanged} />
+                ))}
+                {depts.length === 0 && (
+                  <tr><td colSpan={7} style={{ color: 'var(--color-text-muted)', padding: '10px 18px' }}>Brak wydziałów</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
 
-          <AddDeptForm unitId={u.id} users={users} unitDepts={depts} onAdded={onChanged} />
+          <div style={{ padding: '14px 18px', borderTop: '1px solid var(--color-border)', background: 'var(--bg-secondary)' }}>
+            <AddDeptForm unitId={u.id} users={users} unitDepts={depts} onAdded={onChanged} />
+          </div>
         </div>
       )}
-    </div>
+    </section>
   )
 }
 
@@ -398,11 +411,13 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
   const managerUser = users.find(u => u.id === d.manager_user_id)
   return (
     <tr>
-      <td style={{ fontWeight: 600, paddingLeft: `calc(10px + ${indentPx}px)` }}>
-        {depth > 0 && <span style={{ color: 'var(--color-text-muted)', marginRight: 6 }}>↳</span>}
-        {d.name}
+      <td style={{ paddingLeft: `calc(14px + ${indentPx}px)` }}>
+        <span style={{ display: 'block', fontWeight: 700, color: 'var(--color-navy)' }}>
+          {depth > 0 && <span style={{ color: 'var(--color-text-muted)', marginRight: 6 }}>↳</span>}
+          {d.name}
+        </span>
         {d.description && (
-          <span style={{ display: 'block', fontSize: 11, color: 'var(--color-text-muted)', fontWeight: 400 }}>
+          <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)', fontWeight: 400 }}>
             {d.description}
           </span>
         )}
@@ -415,26 +430,28 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
       </td>
       <td>
         {d.is_active
-          ? <span className="badge badge--success" style={{ fontSize: 10 }}>aktywny</span>
-          : <span className="badge badge--neutral" style={{ fontSize: 10 }}>nieaktywny</span>}
+          ? <span className="badge badge--success">aktywny</span>
+          : <span className="badge badge--neutral">nieaktywny</span>}
       </td>
       <td>
         {d.requires_higher_approval
-          ? <span className="badge badge--info" style={{ fontSize: 10 }} title="Wnioski wymagają akceptacji kierownika wydziału nadrzędnego">2-stopniowo</span>
+          ? <span className="badge badge--info" title="Wnioski wymagają akceptacji kierownika wydziału nadrzędnego">2-stopniowo</span>
           : <span style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>—</span>}
       </td>
       <td>
         {d.is_hr
-          ? <span className="badge badge--warning" style={{ fontSize: 10 }} title="Komórka kadrowa — jej pracownicy zgłaszają nowych pracowników i ustania">kadry</span>
+          ? <span className="badge badge--warning" title="Komórka kadrowa — jej pracownicy zgłaszają nowych pracowników i ustania">kadry</span>
           : <span style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>—</span>}
       </td>
-      <td style={{ whiteSpace: 'nowrap' }}>
-        <button className="btn btn--ghost btn--sm" onClick={() => setEditing(true)} title="Edytuj"><Edit2 size={12} /></button>
-        <button className="btn btn--ghost btn--sm" style={{ marginLeft: 4 }}
-                onClick={() => setDeputiesOpen(true)} title="Zastępcy kierownika">
-          <UserCog size={12} />
+      <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+        <button className="btn btn--ghost btn--sm" style={{ border: 0 }} onClick={() => setEditing(true)}
+                title="Edytuj" aria-label="Edytuj"><Edit2 size={15} /></button>
+        <button className="btn btn--ghost btn--sm" style={{ border: 0 }}
+                onClick={() => setDeputiesOpen(true)} title="Zastępcy kierownika" aria-label="Zastępcy kierownika">
+          <UserCog size={15} />
         </button>
-        <button className="btn btn--danger btn--sm" style={{ marginLeft: 4 }} onClick={del}><Trash2 size={12} /></button>
+        <button className="btn btn--ghost btn--sm" style={{ border: 0, color: 'var(--color-error-text)' }} onClick={del}
+                title="Usuń" aria-label="Usuń"><Trash2 size={15} /></button>
       </td>
       {deputiesOpen && (
         <DeputiesModal dept={d} users={users}
@@ -512,8 +529,8 @@ function AddDeptForm({ unitId, users, unitDepts, onAdded }) {
           </select>
         )}
       </div>
-      <button type="submit" className="btn btn--primary btn--sm" style={{ marginBottom: 0 }}>
-        <Plus size={13} /> Dodaj
+      <button type="submit" className="btn btn--primary" style={{ marginBottom: 0 }}>
+        <Plus size={14} /> Dodaj
       </button>
       {err && <div className="alert alert--error" style={{ width: '100%' }}>{err}</div>}
     </form>
@@ -535,16 +552,20 @@ function AddUnitCard({ onAdded }) {
 
   if (!show) {
     return (
-      <div style={{ marginTop: 12 }}>
-        <button className="btn btn--action btn--sm" onClick={() => setShow(true)}>
-          <Plus size={13} /> Dodaj jednostkę
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', borderRadius: 10,
+                    border: '1px dashed var(--color-input-border)', background: 'var(--color-card)' }}>
+        <span style={{ flex: 1, fontSize: 14, color: 'var(--color-text-muted)' }}>
+          Nowa jednostka organizacyjna (poziom 1 struktury).
+        </span>
+        <button className="btn btn--action" onClick={() => setShow(true)}>
+          <Plus size={14} /> Dodaj jednostkę
         </button>
       </div>
     )
   }
 
   return (
-    <div className="card" style={{ marginTop: 12, borderTop: '3px solid var(--color-gold)' }}>
+    <div className="card" style={{ borderTop: '3px solid var(--color-gold)' }}>
       <form onSubmit={submit}>
         <div className="form-group">
           <label className="form-label">Nazwa jednostki *</label>
@@ -552,8 +573,8 @@ function AddUnitCard({ onAdded }) {
         </div>
         {err && <div className="alert alert--error mb-4">{err}</div>}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setShow(false)}>Anuluj</button>
-          <button type="submit" className="btn btn--primary btn--sm">Zapisz</button>
+          <button type="button" className="btn btn--ghost" onClick={() => setShow(false)}>Anuluj</button>
+          <button type="submit" className="btn btn--primary">Zapisz</button>
         </div>
       </form>
     </div>

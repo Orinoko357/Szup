@@ -48,31 +48,38 @@ export default function MyNameChanges() {
   }
 
   return (
-    <div className="card" style={{ marginBottom: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <UserPen size={16} style={{ color: 'var(--color-gold)' }} />
-        <div style={{ fontWeight: 600 }}>Zmiana nazwiska</div>
-        <div style={{ fontSize: 12.5, color: 'var(--color-text-muted)' }}>
-          Obecnie: <strong style={{ color: 'var(--color-text)' }}>{currentName}</strong>
+    <section aria-label="Zmiana nazwiska" className="card" style={{ marginBottom: 18, padding: 0, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '14px 18px',
+                    borderBottom: rows.length > 0 ? '1px solid var(--color-border)' : 'none' }}>
+        <span aria-hidden="true" style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--bg-secondary)',
+                                          color: 'var(--color-navy)', display: 'grid', placeItems: 'center' }}>
+          <UserPen size={16} />
+        </span>
+        <div style={{ flex: '1 1 240px' }}>
+          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: 'var(--color-navy)' }}>Zmiana nazwiska</h2>
+          <p style={{ margin: '2px 0 0', fontSize: 13, color: 'var(--color-text-muted)' }}>
+            Obecnie: <strong style={{ color: 'var(--color-text)' }}>{currentName}</strong>
+          </p>
         </div>
-        <button className="btn btn--action btn--sm" style={{ marginLeft: 'auto' }}
+        <button className="btn btn--ghost" style={{ minHeight: 44, fontSize: 14, fontWeight: 700, background: 'var(--color-card)' }}
                 disabled={hasPending}
                 onClick={() => { setName(currentName); setOpen(true) }}
                 title={hasPending ? 'Masz już oczekujące zgłoszenie' : ''}>
-          <UserPen size={13} /> Zgłoś zmianę nazwiska
+          Zgłoś zmianę nazwiska
         </button>
       </div>
 
       {rows.length > 0 && (
-        <table className="data-table" style={{ marginTop: 12 }}>
+        <div style={{ overflowX: 'auto' }}>
+        <table className="data-table" style={{ minWidth: 640 }}>
           <thead>
             <tr><th>Zgłoszono</th><th>Nowe imię i nazwisko</th><th>Status</th><th>Uwagi IT</th></tr>
           </thead>
           <tbody>
             {rows.map(r => (
               <tr key={r.id}>
-                <td style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{fmtDate(r.created_at)}</td>
-                <td>{r.requested_full_name}</td>
+                <td style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>{fmtDate(r.created_at)}</td>
+                <td style={{ fontWeight: 700 }}>{r.requested_full_name}</td>
                 <td>
                   <span className={`badge ${STATUS[r.status]?.[0] || 'badge--neutral'}`}>
                     {STATUS[r.status]?.[1] || r.status}
@@ -84,11 +91,12 @@ export default function MyNameChanges() {
                     </span>
                   )}
                 </td>
-                <td style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{r.it_comment || '—'}</td>
+                <td style={{ color: 'var(--color-text-muted)' }}>{r.it_comment || '—'}</td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       {open && (
@@ -96,7 +104,7 @@ export default function MyNameChanges() {
           <div className="modal" style={{ maxWidth: 520, width: '92vw' }}>
             <div className="modal__header">
               <div><UserPen size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} /> Zgłoszenie zmiany nazwiska</div>
-              <button className="btn btn--ghost btn--sm" onClick={() => setOpen(false)}><X size={14} /></button>
+              <button className="btn btn--ghost btn--sm" aria-label="Zamknij" onClick={() => setOpen(false)}><X size={14} /></button>
             </div>
             <div className="modal__body">
               {err && <div className="alert alert--error mb-4">{err}</div>}
@@ -121,6 +129,6 @@ export default function MyNameChanges() {
           </div>
         </div>
       )}
-    </div>
+    </section>
   )
 }

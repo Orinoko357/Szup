@@ -108,7 +108,7 @@ export default function AddPermissionsPicker({
               checked={p ? picked.has(key) : false}
               onToggle={() => p && onTogglePerm(s.id, p.id)}
               badges={p ? (
-                <span className="badge badge--info" style={{ fontSize: 9 }}>dostęp</span>
+                <span className="badge badge--info" style={{ fontSize: 11 }}>dostęp</span>
               ) : null}
             >
               <AdminPermRow
@@ -143,12 +143,12 @@ export default function AddPermissionsPicker({
               ? 'Zaznacz program, aby wybrać zakres uprawnień.' : null}
             badges={<>
               {selHere > 0 && (
-                <span className="badge badge--success" style={{ fontSize: 9 }}>
+                <span className="badge badge--success" style={{ fontSize: 11 }}>
                   wybrano: {selHere}
                 </span>
               )}
               {gated && active && !anySel && (
-                <span className="badge badge--warning" style={{ fontSize: 9 }}>
+                <span className="badge badge--warning" style={{ fontSize: 11 }}>
                   wybierz zakres
                 </span>
               )}
