@@ -166,6 +166,42 @@ def test_superior_can_do_both_manager_steps_and_own_manager_cannot_higher(api):
     assert api.node_type(rid, kierP) == "it_execute"
 
 
+def test_two_stage_manager_can_only_forward_own_request_up(api):
+    """Kierownik komórki z akceptacją wyższą: własny wniosek tylko przekazuje
+    wyżej — wybór zalicza się automatycznie, akceptacji wyższej sam nie wykona."""
+    w = _world(api, two_stage=True)
+    kier, kierP = api.login("kier"), api.login("kierP")
+    r = api.post("/requests/", token=kier, json={
+        "worker_name": "Ola Nowa", "unit_id": w["unit"],
+        "department_id": w["dep"], "request_type_id": w["rtype"],
+        "items": [{"system_id": w["sid"], "permission_id": w["pid"]}]})
+    assert r.status_code == 201, r.text
+    rid = r.json()["id"]
+    assert api.node_type(rid, kier) == "higher_manager_approve"
+    r = api.post(f"/requests/{rid}/workflow/action", token=kier, json={"action": "approve"})
+    assert r.status_code == 403
+    r = api.post(f"/requests/{rid}/workflow/action", token=kierP, json={"action": "approve"})
+    assert r.status_code == 200, r.text
+    assert api.node_type(rid, kierP) == "it_execute"
+
+
+def test_unit_director_can_do_every_step_for_subordinate_departments(api):
+    """Dyrektor jednostki może wszystko dla podległych komórek (oba stopnie)."""
+    w = _world(api, two_stage=True)
+    did = api.mk_user(w["sup"], "dyr", ["manager"], "Dyrektor")
+    assert api.patch(f"/units/{w['unit']}", token=w["sup"],
+                     json={"manager_user_id": did}).status_code == 200
+    rid = _new_request(api, w)
+    dyr = api.login("dyr")
+    r = api.post(f"/requests/{rid}/workflow/action", token=dyr, json={
+        "action": "select", "items": [{"system_id": w["sid"], "permission_id": w["pid"]}]})
+    assert r.status_code == 200, r.text
+    assert api.node_type(rid, dyr) == "higher_manager_approve"
+    r = api.post(f"/requests/{rid}/workflow/action", token=dyr, json={"action": "approve"})
+    assert r.status_code == 200, r.text
+    assert api.node_type(rid, dyr) == "it_execute"
+
+
 # --- pusty wybór nie kasuje pozycji kadr --------------------------------------
 
 def test_empty_select_does_not_wipe_hr_items(api):
