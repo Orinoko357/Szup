@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlmodel import Session, select, col
 
@@ -95,45 +95,3 @@ def resolve(
     ev.resolution_note = (data.note or "")[:1000] or None
     session.add(ev); session.commit()
     return {"ok": True}
-
-
-class SecurityDeleteRequest(BaseModel):
-    password: str
-    mode: str = "resolved"          # all | resolved | before
-    before: Optional[datetime] = None
-
-
-@router.post("/delete")
-def delete_events(
-    data: SecurityDeleteRequest,
-    request: Request,
-    current_user: User = Depends(require_admin),
-    session: Session = Depends(get_session),
-):
-    """Usuwanie zdarzeń bezpieczeństwa przez administratora (wymaga hasła).
-    Tryby: resolved — tylko rozwiązane; before — starsze niż data; all — wszystkie.
-    Operacja trafia do audit logu."""
-    from sqlalchemy import delete, func
-    from services.auth_service import verify_user_password
-    from services.audit import record_event, request_meta
-
-    if not verify_user_password(session, current_user, data.password):
-        raise HTTPException(403, "Nieprawidłowe hasło — zdarzenia nie zostały usunięte")
-    stmt = delete(SecurityEvent)
-    if data.mode == "resolved":
-        stmt = stmt.where(col(SecurityEvent.resolved_at).is_not(None))
-    elif data.mode == "before":
-        if not data.before:
-            raise HTTPException(400, "Podaj datę — usunięte zostaną zdarzenia starsze niż ona")
-        stmt = stmt.where(SecurityEvent.created_at < data.before)
-    elif data.mode != "all":
-        raise HTTPException(400, "Nieznany tryb usuwania")
-    deleted = int(session.exec(stmt).rowcount or 0)
-    session.commit()
-    meta = request_meta(request)
-    record_event(session, action="security.purged", user_id=current_user.id,
-                 username=current_user.username, ip=meta["ip"], user_agent=meta["user_agent"],
-                 details={"mode": data.mode, "deleted": deleted,
-                          "before": data.before.isoformat() if data.before else None})
-    remaining = session.exec(select(func.count()).select_from(SecurityEvent)).one()
-    return {"deleted": deleted, "remaining": int(remaining)}

@@ -8,9 +8,8 @@ import io
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 from sqlmodel import Session, select, col
 
 from database import get_session
@@ -110,77 +109,3 @@ def audit_stats(
         "oldest": oldest.isoformat() if oldest else None,
         "newest": newest.isoformat() if newest else None,
     }
-
-
-class AuditDeleteRequest(BaseModel):
-    password: str
-    mode: str = "filter"            # all | before | filter
-    before: Optional[datetime] = None
-    since: Optional[datetime] = None
-    until: Optional[datetime] = None
-    username: Optional[str] = None
-    action: Optional[str] = None
-
-
-@router.post("/delete")
-def delete_audit(
-    data: AuditDeleteRequest,
-    request: Request,
-    current_user: User = Depends(require_admin),
-    session: Session = Depends(get_session),
-):
-    """Usuwanie wpisów audit logu przez administratora (decyzja właściciela
-    systemu — świadomie odstępuje od „append-only” wymaganego przez NIS2/KSC).
-    Wymaga hasła. Tryby: all — wszystko; before — starsze niż data;
-    filter — pasujące do filtra (jak na liście). Ślad samej operacji jest
-    zapisywany PO czyszczeniu jako nowy wpis (kto, kiedy, ile, jaki zakres)."""
-    from sqlalchemy import delete, func, text
-    from services.auth_service import verify_user_password
-    from services.audit import record_event, request_meta
-    from database import _install_auditlog_triggers
-
-    if not verify_user_password(session, current_user, data.password):
-        raise HTTPException(403, "Nieprawidłowe hasło — wpisy nie zostały usunięte")
-
-    stmt = delete(AuditLog)
-    conds = []
-    if data.mode == "all":
-        pass
-    elif data.mode == "before":
-        if not data.before:
-            raise HTTPException(400, "Podaj datę — usunięte zostaną wpisy starsze niż ona")
-        conds.append(AuditLog.timestamp < data.before)
-    elif data.mode == "filter":
-        if data.since:
-            conds.append(AuditLog.timestamp >= data.since)
-        if data.until:
-            conds.append(AuditLog.timestamp <= data.until)
-        if data.username:
-            conds.append(AuditLog.username == data.username)
-        if data.action:
-            conds.append(col(AuditLog.action).like(f"{data.action}%"))
-        if not conds:
-            raise HTTPException(400, "Filtr jest pusty — wybierz tryb „Wszystkie”, jeśli chcesz usunąć cały log")
-    else:
-        raise HTTPException(400, "Nieznany tryb usuwania")
-    for c in conds:
-        stmt = stmt.where(c)
-
-    # Triggery „append-only” zdejmujemy tylko na czas tej transakcji.
-    for trg in ("auditlog_no_update", "auditlog_no_delete"):
-        session.exec(text(f'DROP TRIGGER IF EXISTS "{trg}"'))
-    try:
-        res = session.exec(stmt)
-        deleted = int(res.rowcount or 0)
-        session.commit()
-    finally:
-        _install_auditlog_triggers()
-
-    meta = request_meta(request)
-    record_event(session, action="audit.purged", user_id=current_user.id,
-                 username=current_user.username, ip=meta["ip"], user_agent=meta["user_agent"],
-                 details={"mode": data.mode, "deleted": deleted,
-                          "before": data.before.isoformat() if data.before else None,
-                          "username": data.username, "action": data.action})
-    remaining = session.exec(select(func.count()).select_from(AuditLog)).one()
-    return {"deleted": deleted, "remaining": int(remaining)}

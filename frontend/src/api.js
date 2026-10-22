@@ -82,7 +82,6 @@ export const assignRequest     = (id, userId)   => api.post(`/requests/${id}/ass
 // --- Audit log ---
 export const listAudit          = (params) => api.get('/audit/', { params })
 // Usuwanie wpisów (admin, wymaga hasła): mode all | before | filter
-export const deleteAudit        = (data)   => api.post('/audit/delete', data)
 export const auditStats         = ()       => api.get('/audit/stats')
 export const auditExportUrl     = (since, until) => {
   const qs = new URLSearchParams()
@@ -96,7 +95,6 @@ export const listSecurityEvents    = (params) => api.get('/security/', { params 
 export const securityEventsSummary = ()       => api.get('/security/summary')
 export const resolveSecurityEvent  = (id, note) => api.post(`/security/${id}/resolve`, { note })
 // Usuwanie zdarzeń (admin, wymaga hasła): mode resolved | before | all
-export const deleteSecurityEvents  = (data)     => api.post('/security/delete', data)
 
 // --- Settings ---
 export const getEmailSettings  = ()       => api.get('/settings/email')

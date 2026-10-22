@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Download, RefreshCw, Filter, Trash2 } from 'lucide-react'
-import { listAudit, auditStats, auditExportUrl, deleteAudit, errorMessage } from '../api'
-import DeleteLogsModal from '../components/DeleteLogsModal'
+import { Download, RefreshCw, Filter } from 'lucide-react'
+import { listAudit, auditStats, auditExportUrl, errorMessage } from '../api'
 import { fmtDateTime } from '../serverTime'
 
 export default function AuditLog() {
@@ -10,8 +9,6 @@ export default function AuditLog() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState(null)
   const [filters, setFilters] = useState({ username: '', action: '', since: '', until: '' })
-  const [showDelete, setShowDelete] = useState(false)
-  const hasFilter = Object.values(filters).some(v => v)
 
   async function load() {
     setLoading(true); setErr(null)
@@ -99,32 +96,8 @@ export default function AuditLog() {
           <button type="button" className="btn btn--ghost" onClick={downloadCsv}>
             <Download size={14} /> Eksport CSV
           </button>
-          <button type="button" className="btn btn--danger" onClick={() => setShowDelete(true)}>
-            <Trash2 size={14} aria-hidden="true" /> Usuń wpisy…
-          </button>
         </div>
       </form>
-
-      {showDelete && (
-        <DeleteLogsModal title="Usuń wpisy audit logu" what="wpisów"
-          modes={[
-            ...(hasFilter ? [{ value: 'filter', label: 'Pasujące do bieżącego filtra',
-                               hint: [filters.username && `użytkownik: ${filters.username}`,
-                                      filters.action && `akcja: ${filters.action}…`,
-                                      filters.since && `od ${filters.since.replace('T', ' ')}`,
-                                      filters.until && `do ${filters.until.replace('T', ' ')}`].filter(Boolean).join(' · ') }] : []),
-            { value: 'before', label: 'Starsze niż wybrana data', needsDate: true },
-            { value: 'all', label: 'Wszystkie wpisy', hint: 'Cały audit log.' },
-          ]}
-          onDelete={({ mode, before, password }) => deleteAudit({
-            mode, password, before: before ? `${before}T00:00:00` : null,
-            ...(mode === 'filter' ? {
-              username: filters.username || null, action: filters.action || null,
-              since: filters.since || null, until: filters.until || null,
-            } : {}),
-          })}
-          onClose={() => setShowDelete(false)} onDone={load} />
-      )}
 
       {err && <div className="alert alert--error mb-4">{err}</div>}
 
