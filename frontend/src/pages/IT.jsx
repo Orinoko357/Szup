@@ -17,7 +17,7 @@ import { statusLabel, statusBadge, kindLabel, daysSince, waitText } from '../lab
 /** Kierownik IT = osoba mająca JEDNOCZEŚNIE rolę „manager" i „it_staff".
  *  TYLKO ona może przekazywać wnioski (admin/superadmin — nie).
  *  Może też zrealizować wniosek sama, bez przekazywania. */
-function isItManager() {
+function userIsItManager() {
   const roles = getUserRoles()
   return roles.includes('manager') && roles.includes('it_staff')
 }
@@ -240,7 +240,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     get pending() { return this.total - this.done - this.denied },
   }
 
-  const isItManager = isItManager()
+  const isItManager = userIsItManager()
   const [comment, setComment]       = useState('')
   const [adUsername, setAdUsername] = useState(() => (needsAd ? _guessAdUsername(r) : ''))
   // Szkice odmów (otwarte pola komentarza): { [item_id]: komentarz }.
