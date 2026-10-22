@@ -9,7 +9,7 @@
  * Widoki przekazują własną treść jako children; resztę składa ten komponent,
  * żeby wszystkie wnioski wyglądały jednakowo.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Check } from 'lucide-react'
 import { getRequestWorkflow } from '../api'
 import { getUserRoles } from '../roles'
@@ -43,6 +43,7 @@ const ACTION_VERB = {
   reject:  'odrzucił(a)',
   draft:     'zapisał(a) wersję roboczą',
   take_over: 'przejął(-ęła) wniosek',
+  release:   'oddał(a) wniosek',
 }
 
 // Kolory odznaki rodzaju — tokeny motywu (działają w trybie ciemnym).
@@ -67,6 +68,23 @@ export function KindBadge({ kind = 'grant', label }) {
 export function KindPill({ kind }) {
   const k = ['revoke', 'change'].includes(kind) ? kind : 'grant'
   return <KindBadge kind={k} label={kindLabelOf(kind)} />
+}
+
+/** Zwrot fokusu po zamknięciu pełnoekranowego widoku wniosku: gdy `openKey`
+ *  wraca do null, a lista jest już wyrenderowana (`ready`), fokus trafia na
+ *  przycisk z atrybutem data-return-focus={openKey}, który widok otworzył.
+ *  Gdy wiersza już nie ma (np. wniosek obsłużony) — fokus zostaje bez zmian. */
+export function useReturnFocus(openKey, ready = true) {
+  const last = useRef(null)
+  useEffect(() => {
+    if (openKey != null) { last.current = String(openKey); return }
+    if (last.current == null || !ready) return
+    const key = last.current
+    last.current = null
+    const sel = `[data-return-focus="${window.CSS?.escape ? window.CSS.escape(key) : key}"]`
+    const el = document.querySelector(sel)
+    if (el && typeof el.focus === 'function') el.focus()
+  }, [openKey, ready])
 }
 
 /** Pełna nazwa komórki: „KOD · opis z AD” (np. „INF · Biuro Informatyki”);
@@ -241,43 +259,66 @@ function SummaryBox({ rows = [] }) {
 function HistoryBox({ items = [], requestId, createdBy }) {
   // Gdy podano requestId — pobierz realną oś czasu kroków obiegu.
   const [steps, setSteps] = useState(null)
+  // Zdarzenia poza krokami obiegu: zapis roboczy, przejęcie, oddanie.
+  const [events, setEvents] = useState([])
   useEffect(() => {
-    if (!requestId) { setSteps(null); return }
+    if (!requestId) { setSteps(null); setEvents([]); return }
     let alive = true
     getRequestWorkflow(requestId)
-      .then(r => { if (alive) setSteps(r.data?.steps || []) })
-      .catch(() => { if (alive) setSteps([]) })
+      .then(r => {
+        if (!alive) return
+        setSteps(r.data?.steps || [])
+        setEvents(Array.isArray(r.data?.events) ? r.data.events : [])
+      })
+      .catch(() => { if (alive) { setSteps([]); setEvents([]) } })
     return () => { alive = false }
   }, [requestId])
+
+  // Wpis historii z kroku obiegu.
+  function stepRow(s) {
+    const sub = fmtDateTimeShort(s.created_at)
+    // Kroki systemowe silnika obiegu — opisane po ludzku, bez surowych nazw akcji.
+    if (s.action === 'auto_advance' && s.node_type === 'start') {
+      return { text: `${createdBy || 'Kadry / HR'} złożył(a) wniosek`, sub }
+    }
+    if (s.action === 'auto_advance' && s.node_type === 'end') {
+      return { text: 'Obieg zakończony', sub }
+    }
+    if (s.action === 'auto_skip') {
+      const text = s.node_type === 'higher_manager_approve'
+        ? 'Akceptacja wyższa pominięta — nie wymaga jej szablon obiegu'
+        : `${NODE_WHO[s.node_type] ? NODE_WHO[s.node_type] + ' — krok' : 'Krok'} pominięty (warunek obiegu)`
+      return { text, sub, skipped: true }
+    }
+    const who = s.actor_name || NODE_WHO[s.node_type] || ''
+    const verb = ACTION_VERB[s.action] || s.action
+    return {
+      text: `${who ? who + ' ' : ''}${verb}`,
+      sub,
+      comment: s.comment || null,
+      muted: s.action === 'reject',
+    }
+  }
 
   // Buduj wpisy: z kroków obiegu (gdy są) albo z przekazanych items.
   let rows = items
   if (requestId && steps) {
-    rows = steps.map(s => {
-      const sub = fmtDateTimeShort(s.created_at)
-      // Kroki systemowe silnika obiegu — opisane po ludzku, bez surowych nazw akcji.
-      if (s.action === 'auto_advance' && s.node_type === 'start') {
-        return { text: `${createdBy || 'Kadry / HR'} złożył(a) wniosek`, sub }
-      }
-      if (s.action === 'auto_advance' && s.node_type === 'end') {
-        return { text: 'Obieg zakończony', sub }
-      }
-      if (s.action === 'auto_skip') {
-        const text = s.node_type === 'higher_manager_approve'
-          ? 'Akceptacja wyższa pominięta — nie wymaga jej szablon obiegu'
-          : `${NODE_WHO[s.node_type] ? NODE_WHO[s.node_type] + ' — krok' : 'Krok'} pominięty (warunek obiegu)`
-        return { text, sub, skipped: true }
-      }
-      const who = s.actor_name || NODE_WHO[s.node_type] || ''
-      const verb = ACTION_VERB[s.action] || s.action
-      return {
-        text: `${who ? who + ' ' : ''}${verb}`,
-        sub,
-        comment: s.comment || null,
-        muted: s.action === 'reject',
-      }
-    })
+    const stepRows = steps.map(s => ({ at: s.created_at, row: stepRow(s) }))
+    const eventRows = events.map(ev => ({
+      at: ev.at,
+      row: {
+        text: `${ev.actor_name ? ev.actor_name + ' ' : ''}${ACTION_VERB[ev.action] || ev.action}`,
+        sub: fmtDateTimeShort(ev.at),
+      },
+    }))
+    // Jedna oś czasu; przy równym czasie (lub braku daty) zachowaj kolejność wejścia.
+    const ts = (x) => serverTs(x)?.getTime() ?? Number.POSITIVE_INFINITY
+    rows = [...stepRows, ...eventRows]
+      .map((x, i) => ({ ...x, i }))
+      .sort((a, b) => (ts(a.at) - ts(b.at)) || (a.i - b.i))
+      .map(x => x.row)
   }
+
 
   return (
     <section aria-label="Historia" style={{ border: '1px solid var(--color-border)', borderRadius: 10,
@@ -323,8 +364,17 @@ export default function RequestViewShell({
   summary = [], history = [], historyRequestId, historyCreatedBy, footerLeft, footerActions, children,
   waiting, perspective,
 }) {
+  // Otwarcie widoku: fokus na tytule (czytnik ekranu ogłasza nowy „ekran”),
+  // chyba że widok sam ustawił go już w środku (np. autoFocus pola formularza).
+  const rootRef = useRef(null)
+  const titleRef = useRef(null)
+  useEffect(() => {
+    if (rootRef.current && !rootRef.current.contains(document.activeElement)) {
+      titleRef.current?.focus({ preventScroll: true })
+    }
+  }, [])
   return (
-    <div>
+    <div ref={rootRef}>
       {/* Przyciski w stopce karty wg projektu: wysokość 44 px, tekst 14 px. */}
       {/* Stopka przyklejona do dołu ekranu (zawsze widoczne akcje, także na telefonie). */}
       <style>{'.rv-footer .btn{min-height:44px;font-size:14px;padding:0 16px;border-radius:8px}'
@@ -332,7 +382,8 @@ export default function RequestViewShell({
         + 'margin-left:-22px;margin-right:-22px;padding-left:22px;padding-right:22px;padding-bottom:14px;'
         + 'box-shadow:0 -6px 14px -10px rgba(13,20,36,.25)}'
         + '@media (max-width:600px){.rv-footer>div:last-child{width:100%}.rv-footer>div:last-child .btn{flex:1 1 auto}'
-        + '.rv-head-back{width:100%}}'}</style>
+        + '.rv-head-back{width:100%}}'
+        + '.rv-title:focus{outline:none}.rv-title:focus-visible{outline:2px solid var(--color-gold);outline-offset:2px}'}</style>
       {/* Nagłówek */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
         {Icon && (
@@ -351,7 +402,7 @@ export default function RequestViewShell({
             )}
             {statusText && <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>{statusText}</span>}
           </div>
-          <h1 style={{ margin: '2px 0 0', fontSize: 24, fontWeight: 800, color: 'var(--color-heading)' }}>{title}</h1>
+          <h1 ref={titleRef} tabIndex={-1} className="rv-title" style={{ margin: '2px 0 0', fontSize: 24, fontWeight: 800, color: 'var(--color-heading)' }}>{title}</h1>
           {subtitle && <p style={{ margin: '2px 0 0', fontSize: 14, color: 'var(--color-text-muted)' }}>{subtitle}</p>}
           {waiting && (
             <p style={{ margin: '6px 0 0', fontSize: 13, fontWeight: 600, color: 'var(--color-warning-text)' }}>{waiting}</p>
@@ -364,7 +415,9 @@ export default function RequestViewShell({
 
       {/* Dwie kolumny */}
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 560px', minWidth: 0 }}>
+        {/* Duży flex-grow treści: w jednym wierszu panel boczny zostaje ~300 px,
+            a po zawinięciu (wąski ekran) rozciąga się na całą szerokość. */}
+        <div style={{ flex: '999 1 560px', minWidth: 0 }}>
           <div className="card" style={{ padding: 22 }}>
             {children}
             {(footerLeft || footerActions) && (
@@ -378,7 +431,7 @@ export default function RequestViewShell({
           </div>
         </div>
         {(summary.length > 0 || history.length >= 0) && (
-          <aside style={{ flex: '0 0 300px', maxWidth: '100%', display: 'flex',
+          <aside style={{ flex: '1 1 300px', maxWidth: '100%', display: 'flex',
                           flexDirection: 'column', gap: 12 }}>
             <SummaryBox rows={summary} />
             <HistoryBox items={history} requestId={historyRequestId} createdBy={historyCreatedBy} />

@@ -94,7 +94,17 @@ function DarkModeToggle() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
     try { localStorage.setItem('szup_theme', dark ? 'dark' : 'light') } catch { /* brak dostępu */ }
+    // Przełącznik w belce (wąskie ekrany, Header) pokazuje bieżący motyw.
+    window.dispatchEvent(new CustomEvent('szup:theme', { detail: { dark } }))
   }, [dark])
+
+  // Na wąskich ekranach pływający przycisk jest ukryty (zasłaniał treść) —
+  // motyw przełącza wtedy przycisk w belce (Header) przez to zdarzenie.
+  useEffect(() => {
+    const onToggle = () => setDark(d => !d)
+    window.addEventListener('szup:theme-toggle', onToggle)
+    return () => window.removeEventListener('szup:theme-toggle', onToggle)
+  }, [])
 
   return (
     <button className="dark-toggle" onClick={() => setDark(d => !d)}

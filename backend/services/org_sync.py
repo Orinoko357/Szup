@@ -148,10 +148,18 @@ def release_manager_posts(session: Session, user_id: int | None) -> bool:
 
     Bez tego komórka miałaby „kierownika", który nie ma już roli kierownika i nie
     wejdzie do panelu — wniosek utknąłby bez osoby zdolnej go obsłużyć.
+
+    Wołane także przy dezaktywacji konta (ręcznej i z importu AD). Zwalnia
+    również przejęcia wniosków tej osoby, które wciąż czekają na etapie
+    kierownika komórki — wracają do kierownika komórki (z powiadomieniem).
     """
     if not user_id:
         return False
     changed = False
+    from services.workflow import release_take_overs_of
+    if release_take_overs_of(session, user_id,
+                             "Przejmujący stracił stanowisko lub konto zostało wyłączone"):
+        changed = True
     for dept in session.exec(
         select(Department).where(Department.manager_user_id == user_id)
     ).all():

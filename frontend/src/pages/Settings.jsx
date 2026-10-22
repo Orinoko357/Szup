@@ -132,7 +132,7 @@ export default function Settings() {
       }))
       toast('Zapisano harmonogram migawek')
     } catch (ex) {
-      toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' })
+      toast(errorMessage(ex, 'Nie udało się zapisać harmonogramu migawek'), { tone: 'error' })
     } finally { setSnapSaving(false) }
   }
 
@@ -149,7 +149,7 @@ export default function Settings() {
       setDeclIsDefault(!!r.data.declaration_is_default)
       toast('Zapisano treść oświadczenia')
     } catch (ex) {
-      toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' })
+      toast(errorMessage(ex, 'Nie udało się zapisać treści oświadczenia'), { tone: 'error' })
     } finally { setDeclSaving(false) }
   }
 
@@ -175,7 +175,7 @@ export default function Settings() {
       setApp(r.data)
       toast(enabled ? 'Tryb testowy włączony' : 'Tryb testowy wyłączony', { tone: enabled ? 'warning' : 'success' })
     } catch (ex) {
-      toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' })
+      toast(errorMessage(ex, 'Nie udało się zmienić trybu testowego'), { tone: 'error' })
     } finally { setAppSaving(false) }
   }
 
@@ -190,7 +190,7 @@ export default function Settings() {
       setHelpdesk(r.data.helpdesk_email || '')
       toast('Zapisano adres helpdesku')
     } catch (ex) {
-      toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' })
+      toast(errorMessage(ex, 'Nie udało się zapisać adresu helpdesku'), { tone: 'error' })
     } finally { setAppSaving(false) }
   }
 
@@ -200,9 +200,12 @@ export default function Settings() {
     try {
       const data = { ...email }
       if (!data.smtp_password) delete data.smtp_password
-      await updateEmailSettings(data)
+      const r = await updateEmailSettings(data)
       toast('Zapisano ustawienia e-mail')
-    } catch (ex) { toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' }) }
+      // Zmiana serwera lub użytkownika SMTP czyści zapisane hasło — backend
+      // zwraca wtedy ostrzeżenie, że trzeba je wpisać ponownie.
+      if (r.data?.warning) toast(r.data.warning, { tone: 'warning' })
+    } catch (ex) { toast(errorMessage(ex, 'Nie udało się zapisać ustawień e-mail'), { tone: 'error' }) }
     finally { setEmailSaving(false) }
   }
 
@@ -230,7 +233,7 @@ export default function Settings() {
       await updateLdapSettings({ ...ldap, bind_password: ldapBindPassword || null })
       setLdapBindPassword('')
       toast('Zapisano ustawienia AD/LDAP')
-    } catch (ex) { toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' }) }
+    } catch (ex) { toast(errorMessage(ex, 'Nie udało się zapisać ustawień AD/LDAP'), { tone: 'error' }) }
     finally { setLdapSaving(false) }
   }
 
@@ -786,7 +789,7 @@ function TplEditor({ tpl, onSaved }) {
       setSubject(r.data.subject); setBody(r.data.body); setEnabled(r.data.enabled !== false)
       toast(`Zapisano szablon „${tpl.label}”`); onSaved?.()
     } catch (ex) {
-      setMsg({ ok: false, text: errorMessage(ex, 'Błąd zapisu') })
+      setMsg({ ok: false, text: errorMessage(ex, 'Nie udało się zapisać szablonu powiadomienia') })
     } finally { setBusy(false) }
   }
   async function reset() {
@@ -797,7 +800,7 @@ function TplEditor({ tpl, onSaved }) {
       setSubject(r.data.subject); setBody(r.data.body); setEnabled(true)
       toast('Przywrócono domyślny tekst'); onSaved?.()
     } catch (ex) {
-      setMsg({ ok: false, text: errorMessage(ex, 'Błąd') })
+      setMsg({ ok: false, text: errorMessage(ex, 'Nie udało się przywrócić domyślnej treści') })
     } finally { setBusy(false) }
   }
   async function test() {

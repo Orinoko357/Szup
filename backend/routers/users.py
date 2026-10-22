@@ -10,24 +10,61 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from database import get_session
 from models import (
-    User, AuthType, Unit, Department,
+    User, AuthType, Unit, Department, SecuritySeverity,
     parse_roles, roles_to_json, primary_role, VALID_ROLES, has_role,
 )
 from services.auth_service import hash_password, validate_password_strength
 from services.auth_service import get_current_user
 from services.permissions import (
     require_admin, require_manager, managed_dept_ids, hr_scoped_unit_ids,
-    users_with_role, unit_manager_dept_ids, manager_scope_ids,
+    users_with_role, manager_scope_ids,
 )
 
 router = APIRouter()
+
+
+# Role, których nadanie poszerza dostęp do wniosków i danych pracowników —
+# każde nadanie trafia też do zdarzeń bezpieczeństwa (konto „marionetka”).
+OPERATIONAL_ROLES = {"manager", "it_staff", "hr"}
+ADMIN_ROLES = {"admin", "superadmin"}
+
+
+def _audit_user(session: Session, request: Optional[Request], actor: User, *,
+                action: str, target: User, details: Optional[dict] = None) -> None:
+    """Wpis w audit logu o zmianie konta. W `details` nigdy nie ma haseł."""
+    from services.audit import record_event, request_meta
+    meta = request_meta(request)
+    record_event(session, action=action, user_id=actor.id, username=actor.username,
+                 target_type="user", target_id=target.id, ip=meta["ip"],
+                 user_agent=meta["user_agent"],
+                 details={"username": target.username, **(details or {})})
+
+
+def _roles_granted_event(session: Session, request: Optional[Request], actor: User,
+                         target: User, granted: set[str]) -> None:
+    """Nadanie roli operacyjnej lub administracyjnej → zdarzenie bezpieczeństwa
+    (admin → high, kierownik / IT / kadry → medium)."""
+    sensitive = granted & (OPERATIONAL_ROLES | ADMIN_ROLES)
+    if not sensitive:
+        return
+    from services.audit import request_meta
+    from services.security_events import emit as emit_security_event
+    severity = SecuritySeverity.high if sensitive & ADMIN_ROLES else SecuritySeverity.medium
+    emit_security_event(
+        session, event_type="user.roles_granted", source="users", severity=severity,
+        summary=(f"Nadano role {', '.join(sorted(sensitive))} kontu {target.username} "
+                 f"przez {actor.username}"),
+        details={"target_user_id": target.id, "target_username": target.username,
+                 "granted": sorted(sensitive)},
+        user_id=actor.id, ip=request_meta(request)["ip"],
+    )
 
 
 def _guard_superadmin_target(current_user: User, target: User) -> None:
@@ -319,11 +356,11 @@ def user_permissions(
     if not target:
         raise HTTPException(404, "Pracownik nie istnieje")
     if current_user.id != user_id and not has_role(current_user, "superadmin", "admin"):
-        # Zakres kierownika + przełożonego (poddrzewo, cała jednostka dyrektora) —
-        # spójnie z zakresem wniosków; inaczej przełożony nie dokończy wyboru
-        # uprawnień dla pracownika podległej komórki (403).
+        # Zakres kierownika i przełożonego (poddrzewo, cała jednostka dyrektora),
+        # spójny z zakresem wniosków. Podgląd uprawnień nie oznacza prawa do
+        # działania w obiegu — przełożony działa tylko po przejęciu wniosku albo
+        # w komórce bez kierownika (services.workflow.can_act).
         scope = manager_scope_ids(session, current_user)
-        scope.update(unit_manager_dept_ids(session, current_user))
         if target.department_id not in scope and not _can_act_on_worker_request(
                 session, current_user, user_id):
             raise HTTPException(status.HTTP_403_FORBIDDEN,
@@ -538,9 +575,8 @@ def my_workers(
       - wszystkie komórki jednostek, których jest kierownikiem.
     """
     _direct_ids, escalated_ids = managed_dept_ids(session, current_user)
-    scope = manager_scope_ids(session, current_user)
-    scope.update(unit_manager_dept_ids(session, current_user))
-    all_ids = list(scope)
+    # manager_scope_ids obejmuje już komórki jednostek, którymi user kieruje.
+    all_ids = list(manager_scope_ids(session, current_user))
     if not all_ids:
         return []
 
@@ -815,6 +851,7 @@ def list_users(
 @router.post("/", response_model=UserRead, status_code=status.HTTP_201_CREATED)
 def create_user(
     data: UserCreate,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin),
 ):
@@ -884,6 +921,13 @@ def create_user(
     changed, warning = sync_after_user_change(session, user)
     if changed:
         session.commit(); session.refresh(user)
+    _audit_user(session, request, current_user, action="user.created", target=user, details={
+        "auth_type": user.auth_type.value if hasattr(user.auth_type, "value") else user.auth_type,
+        "roles": parse_roles(user.roles),
+        "department_id": user.department_id,
+        "unit_ids": _user_unit_ids(session, user.id),
+    })
+    _roles_granted_event(session, request, current_user, user, set(parse_roles(user.roles)))
     return _user_read(user, session=session, warning=warning)
 
 
@@ -891,6 +935,7 @@ def create_user(
 def update_user(
     user_id: int,
     data: UserUpdate,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin),
 ):
@@ -933,6 +978,12 @@ def update_user(
                 raise HTTPException(status.HTTP_403_FORBIDDEN,
                     "Administrator nie może zmieniać własnych jednostek — poproś o to superadmina")
     deactivated = data.is_active is False and user.is_active
+    before = {
+        "roles": sorted(parse_roles(user.roles)),
+        "department_id": user.department_id,
+        "is_active": user.is_active,
+        "unit_ids": sorted(_user_unit_ids(session, user.id)),
+    }
 
     if data.full_name is not None:  user.full_name = data.full_name
     if data.email is not None:      user.email = data.email
@@ -975,6 +1026,18 @@ def update_user(
         if changed:
             session.commit(); session.refresh(user)
 
+    after = {
+        "roles": sorted(parse_roles(user.roles)),
+        "department_id": user.department_id,
+        "is_active": user.is_active,
+        "unit_ids": sorted(_user_unit_ids(session, user.id)),
+    }
+    diff = {k: {"old": before[k], "new": after[k]} for k in before if before[k] != after[k]}
+    if diff:
+        _audit_user(session, request, current_user, action="user.updated",
+                    target=user, details={"changes": diff})
+        _roles_granted_event(session, request, current_user, user,
+                             set(after["roles"]) - set(before["roles"]))
     return _user_read(user, session=session, warning=warning)
 
 
@@ -982,6 +1045,7 @@ def update_user(
 def reset_password(
     user_id: int,
     data: PasswordResetRequest,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin),
 ):
@@ -1002,6 +1066,7 @@ def reset_password(
     # JWT iat jest w całych sekundach, datetime w bazie ma mikrosekundy.
     user.tokens_valid_from = (datetime.utcnow() - timedelta(seconds=5)).replace(microsecond=0)
     session.add(user); session.commit()
+    _audit_user(session, request, current_user, action="user.password_reset", target=user)
     return {"ok": True, "must_change_password": True}
 
 
@@ -1220,14 +1285,20 @@ def ldap_users_preview(
 @router.post("/ldap/import", response_model=LdapUserImportResult)
 def ldap_users_import(
     data: LdapUserImportRequest,
+    request: Request,
     session: Session = Depends(get_session),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
 ):
     """
     Importuje wskazanych użytkowników (po sAMAccountName) z AD do bazy.
     - Nowe konta  → auth_type=ldap, rola ['viewer'], department_id po parent-OU.
     - LDAP konta  → aktualizacja full_name, email, is_active, department_id, ldap_dn.
+    - Konto wyłączone w AD → istniejące konto domenowe jest dezaktywowane,
+      a jego stanowiska w strukturze zwolnione; nowego nie tworzymy.
     - Konta lokalne o tym samym loginie → pomijane (konflikt).
+    - Login nieznaleziony w AD → pomijany. Świadomie NIE dezaktywujemy takiego
+      konta: pusty wynik wyszukiwania bywa skutkiem złego search_base lub
+      uprawnień konta usługowego, a nie usunięcia osoby z AD.
     """
     from models import LdapSettings
     from services.ldap_service import (
@@ -1288,28 +1359,40 @@ def ldap_users_import(
             details.append(f"⚠ {u['username']} — niedozwolone znaki w loginie, pominięty")
             continue
 
-        # Konto WYŁĄCZONE w AD: nowego nie tworzymy, a istniejące konto
-        # domenowe dezaktywujemy (i zwalniamy jego stanowiska w strukturze).
-        if not u["is_enabled_in_ad"]:
-            ex = find_user_by_login(session, u["username"])
-            if ex and ex.auth_type == AuthType.ldap and ex.is_active:
-                ex.is_active = False
-                session.add(ex)
-                release_manager_posts(session, ex.id)
-                session.commit()
-                updated += 1
-                details.append(f"~ {u['username']} — wyłączony w AD, dezaktywowany")
-            else:
-                skipped += 1
-                details.append(f"⚠ {u['username']} — wyłączony w AD, pominięty")
-            continue
-
-        # Pomiń zduplikowany login — importujemy tylko pierwsze wystąpienie.
+        # Pomiń zduplikowany login — importujemy tylko pierwsze wystąpienie
+        # (tak samo oznacza je podgląd).
         if u["username"] in processed_names:
             skipped += 1
             details.append(f"⚠ {u['username']} — duplikat loginu, pominięty")
             continue
         processed_names.add(u["username"])
+
+        # Konto WYŁĄCZONE w AD: nowego nie tworzymy, a istniejące konto
+        # domenowe dezaktywujemy i zwalniamy jego stanowiska w strukturze.
+        # Stanowiska zwalniamy także wtedy, gdy konto jest już nieaktywne —
+        # mogło zostać kierownikiem, zanim dezaktywacja je zwalniała.
+        if not u["is_enabled_in_ad"]:
+            ex = find_user_by_login(session, u["username"])
+            if ex and ex.auth_type == AuthType.ldap:
+                was_active = ex.is_active
+                ex.is_active = False
+                session.add(ex)
+                released = release_manager_posts(session, ex.id)
+                session.commit()
+                if was_active or released:
+                    _audit_user(session, request, current_user,
+                                action="user.deactivated_ad", target=ex,
+                                details={"was_active": was_active,
+                                         "released_posts": released})
+                    updated += 1
+                    details.append(f"~ {u['username']} — wyłączony w AD, dezaktywowany")
+                else:
+                    skipped += 1
+                    details.append(f"⚠ {u['username']} — wyłączony w AD, konto już nieaktywne")
+                continue
+            skipped += 1
+            details.append(f"⚠ {u['username']} — wyłączony w AD, pominięty")
+            continue
 
         dept_id, unit_id = _resolve_dept_unit(u["parent_dn"])
         # Importujemy WYŁĄCZNIE osoby z powiązanych jednostek organizacyjnych —
@@ -1351,6 +1434,8 @@ def ldap_users_import(
                 ldap_dn=ndn,
             )
             session.add(new_user); session.commit()
+            _audit_user(session, request, current_user, action="user.created_ad",
+                        target=new_user, details={"department_id": dept_id})
             created += 1
             details.append(f"+ {u['username']} — utworzony")
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -19,6 +19,19 @@ from services.permissions import require_admin
 router = APIRouter()
 
 
+def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """Filtr daty → naiwny UTC, bo tak zapisujemy `AuditLog.timestamp`.
+
+    Frontend wysyła ISO ze strefą (np. `2026-10-22T08:00:00Z` albo `+02:00`);
+    taką datę przeliczamy na UTC i zdejmujemy strefę, inaczej porównanie
+    z kolumną bez strefy byłoby przesunięte. Daty bez strefy traktujemy
+    jak dotąd — jako UTC.
+    """
+    if value is None or value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 @router.get("/")
 def list_audit(
     since: Optional[datetime] = None,
@@ -30,6 +43,7 @@ def list_audit(
     _: User = Depends(require_admin),
     session: Session = Depends(get_session),
 ):
+    since, until = _naive_utc(since), _naive_utc(until)
     stmt = select(AuditLog)
     if since:
         stmt = stmt.where(AuditLog.timestamp >= since)
@@ -67,6 +81,7 @@ def export_audit_csv(
     _: User = Depends(require_admin),
     session: Session = Depends(get_session),
 ):
+    since, until = _naive_utc(since), _naive_utc(until)
     if since is None:
         since = datetime.utcnow() - timedelta(days=90)
     stmt = select(AuditLog).where(AuditLog.timestamp >= since)

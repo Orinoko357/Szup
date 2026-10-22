@@ -105,7 +105,7 @@ function TypeRow({ t, onEdit, onReload }) {
   async function del() {
     if (!await ask(`Usunąć typ wniosku "${t.name}"?`, { title: 'Potwierdź operację', confirmLabel: 'Usuń typ', danger: true })) return
     try { await deleteRequestType(t.id); onReload(); toast(`Usunięto typ wniosku „${t.name}”`) }
-    catch (ex) { toast(errorMessage(ex, 'Błąd'), { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Nie udało się usunąć typu wniosku'), { tone: 'error' }) }
   }
   return (
     <tr>
@@ -173,7 +173,7 @@ function TypeForm({ type, templates, onCancel, onSaved }) {
       if (isEdit) await updateRequestType(type.id, payload)
       else await createRequestType(payload)
       onSaved()
-    } catch (ex) { setErr(errorMessage(ex, 'Błąd zapisu')) }
+    } catch (ex) { setErr(errorMessage(ex, 'Nie udało się zapisać typu wniosku')) }
     finally { setSaving(false) }
   }
 

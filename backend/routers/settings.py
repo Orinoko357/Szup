@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from database import get_session
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from models import (AppSettings, EmailSettings, LdapSettings, NotificationTemplate,
                     SecuritySeverity, User)
@@ -123,9 +123,20 @@ class EmailSettingsRead(BaseModel):
     use_tls: bool
     sender_as_actor: bool
     has_password: bool
+    # Komunikat po zapisie, gdy coś wymaga uwagi (np. wyczyszczone hasło SMTP).
+    warning: Optional[str] = None
 
 
-def _email_read(cfg: EmailSettings) -> "EmailSettingsRead":
+# Hasło SMTP jest związane z serwerem i kontem, dla których je podano. Gdy
+# zmienia się host albo użytkownik, a nowego hasła nie wpisano, zapisane hasło
+# kasujemy — inaczej dałoby się je wysłać na podstawiony serwer.
+SMTP_PASSWORD_CLEARED_MSG = (
+    "Zmieniono serwer lub użytkownika SMTP, więc zapisane hasło zostało usunięte. "
+    "Wpisz hasło ponownie, jeśli serwer wymaga logowania."
+)
+
+
+def _email_read(cfg: EmailSettings, warning: Optional[str] = None) -> "EmailSettingsRead":
     # `to_address`/`sender_as_actor` doszły migracją, na istniejących bazach
     # w starym wierszu mogą być NULL — koalescujemy, inaczej walidacja
     # (pola nie-nullowalne) wywala GET /email i formularz jest pusty.
@@ -136,6 +147,7 @@ def _email_read(cfg: EmailSettings) -> "EmailSettingsRead":
         use_tls=cfg.use_tls,
         sender_as_actor=(True if cfg.sender_as_actor is None else cfg.sender_as_actor),
         has_password=bool(cfg.smtp_password_enc),
+        warning=warning,
     )
 
 
@@ -155,7 +167,9 @@ def get_email(
 def update_email(
     data: EmailSettingsSchema,
     request: Request,
-    current_user: User = Depends(require_admin),
+    # Serwer SMTP dostaje hasło konta pocztowego (często domenowego) i kopie
+    # powiadomień — zmiana wyłącznie przez superadmina, tak jak LDAP.
+    current_user: User = Depends(require_superadmin),
     session: Session = Depends(get_session),
 ):
     from services.crypto import encrypt
@@ -163,22 +177,30 @@ def update_email(
     if not cfg:
         cfg = EmailSettings()
 
+    old_host, old_user = (cfg.smtp_host or ""), (cfg.smtp_user or "")
     changed = _apply_fields(cfg, {
         "enabled": data.enabled, "smtp_host": data.smtp_host, "smtp_port": data.smtp_port,
         "smtp_user": data.smtp_user, "from_address": data.from_address,
         "to_address": data.to_address, "use_tls": data.use_tls,
         "sender_as_actor": data.sender_as_actor,
     })
+    warning = None
     if data.smtp_password is not None:
         cfg.smtp_password_enc = encrypt(data.smtp_password) if data.smtp_password else ""
         changed.append("smtp_password")
+    elif (cfg.smtp_password_enc
+          and ((cfg.smtp_host or "") != old_host or (cfg.smtp_user or "") != old_user)):
+        cfg.smtp_password_enc = ""
+        changed.append("smtp_password")
+        warning = SMTP_PASSWORD_CLEARED_MSG
 
     session.add(cfg); session.commit(); session.refresh(cfg)
     _settings_changed(session, request, current_user, kind="email", changed=changed,
-                      severity=SecuritySeverity.medium,
+                      severity=SecuritySeverity.high,
                       summary="Zmieniono ustawienia SMTP",
-                      extra={"smtp_host": cfg.smtp_host, "enabled": cfg.enabled})
-    return _email_read(cfg)
+                      extra={"smtp_host": cfg.smtp_host, "enabled": cfg.enabled,
+                             "password_cleared": warning is not None})
+    return _email_read(cfg, warning=warning)
 
 
 @router.post("/email/test")
@@ -292,7 +314,9 @@ def list_notification_templates(
 ):
     from services.notifications import EVENTS
     rows = {r.event_key: r for r in session.exec(select(NotificationTemplate)).all()}
-    return [_tpl_out(key, d, rows.get(key)) for key, d in EVENTS.items()]
+    # Szablony oznaczone „hidden” nie są już wysyłane — nie pokazujemy ich do edycji.
+    return [_tpl_out(key, d, rows.get(key)) for key, d in EVENTS.items()
+            if not d.get("hidden")]
 
 
 @router.put("/notifications/{event_key}", response_model=NotificationTemplateOut)
@@ -537,6 +561,7 @@ def test_ldap(
 ):
     from ldap3 import Server, Connection, ALL
     from services.crypto import decrypt
+    from services.ldap_service import service_bind_user
 
     cfg = session.exec(select(LdapSettings)).first()
     if not cfg or not cfg.host:
@@ -544,7 +569,9 @@ def test_ldap(
     try:
         bind_password = decrypt(cfg.bind_password_enc) if cfg.bind_password_enc else ""
         server = Server(cfg.host, port=cfg.port, use_ssl=cfg.use_ssl, get_info=ALL)
-        with Connection(server, user=cfg.bind_dn, password=bind_password, auto_bind=True):
+        # Ta sama nazwa konta usługowego co przy logowaniu i imporcie (UPN z Base DN).
+        with Connection(server, user=service_bind_user(cfg), password=bind_password,
+                        auto_bind=True):
             return {"ok": True, "message": f"Połączono z {cfg.host}:{cfg.port}"}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
@@ -553,6 +580,33 @@ def test_ldap(
 # ---------------------------------------------------------------------------
 # Reset do ustawień fabrycznych — WYŁĄCZNIE superadmin
 # ---------------------------------------------------------------------------
+
+# Limit nieudanych potwierdzeń hasłem przy resecie fabrycznym — per konto,
+# w pamięci procesu (jeden worker uvicorn). Chroni przed zgadywaniem hasła
+# z przejętej sesji superadmina; restart usługi zeruje licznik.
+FACTORY_RESET_MAX_FAILURES = 5
+FACTORY_RESET_WINDOW = timedelta(minutes=15)
+_factory_reset_failures: dict[int, list[datetime]] = {}
+
+
+def _recent_reset_failures(user_id: int) -> list[datetime]:
+    cutoff = datetime.utcnow() - FACTORY_RESET_WINDOW
+    hits = [t for t in _factory_reset_failures.get(user_id, []) if t > cutoff]
+    if hits:
+        _factory_reset_failures[user_id] = hits
+    else:
+        _factory_reset_failures.pop(user_id, None)
+    return hits
+
+
+def _auditlog_triggers_present(session: Session) -> bool:
+    """Czy triggery append-only auditlog faktycznie istnieją w bazie."""
+    from sqlalchemy import text
+    from database import AUDITLOG_TRIGGERS
+    names = {r[0] for r in session.exec(text(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='auditlog'")).all()}
+    return set(AUDITLOG_TRIGGERS) <= names
+
 
 class FactoryResetRequest(BaseModel):
     password: str                    # potwierdzenie hasłem wykonującego
@@ -592,6 +646,12 @@ def factory_reset(
     if data.confirm.strip() != "RESET":
         raise HTTPException(400, 'Potwierdź operację wpisując dokładnie: RESET')
 
+    meta = request_meta(request)
+    if len(_recent_reset_failures(current_user.id)) >= FACTORY_RESET_MAX_FAILURES:
+        raise HTTPException(429,
+            "Zbyt wiele nieudanych prób potwierdzenia hasłem. "
+            f"Spróbuj ponownie za {int(FACTORY_RESET_WINDOW.total_seconds() // 60)} minut.")
+
     # Weryfikacja tożsamości wykonującego — hasłem lokalnym albo przez AD.
     ok = False
     if current_user.auth_type == AuthType.ldap:
@@ -606,9 +666,20 @@ def factory_reset(
         ok = bool(current_user.password_hash) and verify_password(
             data.password, current_user.password_hash)
     if not ok:
+        failures = _factory_reset_failures.setdefault(current_user.id, [])
+        failures.append(datetime.utcnow())
+        blocked = len(failures) >= FACTORY_RESET_MAX_FAILURES
+        emit_security_event(
+            session, event_type="settings.factory_reset_denied", source="settings",
+            severity=SecuritySeverity.critical if blocked else SecuritySeverity.high,
+            summary=(f"Nieudane potwierdzenie hasłem resetu fabrycznego przez "
+                     f"{current_user.username}"
+                     + (" — próby zablokowane na 15 minut" if blocked else "")),
+            details={"failures_in_window": len(failures)},
+            user_id=current_user.id, ip=meta["ip"],
+        )
         raise HTTPException(403, "Nieprawidłowe hasło — reset przerwany")
-
-    meta = request_meta(request)
+    _factory_reset_failures.pop(current_user.id, None)
     deleted: dict[str, int] = {}
     details: list[str] = []
 
@@ -708,13 +779,24 @@ def factory_reset(
 
     session.commit()
 
-    # Odtwórz triggery audytu od razu, żeby nie czekać na restart.
+    # Odtwórz triggery audytu od razu, żeby nie czekać na restart. Porażka nie
+    # może przejść po cichu — dziennik zostałby zapisywalny (UPDATE/DELETE).
+    triggers_error: Optional[str] = None
     if data.wipe_audit:
         try:
             from database import _install_auditlog_triggers
             _install_auditlog_triggers()
-        except Exception:
-            pass
+            if not _auditlog_triggers_present(session):
+                triggers_error = "triggery nie istnieją po ponownej instalacji"
+        except Exception as exc:  # noqa: BLE001
+            triggers_error = f"{type(exc).__name__}: {exc}"
+        if triggers_error:
+            import logging
+            logging.getLogger("szup.settings").error(
+                "Factory reset: nie odtworzono triggerów append-only auditlog: %s",
+                triggers_error)
+            details.append("⚠ Nie udało się odtworzyć ochrony dziennika zdarzeń "
+                           "(append-only). Zrestartuj usługę i sprawdź logi.")
 
     # Ślad operacji (po czystce, żeby nie został skasowany).
     try:
@@ -728,8 +810,17 @@ def factory_reset(
             summary=f"PRZYWRÓCENIE USTAWIEŃ FABRYCZNYCH przez {current_user.username}",
             details={"deleted": deleted}, user_id=current_user.id, ip=meta["ip"],
         )
+        if triggers_error:
+            emit_security_event(
+                session, event_type="audit.triggers_missing", source="settings",
+                severity=SecuritySeverity.critical,
+                summary="Dziennik zdarzeń bez ochrony append-only po resecie fabrycznym",
+                details={"error": triggers_error}, user_id=current_user.id, ip=meta["ip"],
+            )
     except Exception:
-        pass
+        import logging
+        logging.getLogger("szup.settings").exception(
+            "Factory reset: nie zapisano śladu operacji w audycie")
 
     if not details:
         details.append("Brak danych do usunięcia — system był już pusty.")

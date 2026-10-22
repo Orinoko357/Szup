@@ -9,6 +9,10 @@ import WodsLogo from './WodsLogo'
 import { getUserRoles } from '../../roles'
 import { focusableIn, lockScroll } from '../ui/useDialog'
 
+/* global __APP_VERSION__ */
+// Wersja z package.json, wstrzykiwana przez Vite (vite.config.js → define).
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : ''
+
 // v3.0 — pasek boczny służy WYŁĄCZNIE nawigacji (bez liczników — sprawy
 // czekające pokazuje pulpit). Grupy: PRACA, REJESTRY, ADMINISTRACJA (zwijana),
 // MOJE. „Do realizacji” jest zakładką strony Wnioski, struktura komórek —
@@ -166,7 +170,7 @@ export default function Sidebar() {
         })}
       </nav>
 
-      <div className="sidebar-footer">v3.4 · NIS2/KSC</div>
+      <div className="sidebar-footer">{APP_VERSION ? `v${APP_VERSION} · ` : ''}NIS2/KSC</div>
     </aside>
     </>
   )

@@ -361,6 +361,8 @@ def _run_migrations():
         ("accessrequest",    "taken_over_by_id",    "INTEGER DEFAULT NULL"),
         ("accessrequest",    "taken_over_by_name",  "VARCHAR DEFAULT NULL"),
         ("accessrequest",    "taken_over_at",       "DATETIME DEFAULT NULL"),
+        # Typ bieżącego węzła obiegu (filtr widoczności etapu kierownika w SQL)
+        ("accessrequest",    "current_node_type",   "VARCHAR DEFAULT NULL"),
     ]
     from sqlalchemy import text
     with engine.connect() as conn:
@@ -385,6 +387,18 @@ def _run_migrations():
             conn.rollback()
             _mlog.warning("Nie udało się utworzyć uq_step_instance_index "
                           "(możliwe duplikaty kroków): %s", exc)
+
+        try:
+            conn.execute(text(
+                'CREATE INDEX IF NOT EXISTS ix_accessrequest_current_node_type '
+                'ON "accessrequest" (current_node_type)'
+            ))
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            _mlog.warning("Nie udało się utworzyć ix_accessrequest_current_node_type: %s", exc)
+
+        _backfill_current_node_type(conn, _mlog)
 
         # Backfill: accessrequest.worker_user_id dla starych rekordów (best-effort).
         # Dopasowujemy po (worker_name, department_id) do aktywnego użytkownika.
@@ -453,6 +467,39 @@ def _run_migrations():
                     "Próbuję recreate-table fallback.", exc
                 )
                 _drop_role_via_recreate(conn)
+
+
+def _backfill_current_node_type(conn, _mlog) -> None:
+    """Uzupełnia `accessrequest.current_node_type` dla wniosków w toku.
+
+    Kolumna (3.4.1) jest kopią bieżącego węzła aktywnej instancji obiegu,
+    utrzymywaną odtąd przez silnik. Na bazach sprzed migracji wyliczamy ją raz
+    z zamrożonego grafu instancji. Idempotentne — dotyka tylko wierszy z NULL.
+    """
+    import json
+    from sqlalchemy import text
+    try:
+        rows = conn.execute(text(
+            'SELECT wi.request_id, wi.template_snapshot, wi.current_node_id '
+            'FROM "workflowinstance" wi JOIN "accessrequest" ar ON ar.id = wi.request_id '
+            "WHERE wi.status = 'active' AND ar.current_node_type IS NULL "
+            'AND wi.current_node_id IS NOT NULL'
+        )).fetchall()
+        for request_id, snapshot, node_id in rows:
+            try:
+                graph = json.loads(snapshot)
+                ntype = next((n.get("type") for n in graph.get("nodes", [])
+                              if n.get("id") == node_id), None)
+            except Exception:
+                ntype = None
+            if ntype:
+                conn.execute(text(
+                    'UPDATE "accessrequest" SET current_node_type = :t WHERE id = :id'
+                ), {"t": ntype, "id": request_id})
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        _mlog.warning("Backfill accessrequest.current_node_type nie powiódł się: %s", exc)
 
 
 def _drop_role_via_recreate(conn) -> None:

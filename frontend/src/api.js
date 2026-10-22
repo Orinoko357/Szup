@@ -89,8 +89,8 @@ export const listItStaff       = ()             => api.get('/users/it-staff')
 export const assignRequest     = (id, userId)   => api.post(`/requests/${id}/assign`, { user_id: userId })
 
 // --- Dziennik zdarzeń (audit log) ---
+// Dziennik jest tylko do odczytu (usuwanie wpisów wycofano w 3.3).
 export const listAudit          = (params) => api.get('/audit/', { params })
-// Usuwanie wpisów (admin, wymaga hasła): mode all | before | filter
 export const auditStats         = ()       => api.get('/audit/stats')
 // Eksport CSV przez instancję `api` (token, obsługa 401) — odpowiedź jako Blob.
 export const exportAuditCsv     = (since, until) => api.get('/audit/export.csv', {
@@ -102,7 +102,6 @@ export const exportAuditCsv     = (since, until) => api.get('/audit/export.csv',
 export const listSecurityEvents    = (params) => api.get('/security/', { params })
 export const securityEventsSummary = ()       => api.get('/security/summary')
 export const resolveSecurityEvent  = (id, note) => api.post(`/security/${id}/resolve`, { note })
-// Usuwanie zdarzeń (admin, wymaga hasła): mode resolved | before | all
 
 // --- Settings ---
 export const getEmailSettings  = ()       => api.get('/settings/email')
@@ -206,6 +205,8 @@ export const createRequest     = (data)          => api.post('/requests/', data)
 export const saveRequestDraft  = (id, data)      => api.post(`/requests/${id}/draft`, data)
 // Przejęcie wniosku z podległej komórki przez przełożonego (bez treści).
 export const takeOverRequest   = (id)            => api.post(`/requests/${id}/take-over`)
+// „Oddaj” — przejmujący zwalnia przejęcie; wniosek wraca do kierownika komórki.
+export const releaseRequest    = (id)            => api.post(`/requests/${id}/release`)
 export const linkRequestWorker = (id, ad_username) => api.post(`/requests/${id}/link-worker`, { ad_username })
 
 // --- Pulpit obiegu wniosków ---

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
@@ -18,6 +18,18 @@ from services.permissions import require_admin
 from services.workflow import WorkflowGraphError, parse_graph
 
 router = APIRouter()
+
+
+def _audit(session: Session, request: Request, user: User, action: str, *,
+           template_id: int, name: str, version: int,
+           details: Optional[dict] = None) -> None:
+    """Zmiana szablonu obiegu decyduje, kto akceptuje wnioski — ślad w audit logu."""
+    from services.audit import record_event, request_meta
+    meta = request_meta(request)
+    record_event(session, action=action, user_id=user.id, username=user.username,
+                 target_type="workflow_template", target_id=template_id, ip=meta["ip"],
+                 user_agent=meta["user_agent"],
+                 details={"name": name, "version": version, **(details or {})})
 
 
 def _serialize(session: Session, t: WorkflowTemplate) -> dict:
@@ -83,6 +95,7 @@ def get_template(
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def create_template(
     data: TemplateIn,
+    request: Request,
     session: Session = Depends(get_session),
     user: User = Depends(require_admin),
 ):
@@ -99,6 +112,8 @@ def create_template(
         created_by_user_id=user.id,
     )
     session.add(t); session.commit(); session.refresh(t)
+    _audit(session, request, user, "workflow_template.created", template_id=t.id,
+           name=t.name, version=t.version, details={"is_active": t.is_active})
     return _serialize(session, t)
 
 
@@ -106,8 +121,9 @@ def create_template(
 def update_template(
     template_id: int,
     data: TemplatePatch,
+    request: Request,
     session: Session = Depends(get_session),
-    _: User = Depends(require_admin),
+    user: User = Depends(require_admin),
 ):
     t = session.get(WorkflowTemplate, template_id)
     if not t:
@@ -121,17 +137,24 @@ def update_template(
         # Nowa wersja szablonu — trwające instancje trzymają snapshot,
         # więc nic im się nie stanie.
         t.version = (t.version or 1) + 1
+    changed = sorted(k for k, v in payload.items() if getattr(t, k) != v)
     for k, v in payload.items():
         setattr(t, k, v)
     session.add(t); session.commit(); session.refresh(t)
+    if changed:
+        # Sam graf bywa duży — zapisujemy nazwy zmienionych pól i nową wersję.
+        _audit(session, request, user, "workflow_template.updated", template_id=t.id,
+               name=t.name, version=t.version,
+               details={"changed": changed, "is_active": t.is_active})
     return _serialize(session, t)
 
 
 @router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_template(
     template_id: int,
+    request: Request,
     session: Session = Depends(get_session),
-    _: User = Depends(require_admin),
+    user: User = Depends(require_admin),
 ):
     t = session.get(WorkflowTemplate, template_id)
     if not t:
@@ -150,4 +173,7 @@ def delete_template(
     ).first()
     if active:
         raise HTTPException(400, "Szablon ma trwające instancje — zaczekaj aż się zakończą lub odrzuć wnioski.")
+    name, version = t.name, t.version
     session.delete(t); session.commit()
+    _audit(session, request, user, "workflow_template.deleted", template_id=template_id,
+           name=name, version=version)

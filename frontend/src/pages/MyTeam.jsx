@@ -8,8 +8,10 @@ import {
 import {
   permChangeState, changeStyle, ChangeBadge,
 } from '../components/PermissionChanges'
-import DeclarationModal from '../components/DeclarationModal'
-import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard, deptFull } from '../components/RequestView'
+import DeclarationModal, { declarationRequired } from '../components/DeclarationModal'
+import RequestViewShell, {
+  buildWorkflowSteps, Section, WorkerCard, deptFull, useReturnFocus,
+} from '../components/RequestView'
 import { toast, confirmDialog } from '../components/ui/feedback'
 import { ReviewDialog, describeKeys, diffSelection } from '../components/ChangeSummary'
 import CopyFromColleague, { buildCopiedSelection } from '../components/CopyFromColleague'
@@ -118,6 +120,9 @@ function WorkersTab({ renderHeader }) {
     )
   }, [workers, search])
 
+  // Po zamknięciu formularza fokus wraca na „Nowy wniosek” w wierszu pracownika.
+  useReturnFocus(requestFor ? requestFor.id : null, !loading)
+
   // Otwarty formularz wniosku = pełnoekranowy widok (zamiast listy).
   if (requestFor) {
     return <NewRequestModal worker={requestFor}
@@ -219,7 +224,8 @@ function WorkersTab({ renderHeader }) {
                       )}
                     </td>
                     <td style={{ textAlign: 'right' }}>
-                      <button className="btn btn--action btn--sm" style={{ minHeight: 36 }} onClick={() => setRequestFor(w)}>
+                      <button className="btn btn--action btn--sm" style={{ minHeight: 36 }} onClick={() => setRequestFor(w)}
+                              data-return-focus={w.id}>
                         <FilePlus size={13} /> Nowy wniosek
                       </button>
                     </td>
@@ -283,7 +289,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
   // Migawka zaznaczenia po załadowaniu — do ostrzeżenia o niezapisanych zmianach.
   const initialSel = useRef(null)
   const selKey = () => JSON.stringify([[...picked].sort(), fieldValues])
-  useEffect(() => { if (!loading) initialSel.current = selKey() }, [loading])  // eslint-disable-line
+  useEffect(() => { if (!loading) initialSel.current = selKey() }, [loading])
   const [requestTypeId, setRequestTypeId] = useState(null)
   // Oświadczenie wnioskującego (428-driven): treść + pozycje do ponowienia.
   const [declText, setDeclText] = useState('')
@@ -497,7 +503,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
     setBusy(true); setErr(null)
     try {
       const res = await createRequest({ ...requestBody(selectionItems()), draft: true })
-      toast(`Zapisano wersję roboczą wniosku #${res?.data?.id ?? ''}.`)
+      toast(res?.data?.id ? `Zapisano wersję roboczą wniosku #${res.data.id}.` : 'Zapisano wersję roboczą wniosku.')
       onDone()
     } catch (ex) {
       setErr(errorMessage(ex, 'Nie udało się zapisać wersji roboczej'))
@@ -517,11 +523,10 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
       toast(`Wniosek${res?.data?.id ? ` #${res.data.id}` : ''} dla ${w.full_name || w.username} został wysłany.`)
       onDone()
     } catch (ex) {
-      const st = ex.response?.status
-      const det = ex.response?.data?.detail
       setReviewOpen(false)
-      if (st === 428 && det?.code === 'DECLARATION_REQUIRED') {
-        setDeclText(det.declaration_text || '')
+      const declText428 = declarationRequired(ex)
+      if (declText428 != null) {
+        setDeclText(declText428)
         setDeclItems(items)
         setBusy(false)
         return
@@ -542,6 +547,8 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
   }
 
   // Dokąd trafi wniosek po wysłaniu — ta sama etykieta na przycisku i w podsumowaniu.
+  // Reguła jak w backendzie (landing_node_type): komórka dwustopniowa → akceptacja
+  // wyższa dla KAŻDEGO rodzaju wniosku; inaczej wprost do realizacji przez IT.
   const sendLabel = w.requires_higher_approval ? 'Wyślij do akceptacji' : 'Wyślij do realizacji'
 
   const _steps = buildWorkflowSteps({
@@ -568,13 +575,14 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
         {' · '}<strong style={{ color: 'var(--color-error-text)' }}>−{toRevoke.length}</strong> odebrania</>}
       footerActions={<>
         <button className="btn btn--ghost" onClick={guardedClose} disabled={busy}>Anuluj</button>
-        <button className="btn btn--ghost" onClick={saveDraft} disabled={busy || loading || !requestTypeId}
-                title={!loading && !requestTypeId ? NO_TYPE_MSG : 'Zapisz bez wysyłania — wrócisz do wniosku później'}>
-          <Save size={13} /> Zapisz roboczy
+        <button className="btn btn--ghost" onClick={saveDraft} disabled={busy || loading || noChange || !requestTypeId}
+                title={!loading && !requestTypeId ? NO_TYPE_MSG
+                  : noChange ? 'Brak zmian do zapisania' : 'Zapisz bez wysyłania — wrócisz do wniosku później'}>
+          <Save size={14} /> Zapisz roboczy
         </button>
         <button className="btn btn--success" onClick={submit} disabled={busy || loading || noChange || !requestTypeId}
                 title={!loading && !requestTypeId ? NO_TYPE_MSG : undefined}>
-          <Send size={13} /> {sendLabel}
+          <Send size={14} /> {sendLabel}
         </button>
       </>}>
           <Section n={1} title="Pracownik">

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Copy, Search, X } from 'lucide-react'
 import { listMyWorkers, userPermissions, errorMessage } from '../api'
 import { toast } from './ui/feedback'
+import useDialog from './ui/useDialog'
 
 /**
  * v3.1 — „Skopiuj uprawnienia od współpracownika”: kierownik wybiera osobę
@@ -49,7 +50,6 @@ export default function CopyFromColleague({ excludeUserId, onCopy, disabled }) {
     listMyWorkers().then(r => setWorkers(r.data || []))
       .catch(ex => { setWorkers([]); setErr(errorMessage(ex, 'Nie udało się pobrać listy pracowników')) })
   }, [open, workers])
-  useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 30) }, [open])
 
   const list = useMemo(() => {
     const ql = q.trim().toLowerCase()
@@ -91,8 +91,7 @@ export default function CopyFromColleague({ excludeUserId, onCopy, disabled }) {
         <div role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) setOpen(false) }}
              style={{ position: 'fixed', inset: 0, zIndex: 2500, background: 'rgba(13,20,36,.5)',
                       display: 'grid', placeItems: 'center', padding: 16 }}>
-          <div role="dialog" aria-modal="true" aria-labelledby="copy-col-title"
-               onKeyDown={e => { if (e.key === 'Escape') setOpen(false) }}
+          <DialogFrame onClose={() => setOpen(false)} labelledBy="copy-col-title"
                style={{ width: '100%', maxWidth: 520, maxHeight: 'calc(100vh - 32px)', display: 'flex',
                         flexDirection: 'column', background: 'var(--color-card)', color: 'var(--color-text)',
                         border: '1px solid var(--color-border)', borderRadius: 10,
@@ -117,7 +116,7 @@ export default function CopyFromColleague({ excludeUserId, onCopy, disabled }) {
             <div style={{ padding: '12px 20px 0', position: 'relative' }}>
               <Search size={15} aria-hidden="true" style={{ position: 'absolute', left: 32, top: '50%', marginTop: 6,
                                                             transform: 'translateY(-50%)', color: 'var(--color-text-muted)' }} />
-              <input ref={inputRef} className="form-control" aria-label="Szukaj współpracownika"
+              <input ref={inputRef} data-autofocus className="form-control" aria-label="Szukaj współpracownika"
                      placeholder="Nazwisko, login, stanowisko, komórka…" value={q}
                      onChange={e => setQ(e.target.value)} style={{ paddingLeft: 34, minHeight: 44 }} />
             </div>
@@ -153,9 +152,20 @@ export default function CopyFromColleague({ excludeUserId, onCopy, disabled }) {
                 </ul>
               )}
             </div>
-          </div>
+          </DialogFrame>
         </div>
       )}
     </>
+  )
+}
+
+/** Okno z pułapką fokusu, Escape i zwrotem fokusu na „Skopiuj od…” (ui/useDialog). */
+function DialogFrame({ onClose, labelledBy, style, children }) {
+  const ref = useDialog({ onClose })
+  return (
+    <div ref={ref} role="dialog" aria-modal="true" aria-labelledby={labelledBy} tabIndex={-1}
+         style={{ ...style, outline: 'none' }}>
+      {children}
+    </div>
   )
 }

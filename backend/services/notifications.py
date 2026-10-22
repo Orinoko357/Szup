@@ -6,8 +6,12 @@ Administrator może je nadpisać w Ustawieniach → Powiadomienia (tabela
 `NotificationTemplate`). Makra w formacie `{nazwa}` są podmieniane na wartości
 z kontekstu zdarzenia; nieznane `{...}` zostają bez zmian.
 
-Domyślne treści NIE odwołują się już do pobierania PDF ani wysyłki do EZD FINN
-(z tego kroku zrezygnowano) — obieg odbywa się w całości w aplikacji.
+Obieg odbywa się w całości w aplikacji — treści nie odwołują się do
+dokumentów poza nią.
+
+Szablony oznaczone `"hidden": True` nie są już wysyłane (zastąpiło je
+powiadomienie etapu `workflow_stage`); zostają w rejestrze, żeby nie gubić
+treści zapisanych wcześniej w Ustawieniach.
 """
 from __future__ import annotations
 
@@ -27,6 +31,7 @@ _COMMON = ["{request_id}", "{worker_name}", "{dept_name}", "{unit_name}",
 # temat i treść. Kolejność = kolejność wyświetlania w Ustawieniach.
 EVENTS: dict[str, dict] = {
     "selector_new_request": {
+        "hidden": True,
         "label": "Nowy wniosek — wybór uprawnień (kierownik komórki)",
         "description": "(nieużywany — wysyłkę robi powiadomienie etapu „Wniosek wszedł w nowy etap”) "
                        "Trafia do kierownika, który ma wskazać uprawnienia dla pracownika.",
@@ -44,6 +49,7 @@ EVENTS: dict[str, dict] = {
         ),
     },
     "manager_new_request": {
+        "hidden": True,
         "label": "Nowy wniosek — do akceptacji kierownika",
         "description": "(nieużywany — wysyłkę robi powiadomienie etapu „Wniosek wszedł w nowy etap”) "
                        "Trafia do kierownika komórki, który zatwierdza wniosek.",
@@ -60,6 +66,7 @@ EVENTS: dict[str, dict] = {
         ),
     },
     "higher_manager_request": {
+        "hidden": True,
         "label": "Wniosek — akceptacja kierownika wyższego rzędu",
         "description": "(nieużywany — wysyłkę robi powiadomienie etapu „Wniosek wszedł w nowy etap”) "
                        "Trafia do kierownika nadrzędnego po wyborze uprawnień przez kierownika komórki.",
@@ -76,6 +83,7 @@ EVENTS: dict[str, dict] = {
         ),
     },
     "it_request_approved": {
+        "hidden": True,
         "label": "Wniosek zatwierdzony — do realizacji przez IT",
         "description": "(nieużywany — wysyłkę robi powiadomienie etapu „Wniosek wszedł w nowy etap” i zgłoszenie na helpdesk) "
                        "Trafia do pracowników IT po zatwierdzeniu wniosku.",
@@ -145,6 +153,36 @@ EVENTS: dict[str, dict] = {
             "Co należy zrobić:\n"
             "  {action_hint}\n\n"
             "Otwórz wniosek #{request_id}: {request_url}\n\n"
+            "-- SZUP {datetime}"
+        ),
+    },
+    "request_taken_over": {
+        "label": "Wniosek przejęty przez przełożonego (do kierownika komórki)",
+        "description": "Trafia do kierownika komórki i jego zastępców (oraz do poprzednio "
+                       "przejmującego), gdy przełożony przejmie wniosek z etapu kierownika komórki.",
+        "macros": _COMMON + ["{taker_name}"],
+        "subject": "[SZUP] Wniosek #{request_id} przejęty przez przełożonego",
+        "body": (
+            "{taker_name} przejął(-ęła) wniosek o uprawnienia czekający na etapie "
+            "kierownika komórki.\n\n"
+            "Nr wniosku:  #{request_id}\n"
+            "Pracownik:   {worker_name}\n"
+            "Wydział:     {dept_name}\n\n"
+            "Dalsze kroki na etapie kierownika komórki wykona przełożony — "
+            "Ty możesz jedynie podejrzeć wniosek.\n\n"
+            "Podgląd wniosku: {request_url}\n\n"
+            "-- SZUP {datetime}"
+        ),
+    },
+    "name_change_requested": {
+        "label": "Wniosek o zmianę nazwiska (helpdesk IT)",
+        "description": "Trafia na skrzynkę helpdesku, gdy pracownik zgłosi zmianę nazwiska.",
+        "macros": ["{full_name}", "{new_name}", "{names_url}", "{app_url}",
+                   "{date}", "{datetime}"],
+        "subject": "[SZUP] Nowy wniosek o zmianę nazwiska",
+        "body": (
+            "{full_name} zgłosił(a) zmianę nazwiska na: {new_name}.\n\n"
+            "Rozpatrz wniosek w SZUP (Wnioski → Zmiany nazwisk): {names_url}\n\n"
             "-- SZUP {datetime}"
         ),
     },

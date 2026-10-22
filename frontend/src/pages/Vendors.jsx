@@ -153,7 +153,7 @@ function VendorForm({ vendor, onCancel, onSaved }) {
       toast(vendor ? `Zapisano zmiany: ${payload.name}` : `Dodano dostawcę: ${payload.name}`)
       onSaved()
     } catch (ex) {
-      setErr(errorMessage(ex, 'Błąd zapisu'))
+      setErr(errorMessage(ex, 'Nie udało się zapisać dostawcy'))
     } finally { setSaving(false) }
   }
 

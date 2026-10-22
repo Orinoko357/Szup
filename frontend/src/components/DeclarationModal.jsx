@@ -16,6 +16,17 @@ import Modal from './ui/Modal'
  * `text` można podać z góry (np. z odpowiedzi 428); gdy brak — pobieramy
  * aktualną treść z `/settings/declaration-text`.
  */
+/** Czy błąd API to żądanie oświadczenia (428 DECLARATION_REQUIRED)?
+ *  Zwraca treść oświadczenia do pokazania w modalu ('' gdy backend jej nie
+ *  podał) albo null, gdy to inny błąd. Wspólne dla Manager i MyTeam. */
+export function declarationRequired(ex) {
+  const det = ex?.response?.data?.detail
+  if (ex?.response?.status === 428 && det?.code === 'DECLARATION_REQUIRED') {
+    return det.declaration_text || ''
+  }
+  return null
+}
+
 /** Imię i nazwisko zalogowanego użytkownika (z sesji). */
 function currentUserName() {
   const u = getCurrentUser()

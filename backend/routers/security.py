@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select, col
 
 from database import get_session
-from models import SecurityEvent, SecuritySeverity, User
+from models import SecurityEvent, SecuritySeverity, User, has_role
 from services.permissions import require_admin
 
 router = APIRouter()
@@ -90,6 +90,12 @@ def resolve(
         raise HTTPException(404, "Zdarzenie nie istnieje")
     if ev.resolved_at:
         return {"ok": True, "already": True}
+    # Zdarzenie dotyczące samego admina (np. jego nieudane logowania, zmiany
+    # wprowadzone przez niego) zamyka ktoś inny — inaczej mógłby zacierać ślady.
+    if ev.user_id == current_user.id and not has_role(current_user, "superadmin"):
+        raise HTTPException(403,
+            "Nie możesz zamknąć zdarzenia, które dotyczy Twojego konta — "
+            "zrobi to inny administrator lub superadmin")
     ev.resolved_at = datetime.utcnow()
     ev.resolved_by_user_id = current_user.id
     ev.resolution_note = (data.note or "")[:1000] or None

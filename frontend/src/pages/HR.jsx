@@ -4,6 +4,7 @@ import { listRequests, createRequest, listActiveDepts, listActiveUnits, listRequ
 import { fmtDate, serverTs, serverNow } from '../serverTime'
 import { statusLabel, statusBadge, kindLabel, daysSince, waitText } from '../labels'
 import { toast, confirmDialog } from '../components/ui/feedback'
+import useDialog from '../components/ui/useDialog'
 import Segmented from '../components/ui/Segmented'
 import RequestViewShell, { Section, buildWorkflowSteps, KindBadge } from '../components/RequestView'
 
@@ -44,6 +45,8 @@ function NextSteps({ revoke = false }) {
 
 // Gotowa wiadomość do skopiowania po zgłoszeniu nowego pracownika.
 function CopyMessageDialog({ info, onClose }) {
+  // Pułapka fokusu, Escape, blokada przewijania i zwrot fokusu (ui/useDialog).
+  const dialogRef = useDialog({ onClose })
   const text = [
     `Zgłoszono zatrudnienie w SZUP (wniosek #${info.id ?? '—'}):`,
     `Pracownik: ${info.name}`,
@@ -65,9 +68,8 @@ function CopyMessageDialog({ info, onClose }) {
     <div role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}
          style={{ position: 'fixed', inset: 0, zIndex: 2500, background: 'rgba(13,20,36,.5)',
                   display: 'grid', placeItems: 'center', padding: 16 }}>
-      <div role="dialog" aria-modal="true" aria-labelledby="hr-copy-title"
-           onKeyDown={e => { if (e.key === 'Escape') onClose() }}
-           style={{ width: '100%', maxWidth: 560, background: 'var(--color-card)', color: 'var(--color-text)',
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="hr-copy-title" tabIndex={-1}
+           style={{ outline: 'none', width: '100%', maxWidth: 560, background: 'var(--color-card)', color: 'var(--color-text)',
                     border: '1px solid var(--color-border)', borderRadius: 10, boxShadow: '0 16px 40px rgba(13,20,36,.3)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 12px 12px 20px',
                       borderBottom: '1px solid var(--color-border)' }}>

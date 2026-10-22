@@ -191,12 +191,15 @@ export default function WorkflowTemplates() {
 }
 
 function TemplateCard({ tpl, onEdit, onReload }) {
+  // Uszkodzony graph_json nie może przejść po cichu (pusta karta) — pokazujemy
+  // ostrzeżenie w karcie (toast w trakcie renderu powtarzałby się przy każdym).
   let graph = null
-  try { graph = JSON.parse(tpl.graph_json) } catch {}
+  let graphBroken = false
+  try { graph = JSON.parse(tpl.graph_json) } catch { graphBroken = true }
   async function del() {
     if (!await ask(`Usunąć szablon "${tpl.name}"?`, { title: 'Potwierdź operację', confirmLabel: 'Usuń szablon', danger: true })) return
     try { await deleteWorkflowTemplate(tpl.id); onReload(); toast(`Usunięto szablon „${tpl.name}”`) }
-    catch (ex) { toast(errorMessage(ex, 'Błąd'), { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Nie udało się usunąć szablonu'), { tone: 'error' }) }
   }
   return (
     <section className="card" style={{ padding: '18px 20px', opacity: tpl.is_active ? 1 : 0.8 }}>
@@ -227,7 +230,13 @@ function TemplateCard({ tpl, onEdit, onReload }) {
                 style={{ color: 'var(--color-error-text)' }}><Trash2 size={15} /></button>
       </div>
 
-      {graph && graph.nodes && (
+      {(graphBroken || (graph && !Array.isArray(graph.nodes))) && (
+        <div className="alert alert--warning" role="note" style={{ marginTop: 14 }}>
+          Nie udało się odczytać kroków tego szablonu (uszkodzony graph_json). Popraw go w edycji
+          albo utwórz szablon od nowa.
+        </div>
+      )}
+      {graph && Array.isArray(graph.nodes) && (
         <ol aria-label="Kroki obiegu" style={{ listStyle: 'none', margin: '14px 0 0', padding: 12,
                                                background: 'var(--bg-secondary)', borderRadius: 8,
                                                display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
@@ -334,7 +343,7 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
       else await createWorkflowTemplate(payload)
       onSaved()
     } catch (ex) {
-      setErr(errorMessage(ex, 'Błąd zapisu'))
+      setErr(errorMessage(ex, 'Nie udało się zapisać szablonu'))
     } finally { setSaving(false) }
   }
 

@@ -345,10 +345,17 @@ export default function Users() {
   async function load() {
     setLoading(true); setLoadErr(null)
     try {
+      // Słowniki komórek i jednostek są pomocnicze — ich błąd nie blokuje listy
+      // kont, ale nie może przejść po cichu (puste filtry i grupowanie).
+      const soft = (what) => (ex) => {
+        toast(errorMessage(ex, `Nie udało się wczytać listy ${what}`) + ' — grupowanie i filtry mogą być niepełne.',
+              { tone: 'warning' })
+        return { data: [] }
+      }
       const [rU, rD, rUn] = await Promise.all([
         listUsers(),
-        listAllDepartments().catch(() => ({ data: [] })),
-        listActiveUnits().catch(() => ({ data: [] })),
+        listAllDepartments().catch(soft('komórek')),
+        listActiveUnits().catch(soft('jednostek')),
       ])
       setUsers(rU.data); setDepts(rD.data); setUnits(rUn.data)
     } catch (ex) {

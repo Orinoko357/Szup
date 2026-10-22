@@ -9,6 +9,7 @@ import { getUserRoles } from '../roles'
 import Segmented from '../components/ui/Segmented'
 import RequestViewShell, {
   buildWorkflowSteps, Section, WorkerCard, deptFull, KindPill, perspectiveLabel, waitingText,
+  useReturnFocus,
 } from '../components/RequestView'
 import PermissionChanges from '../components/PermissionChanges'
 import AddPermissionsPicker from '../components/AddPermissionsPicker'
@@ -110,6 +111,9 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
     }
   }
 
+  // Po zamknięciu widoku wniosku fokus wraca na przycisk wiersza (a11y).
+  useReturnFocus(openReq ? openReq.id : null, !loading)
+
   // Otwarty wniosek = pełnoekranowy widok (zamiast listy), spójnie z Kartoteką.
   if (openReq) {
     return <RequestModal key={openReq.id} request={openReq} onClose={() => setOpenReq(null)}
@@ -150,8 +154,8 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
             )}
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-          <table className="data-table" style={{ minWidth: 1080 }}>
+          <div className="task-table-wrap">
+          <table className="data-table task-table" style={{ minWidth: 1080 }}>
             <thead><tr><th>#</th><th>Pracownik</th><th>Wydział</th><th>Jednostka</th><th>Uprawnień</th><th>Status</th><th>Przypisany</th><th>Czeka</th><th></th></tr></thead>
             <tbody>
               {shown.map(r => (
@@ -187,11 +191,11 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
                   </td>
                   <td>
                     {r.status === 'pending_it' ? (
-                      <button className="btn btn--success btn--sm" onClick={() => setOpenReq(r)}>
+                      <button className="btn btn--success btn--sm" onClick={() => setOpenReq(r)} data-return-focus={r.id}>
                         <CheckCircle size={13} /> {r.kind === 'revoke' ? 'Odbierz' : 'Zrealizuj'}
                       </button>
                     ) : (
-                      <button className="btn btn--ghost btn--sm" onClick={() => setOpenReq(r)}>Podgląd</button>
+                      <button className="btn btn--ghost btn--sm" onClick={() => setOpenReq(r)} data-return-focus={r.id}>Podgląd</button>
                     )}
                   </td>
                 </tr>

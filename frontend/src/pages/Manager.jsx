@@ -1,19 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 import Segmented from '../components/ui/Segmented'
-import { RefreshCw, Check, X, ListChecks, Search, Save, UserCheck } from 'lucide-react'
+import { RefreshCw, Check, X, ListChecks, Search, Save, UserCheck, Undo2 } from 'lucide-react'
 import {
   listRequests, getRequest, workflowAction, listSystems, listPermissions, userPermissions, denyRequestItem,
-  saveRequestDraft, takeOverRequest, errorMessage,
+  saveRequestDraft, takeOverRequest, releaseRequest, errorMessage,
 } from '../api'
 import { fmtDate, serverTs } from '../serverTime'
 import RequestViewShell, {
   buildWorkflowSteps, Section, WorkerCard, deptFull, KindPill, perspectiveLabel, waitingText,
+  useReturnFocus,
 } from '../components/RequestView'
 import { statusLabel, statusBadge, nodeLabel, kindLabel, daysSince, waitText, MANAGER_NODES } from '../labels'
 import { toast, confirmDialog } from '../components/ui/feedback'
 import { ReviewDialog, describeKeys, diffSelection } from '../components/ChangeSummary'
 import CopyFromColleague, { buildCopiedSelection } from '../components/CopyFromColleague'
-import DeclarationModal from '../components/DeclarationModal'
+import DeclarationModal, { declarationRequired } from '../components/DeclarationModal'
 import PermissionChanges, {
   permChangeState, changeStyle, changeTextStyle, ChangeBadge,
 } from '../components/PermissionChanges'
@@ -24,6 +25,18 @@ import PermInput, {
   isScopeGated, missingScopeSystems,
 } from '../components/ItemFields'
 
+
+// Czy wniosek jest na etapie kierownika (wybór / akceptacja kierownika)?
+// Backend podaje `manager_stage`; dla starszych odpowiedzi — z typu węzła.
+function isManagerStage(r) {
+  return r.manager_stage ?? MANAGER_NODES.includes(r.current_node_type)
+}
+
+// Zapisana wersja robocza — `is_draft` z backendu (draft_saved_at bywa
+// nieczyszczone po wysłaniu, więc to tylko awaryjny zamiennik).
+function isDraftReq(r) {
+  return r.is_draft ?? !!r.draft_saved_at
+}
 
 // Postęp realizacji pozycji NADANIA — do pokazania w „Moich wnioskach".
 function grantProgressOf(r) {
@@ -87,9 +100,15 @@ export default function Manager({ view, openId, onOpenConsumed, onViewChange, on
   // w tym jako kierownik wyższego rzędu) — np. nowy pracownik do obsłużenia.
   const toHandle = managerReqs.filter(
     x => x.can_act && MANAGER_NODES.includes(x.current_node_type))
-  // W przygotowaniu w podległych komórkach — przełożony widzi je tylko do
-  // podglądu; staną się „jego” dopiero po „Przejmij”.
-  const underPrep = managerReqs.filter(x => x.can_take_over === true && !x.can_act)
+  // W przygotowaniu u innych — tylko do podglądu:
+  //  - wnioski podległych komórek (przełożony może je „Przejąć”),
+  //  - wnioski przejęte przez kogoś innego (kierownik komórki i pozostali
+  //    przełożeni nie mogą już na nich działać, ale nie mogą też „zniknąć”).
+  const underPrep = managerReqs.filter(x => !x.can_act && (
+    x.can_take_over === true || (isManagerStage(x) && !!x.taken_over_by_id)))
+
+  // Po zamknięciu widoku wniosku fokus wraca na przycisk wiersza (a11y).
+  useReturnFocus(openReq ? openReq.id : null, !loading)
 
   // Otwarty wniosek = pełnoekranowy widok (zamiast listy), spójnie z Kartoteką.
   if (openReq) {
@@ -115,7 +134,7 @@ export default function Manager({ view, openId, onOpenConsumed, onViewChange, on
         {loading ? (
           <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Ładowanie…</div>
         ) : tab === 'handle' ? (
-          <HandleTable rows={toHandle} onOpen={setOpenReq} />
+          <HandleTable rows={toHandle} onOpen={setOpenReq} hasPrep={underPrep.length > 0} />
         ) : (
           <MineTable rows={myReqs} onOpen={setOpenReq} />
         )}
@@ -131,7 +150,17 @@ export default function Manager({ view, openId, onOpenConsumed, onViewChange, on
 }
 
 // --- Zakładka „Wnioski do obsługi" -----------------------------------------
-function HandleTable({ rows, onOpen }) {
+function HandleTable({ rows, onOpen, hasPrep = false }) {
+  if (rows.length === 0 && hasPrep) {
+    // Niżej jest lista „W przygotowaniu…” — bez sugestii, że czegoś brakuje.
+    return <div style={{ padding: 18 }}>
+      <div style={{ fontWeight: 700 }}>Nic nie czeka na Twoją decyzję.</div>
+      <div style={{ fontSize: 13, color: 'var(--color-text-muted)', marginTop: 4 }}>
+        Wnioski w przygotowaniu u innych osób znajdziesz poniżej — możesz je podejrzeć,
+        a wnioski z podległych komórek w razie potrzeby przejąć.
+      </div>
+    </div>
+  }
   if (rows.length === 0) {
     return <div style={{ padding: 18 }}>
       <div style={{ fontWeight: 700 }}>Brak wniosków do obsługi — wszystko załatwione.</div>
@@ -142,8 +171,8 @@ function HandleTable({ rows, onOpen }) {
     </div>
   }
   return (
-    <div style={{ overflowX: 'auto' }}>
-    <table className="data-table" style={{ minWidth: 980 }}>
+    <div className="task-table-wrap">
+    <table className="data-table task-table" style={{ minWidth: 980 }}>
       <thead>
         <tr>
           <th>#</th><th>Pracownik</th><th>Stanowisko</th><th>Uprawnień</th>
@@ -161,13 +190,7 @@ function HandleTable({ rows, onOpen }) {
             <td style={{ color: 'var(--color-text-muted)' }}>{r.worker_position || '—'}</td>
             <td>{r.items?.length || 0}</td>
             <td>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                <span className="badge badge--warning" style={{ fontSize: 12 }}>
-                  {nodeLabel(r.current_node_type, statusLabel(r.status))}
-                </span>
-                {r.is_draft && <DraftBadge />}
-              </div>
-              <TakenOverNote r={r} />
+              <StatusCell r={r} />
             </td>
             <td style={{ fontSize: 12 }}>
               {(() => {
@@ -183,12 +206,14 @@ function HandleTable({ rows, onOpen }) {
             <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{r.requested_by_name || r.created_by_name}</td>
             <td>
               {r.status === 'pending_selection' ? (
-                <button className="btn btn--action btn--sm" onClick={() => onOpen(r)}>
-                  <ListChecks size={13} /> {r.kind === 'revoke' ? 'Wybierz do odebrania' : 'Wybierz uprawnienia'}
+                <button className="btn btn--action btn--sm" onClick={() => onOpen(r)} data-return-focus={r.id}>
+                  {isDraftReq(r)
+                    ? <><Save size={14} /> Kontynuuj</>
+                    : <><ListChecks size={14} /> {r.kind === 'revoke' ? 'Wybierz do odebrania' : 'Wybierz uprawnienia'}</>}
                 </button>
               ) : (
-                <button className="btn btn--action btn--sm" onClick={() => onOpen(r)}>
-                  <Check size={13} /> Decyzja
+                <button className="btn btn--action btn--sm" onClick={() => onOpen(r)} data-return-focus={r.id}>
+                  <Check size={14} /> Decyzja
                 </button>
               )}
             </td>
@@ -211,8 +236,8 @@ function MineTable({ rows, onOpen }) {
     </div>
   }
   return (
-    <div style={{ overflowX: 'auto' }}>
-    <table className="data-table" style={{ minWidth: 820 }}>
+    <div className="task-table-wrap">
+    <table className="data-table task-table" style={{ minWidth: 820 }}>
       <thead>
         <tr>
           <th>#</th><th>Pracownik</th><th>Status</th>
@@ -236,13 +261,7 @@ function MineTable({ rows, onOpen }) {
                 </div>
               </td>
               <td>
-                {/* Wniosek na etapie kierownika = wersja robocza (IT go nie widzi). */}
-                {r.is_draft ? <DraftBadge /> : (
-                  <span className={`badge ${statusBadge(r.status)}`}>
-                    {statusLabel(r.status)}
-                  </span>
-                )}
-                <TakenOverNote r={r} />
+                <StatusCell r={r} label={statusLabel(r.status)} tone={statusBadge(r.status)} />
               </td>
               <td style={{ fontSize: 12 }}>
                 <span style={{ color: 'var(--color-text-muted)' }}>
@@ -263,7 +282,7 @@ function MineTable({ rows, onOpen }) {
               </td>
               <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{fmtDate(r.created_at)}</td>
               <td>
-                <button className="btn btn--ghost btn--sm" onClick={() => onOpen(r)}>Podgląd</button>
+                <button className="btn btn--ghost btn--sm" onClick={() => onOpen(r)} data-return-focus={r.id}>Podgląd</button>
               </td>
             </tr>
           )
@@ -285,6 +304,29 @@ function DraftBadge() {
   )
 }
 
+// Kolumna statusu — jeden wzorzec we wszystkich tabelach kierownika:
+// odznaka etapu/statusu, obok „Roboczy” (zapisana wersja robocza), pod spodem
+// „zapisano …” i „Przejęty przez …”.
+function StatusCell({ r, label, tone = 'badge--warning' }) {
+  const draft = isDraftReq(r)
+  return (
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <span className={`badge ${tone}`} style={{ fontSize: 12 }}>
+          {label || nodeLabel(r.current_node_type, statusLabel(r.status))}
+        </span>
+        {draft && <DraftBadge />}
+      </div>
+      {draft && r.draft_saved_at && (
+        <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 3 }}>
+          zapisano {fmtDate(r.draft_saved_at)}
+        </div>
+      )}
+      <TakenOverNote r={r} />
+    </>
+  )
+}
+
 // „Przejęty przez …” — gdy wniosek przejął przełożony.
 function TakenOverNote({ r }) {
   if (!r.taken_over_by_name) return null
@@ -296,17 +338,26 @@ function TakenOverNote({ r }) {
   )
 }
 
-// --- „W przygotowaniu w podległych komórkach” (podgląd + „Przejmij”) -------
+// --- „W przygotowaniu…” (podgląd + „Przejmij”; przejęte przez innych) -------
 function PrepTable({ rows, onOpen }) {
+  // Sekcja dla przełożonego (wnioski podległych komórek) albo — gdy są tu tylko
+  // wnioski przejęte — dla kierownika komórki, który nie może już na nich działać.
+  const anySub = rows.some(r => r.can_take_over)
+  const anyTaken = rows.some(r => r.taken_over_by_id)
   return (
-    <div style={{ overflowX: 'auto' }}>
+    <div className="task-table-wrap">
       <div style={{ padding: '14px 18px 4px' }}>
-        <div style={{ fontWeight: 700 }}>W przygotowaniu w podległych komórkach</div>
+        <h2 style={{ margin: 0, fontSize: 'inherit', fontWeight: 700, color: 'var(--color-heading)' }}>
+          {anySub ? 'W przygotowaniu w podległych komórkach' : 'Przejęte przez inną osobę'}
+        </h2>
         <div style={{ fontSize: 13, color: 'var(--color-text-muted)', marginTop: 2 }}>
-          Wnioski obsługuje kierownik komórki. Możesz je podejrzeć i — w razie potrzeby — przejąć.
+          {anySub
+            ? 'Wnioski obsługuje kierownik komórki. Możesz je podejrzeć i — w razie potrzeby — przejąć.'
+            : 'Te wnioski obsługuje teraz osoba, która je przejęła — możesz je tylko podejrzeć. Gdy je odda, wrócą do kierownika komórki.'}
+          {anySub && anyTaken && ' Wnioski przejęte przez inną osobę są tylko do podglądu.'}
         </div>
       </div>
-      <table className="data-table" style={{ minWidth: 820 }}>
+      <table className="data-table task-table" style={{ minWidth: 820 }}>
         <thead>
           <tr>
             <th>#</th><th>Pracownik</th><th>Komórka</th><th>Status</th><th>Od kiedy</th><th></th>
@@ -322,15 +373,7 @@ function PrepTable({ rows, onOpen }) {
               </td>
               <td>{deptFull(r.department_name, r.department_description) || '—'}</td>
               <td>
-                {/* Zapisana wersja robocza vs. jeszcze nieruszony przez kierownika. */}
-                {r.draft_saved_at
-                  ? <DraftBadge />
-                  : <span className="badge badge--info" style={{ fontSize: 12 }}>Nowy</span>}
-                {r.draft_saved_at && (
-                  <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 3 }}>
-                    zapisano {fmtDate(r.draft_saved_at)}
-                  </div>
-                )}
+                <StatusCell r={r} />
               </td>
               <td style={{ fontSize: 12 }}>
                 <span style={{ color: 'var(--color-text-muted)' }}>
@@ -339,7 +382,7 @@ function PrepTable({ rows, onOpen }) {
                 <div style={{ color: 'var(--color-text-muted)' }}>złożono {fmtDate(r.created_at)}</div>
               </td>
               <td>
-                <button className="btn btn--ghost btn--sm" onClick={() => onOpen(r)}>Podgląd</button>
+                <button className="btn btn--ghost btn--sm" onClick={() => onOpen(r)} data-return-focus={r.id}>Podgląd</button>
               </td>
             </tr>
           ))}
@@ -365,6 +408,15 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   //  - 2-stopniowa: kierownik → kierownik nadrzędny → IT
   //  - 1-stopniowa: kierownik → IT (bez akceptacji wyższego rzędu)
   const twoStage = !!r.requires_higher_approval
+  // Dokąd FAKTYCZNIE trafi wniosek po wysłaniu bieżącego kroku — z backendu
+  // (`next_node_type`, np. przełożony po przejęciu pomija własną akceptację
+  // wyższą). Bez tego pola — reguła backendu: komórka dwustopniowa → akceptacja
+  // wyższa dla każdego rodzaju wniosku (także odebrania).
+  const nextNode = r.next_node_type || null
+  const toApproval = nextNode
+    ? ['higher_manager_approve', 'manager_approve'].includes(nextNode)
+    : twoStage
+  const approvalWho = nextNode === 'manager_approve' ? 'kierownika komórki' : 'kierownika nadrzędnego'
   // Przełożony może wniosek z podległej komórki tylko podejrzeć i „Przejąć”.
   const canTakeOver = !!r.can_take_over && !r.can_act
   // Wniosek z zapisaną wersją roboczą — zaznaczenie odtwarzamy z jego pozycji.
@@ -431,7 +483,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   // Migawka zaznaczenia po załadowaniu — do ostrzeżenia o niezapisanych zmianach.
   const initialSel = useRef(null)
   const selKey = () => JSON.stringify([[...picked].sort(), fieldValues])
-  useEffect(() => { if (!loading) initialSel.current = selKey() }, [loading])  // eslint-disable-line
+  useEffect(() => { if (!loading) initialSel.current = selKey() }, [loading])
   // Oświadczenie wnioskującego — gdy backend zażąda go (428), pokazujemy modal
   // z jego treścią i ponawiamy akcję z podpisem. `declPending` = akcja do ponowienia.
   const [declText, setDeclText] = useState('')
@@ -671,17 +723,17 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       toast(action === 'reject'
         ? `Odrzucono wniosek #${r.id}.`
         : isSelect
-          ? (twoStage ? `Wybór wysłany do akceptacji kierownika nadrzędnego (#${r.id}).`
-                      : `Wybór zatwierdzony — wniosek #${r.id} trafił do realizacji przez IT.`)
+          ? (toApproval ? `Wybór wysłany do akceptacji ${approvalWho} (#${r.id}).`
+                        : `Wybór zatwierdzony — wniosek #${r.id} trafił do realizacji przez IT.`)
           : `Zatwierdzono wniosek #${r.id}.`)
       setReviewOpen(false)
       onDone()
     } catch (ex) {
       const st = ex.response?.status
-      const det = ex.response?.data?.detail
-      if (st === 428 && det?.code === 'DECLARATION_REQUIRED') {
+      const declText428 = declarationRequired(ex)
+      if (declText428 != null) {
         // Zbierz oświadczenie i ponów TĘ akcję.
-        setDeclText(det.declaration_text || '')
+        setDeclText(declText428)
         setDeclPending(action)
         setReviewOpen(false)
         setBusy(false)
@@ -711,6 +763,19 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     try {
       const data = { items: buildActionBody('approve').items }
       if (comment.trim()) data.comment = comment
+      // Jak przy wysłaniu: 409, jeśli w międzyczasie ktoś wykonał ten krok.
+      if (r.current_node_id) data.expected_node_id = r.current_node_id
+      // Pusta wersja robocza usunęłaby pozycje wpisane wcześniej (np. przez kadry) —
+      // backend wymaga wtedy świadomego potwierdzenia (allow_empty).
+      if (data.items.length === 0 && (r.items || []).length > 0) {
+        if (!(await confirmDialog({
+          title: 'Zapisać wersję roboczą bez uprawnień?',
+          message: 'Nie zaznaczono żadnych uprawnień, a wniosek zawiera pozycje wpisane wcześniej. '
+            + 'Zapis usunie je z wniosku.',
+          confirmLabel: 'Zapisz bez pozycji', danger: true,
+        }))) { setBusy(false); return }
+        data.allow_empty = true
+      }
       await saveRequestDraft(r.id, data)
       toast(`Zapisano wersję roboczą wniosku #${r.id}.`)
       onDone()
@@ -740,7 +805,32 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     } catch (ex) {
       setErr(errorMessage(ex, 'Nie udało się przejąć wniosku'))
       setBusy(false)
-      if (ex.response?.status === 409 || ex.response?.status === 403) onRefresh?.()
+      // Np. ktoś przejął wniosek chwilę wcześniej — pobierz bieżący stan,
+      // żeby baner z „Przejmij” nie został na nieaktualnym widoku.
+      const st = ex.response?.status
+      if (st === 409 || st === 403) refreshAfterConflict(ex)
+    }
+  }
+
+  // „Oddaj” — przejmujący zwalnia przejęcie; wniosek wraca do kierownika komórki.
+  async function release() {
+    const dept = deptFull(r.department_name, r.department_description)
+    if (!(await confirmDialog({
+      title: `Oddać wniosek #${r.id}?`,
+      message: `Wniosek wróci do kierownika komórki ${dept}. Zapisana wersja robocza zostaje — `
+        + 'kierownik może ją dokończyć albo zmienić.',
+      confirmLabel: 'Oddaj wniosek',
+    }))) return
+    setBusy(true); setErr(null)
+    try {
+      const res = await releaseRequest(r.id)
+      toast(`Oddano wniosek #${r.id} — wrócił do kierownika komórki.`)
+      onRefresh?.(res.data)
+    } catch (ex) {
+      setErr(errorMessage(ex, 'Nie udało się oddać wniosku'))
+      setBusy(false)
+      const st = ex.response?.status
+      if (st === 409 || st === 403) refreshAfterConflict(ex)
     }
   }
 
@@ -828,7 +918,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     : describeKeys(toRevoke, systems, permsBySys)
 
   // Dokąd trafi wniosek po wysłaniu — ta sama etykieta na przycisku i w podsumowaniu.
-  const sendLabel = twoStage && !isRevoke ? 'Wyślij do akceptacji' : 'Wyślij do realizacji'
+  const sendLabel = toApproval ? 'Wyślij do akceptacji' : 'Wyślij do realizacji'
 
   const title = isSelect
     ? (isRevoke ? 'Odebranie uprawnień' : 'Wybór uprawnień')
@@ -903,21 +993,36 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           {/* Podgląd przełożonego: wniosek wciąż u kierownika podległej komórki. */}
           {canTakeOver && (
             <div role="note" className="alert alert--info"
-                 style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', fontSize: 14 }}>
+                 style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', fontSize: 14,
+                          marginBottom: 16 }}>
               <span style={{ flex: '1 1 280px' }}>
-                Wniosek jest w przygotowaniu u kierownika komórki{' '}
-                <strong>{deptFull(r.department_name, r.department_description)}</strong>.
-                Możesz go przejąć — wtedy dalsza obsługa należy do Ciebie.
+                {r.taken_over_by_name
+                  ? <>Wniosek komórki <strong>{deptFull(r.department_name, r.department_description)}</strong>{' '}
+                      obsługuje teraz <strong>{r.taken_over_by_name}</strong>.</>
+                  : <>Wniosek jest w przygotowaniu u kierownika komórki{' '}
+                      <strong>{deptFull(r.department_name, r.department_description)}</strong>.</>}
+                {' '}Możesz go przejąć — wtedy dalsza obsługa należy do Ciebie.
               </span>
               <button className="btn btn--action btn--sm" onClick={takeOver} disabled={busy}>
                 <UserCheck size={13} /> Przejmij
               </button>
             </div>
           )}
-          {r.taken_over_by_name && (
-            <div role="note" className="alert alert--info" style={{ fontSize: 13 }}>
-              Wniosek przejęty przez <strong>{r.taken_over_by_name}</strong>
-              {r.taken_over_at ? ` (${fmtDate(r.taken_over_at)})` : ''}.
+          {r.taken_over_by_name && !canTakeOver && (
+            <div role="note" className="alert alert--info"
+                 style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', fontSize: 13,
+                          marginBottom: 16 }}>
+              <span style={{ flex: '1 1 280px' }}>
+                Wniosek przejęty przez <strong>{r.taken_over_by_name}</strong>
+                {r.taken_over_at ? ` (${fmtDate(r.taken_over_at)})` : ''}.
+                {!r.can_act && ' Możesz go tylko podejrzeć.'}
+              </span>
+              {r.can_release && (
+                <button className="btn btn--ghost btn--sm" onClick={release} disabled={busy}
+                        title="Zwolnij przejęcie — wniosek wróci do kierownika komórki">
+                  <Undo2 size={14} /> Oddaj
+                </button>
+              )}
             </div>
           )}
 
@@ -968,11 +1073,13 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                   : <>Zaznacz nowe, aby je <strong>nadać</strong>; odznacz posiadane, aby je <strong>odebrać</strong>.</>}
               </p>
               {/* Jawna informacja, dokąd trafi wniosek po zatwierdzeniu. */}
-              <div role="note" className={`alert ${twoStage ? 'alert--info' : 'alert--success'}`}
+              <div role="note" className={`alert ${toApproval ? 'alert--info' : 'alert--success'}`}
                    style={{ fontSize: 13, marginBottom: 12, border: 'none', borderRadius: 8, padding: '10px 14px' }}>
-                {twoStage
-                  ? 'Ścieżka dwustopniowa: po zatwierdzeniu wniosek trafi do akceptacji kierownika nadrzędnego, a dopiero potem do realizacji przez IT.'
-                  : 'Ścieżka jednostopniowa: po zatwierdzeniu wniosek trafi bezpośrednio do realizacji przez IT (bez akceptacji wyższej).'}
+                {toApproval
+                  ? `Ścieżka dwustopniowa: po zatwierdzeniu wniosek trafi do akceptacji ${approvalWho}, a dopiero potem do realizacji przez IT.`
+                  : twoStage
+                    ? 'Po zatwierdzeniu wniosek trafi bezpośrednio do realizacji przez IT — akceptacja wyższa nie jest w tym przypadku potrzebna.'
+                    : 'Ścieżka jednostopniowa: po zatwierdzeniu wniosek trafi bezpośrednio do realizacji przez IT (bez akceptacji wyższej).'}
               </div>
 
               {/* Pasek filtrów + szukajka (jak w projekcie) — tylko ścieżka nadania. */}
@@ -1222,10 +1329,10 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
         workerName={r.worker_name}
         grants={reviewGrants}
         revokes={reviewRevokes}
-        target={isRevoke
-          ? 'Po wysłaniu wniosek trafi do realizacji (odebranie uprawnień).'
-          : twoStage
-            ? 'Po wysłaniu wniosek trafi do akceptacji kierownika nadrzędnego, potem do IT.'
+        target={toApproval
+          ? `Po wysłaniu wniosek trafi do akceptacji ${approvalWho}, potem do IT${isRevoke ? ' (odebranie uprawnień)' : ''}.`
+          : isRevoke
+            ? 'Po wysłaniu wniosek trafi do realizacji (odebranie uprawnień).'
             : 'Po wysłaniu wniosek trafi bezpośrednio do realizacji przez IT.'}
         confirmLabel={sendLabel}
         busy={busy}

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 /**
  * Wspólna obsługa okna dialogowego — używana przez ui/Modal oraz okna
@@ -43,10 +43,15 @@ export default function useDialog({ onClose, closable = true } = {}) {
   // Najnowsze wartości bez ponownego montowania efektu.
   const opts = useRef({ onClose, closable })
   opts.current = { onClose, closable }
+  // Element, który otworzył okno — zapamiętany już przy PIERWSZYM renderze.
+  // W efekcie byłoby za późno: React wykonuje `autoFocus` w fazie commit, przed
+  // efektami, więc document.activeElement wskazywałby już przycisk w oknie
+  // (po zamknięciu nieistniejący) i fokus lądowałby na <body>.
+  const [opener] = useState(() => (typeof document !== 'undefined' ? document.activeElement : null))
 
   useEffect(() => {
     const node = ref.current
-    const prev = document.activeElement
+    const prev = opener
     const token = {}
     stack.push(token)
     const unlock = lockScroll()
@@ -81,7 +86,9 @@ export default function useDialog({ onClose, closable = true } = {}) {
       const i = stack.indexOf(token)
       if (i >= 0) stack.splice(i, 1)
       unlock()
-      if (prev && prev.isConnected && typeof prev.focus === 'function') prev.focus({ preventScroll: true })
+      if (prev && prev !== document.body && prev.isConnected && typeof prev.focus === 'function') {
+        prev.focus({ preventScroll: true })
+      }
     }
   }, [])
 

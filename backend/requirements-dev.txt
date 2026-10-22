@@ -1,0 +1,11 @@
+# Zależności deweloperskie i testowe — NIE instalować na produkcji
+# (deploy/deploy.sh instaluje wyłącznie requirements.txt).
+#   pip install -r requirements-dev.txt
+-r requirements.txt
+
+# Testy (E2E) — sieć bezpieczeństwa regresji (G1)
+pytest>=8.0.0,<10
+# TestClient ze starlette
+httpx>=0.27.0,<0.29
+# generowanie przykładowych PDF-ów w testach importu (tests/test_perm_import.py)
+reportlab>=4.0.0,<6

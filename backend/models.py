@@ -376,6 +376,11 @@ class AccessRequest(SQLModel, table=True):
     taken_over_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
     taken_over_by_name: Optional[str] = None   # snapshot na wypadek usunięcia konta
     taken_over_at: Optional[datetime] = None
+    # Typ bieżącego węzła AKTYWNEGO obiegu (np. "select_permissions",
+    # "it_execute"); NULL po zakończeniu/odrzuceniu. Kopia stanu instancji
+    # utrzymywana przez silnik (`_sync_request_status`) — pozwala filtrować
+    # widoczność etapu kierownika komórki już w SQL (lista z LIMIT/OFFSET).
+    current_node_type: Optional[str] = Field(default=None, index=True)
 
 
 class RequestItem(SQLModel, table=True):
@@ -410,6 +415,21 @@ class RequestItem(SQLModel, table=True):
     fulfilled: bool = Field(default=False, index=True)
     fulfilled_by_user_id: Optional[int] = Field(default=None, foreign_key="user.id")
     fulfilled_at: Optional[datetime] = None
+
+
+class RequestEvent(SQLModel, table=True):
+    """Zdarzenia etapu kierownika komórki, które NIE są krokami obiegu:
+    zapis wersji roboczej, przejęcie i oddanie wniosku przez przełożonego.
+
+    Osobno od `WorkflowStep`, żeby nie naruszać łańcucha podpisów kroków.
+    Pokazywane w historii wniosku (`GET /requests/{id}/workflow` → `events`)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    request_id: int = Field(foreign_key="accessrequest.id", index=True)
+    action: str                                     # "draft" | "take_over" | "release"
+    actor_user_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    actor_name: Optional[str] = None                # snapshot na wypadek usunięcia konta
+    note: Optional[str] = None                      # krótki opis (np. od kogo przejęto)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
 
 # ---------------------------------------------------------------------------

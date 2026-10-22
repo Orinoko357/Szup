@@ -7,10 +7,15 @@ starlette TestClient — bez sieci, bez osobnego procesu uvicorn.
 
 WAŻNE: zmienne środowiskowe MUSZĄ być ustawione ZANIM zaimportujemy `database`
 / `main`, bo silnik SQLite jest tworzony przy imporcie na podstawie env.
+
+Szybkość: `init_db()` (create_all, migracje, triggery, seed) wykonujemy RAZ
+na sesję do pliku-wzorca, a każdy test dostaje jego kopię. bcrypt w testach
+liczy 4 rundy zamiast 12 — hasła i tak się weryfikują, tylko szybciej.
 """
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import uuid
 
@@ -18,17 +23,22 @@ import pytest
 
 # --- env PRZED importem aplikacji -------------------------------------------
 _TMP_DIR = tempfile.mkdtemp(prefix="szup-tests-")
+_DB_FILE = os.path.join(_TMP_DIR, "test.db")
+_TEMPLATE_DB = os.path.join(_TMP_DIR, "template.db")
 os.environ["SZUP_DATA_DIR"] = _TMP_DIR
-os.environ["SZUP_DB_URL"] = f"sqlite:///{os.path.join(_TMP_DIR, 'test.db')}"
+os.environ["SZUP_DB_URL"] = f"sqlite:///{_DB_FILE}"
 os.environ["SZUP_WORKFLOW_SECRET"] = "pytest-secret"
 # Domyślnie tryb testowy (passwordless) WYŁĄCZONY — testy C2 włączają go jawnie.
 os.environ.pop("SZUP_ALLOW_TEST_MODE", None)
 
 from fastapi.testclient import TestClient  # noqa: E402
-from sqlmodel import SQLModel              # noqa: E402
 
 from database import engine, init_db       # noqa: E402
 from main import app                       # noqa: E402
+from services import auth_service          # noqa: E402
+
+# Minimalna liczba rund bcrypt — produkcja zostaje przy domyślnych 12.
+auth_service.pwd_context.update(bcrypt__rounds=4)
 
 PW = "Testowe123!@#XYZ"   # spełnia politykę siły hasła
 # Domyślne oświadczenie wnioskującego wstrzykiwane automatycznie w akcje
@@ -36,50 +46,46 @@ PW = "Testowe123!@#XYZ"   # spełnia politykę siły hasła
 DEFAULT_DECLARATION = {"declared_by_name": "Testowy Kierownik", "declared_date": "2026-07-23"}
 
 
-def _drop_everything():
-    """Usuń wszystkie tabele przy WYŁĄCZONYCH kluczach obcych.
+def _remove_db_files() -> None:
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        try:
+            os.remove(_DB_FILE + suffix)
+        except FileNotFoundError:
+            pass
 
-    Z FK=ON `DROP TABLE` robi implicit-DELETE, który przy cyklu department↔user
-    narusza więzy. PRAGMA foreign_keys musi być ustawiony poza transakcją, więc
-    działamy na surowym połączeniu DBAPI.
-    """
-    raw = engine.raw_connection()
-    try:
-        cur = raw.cursor()
-        cur.execute("PRAGMA foreign_keys=OFF")
-        cur.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' "
-            "AND name NOT LIKE 'sqlite_%'"
-        )
-        for (name,) in cur.fetchall():
-            cur.execute(f'DROP TABLE IF EXISTS "{name}"')
-        raw.commit()
-        # WAŻNE: przywróć egzekwowanie FK PRZED zwrotem połączenia do puli —
-        # inaczej pula oddałaby je z foreign_keys=OFF (listener 'connect' nie
-        # odpala się przy checkout), fałszywie wyłączając FK w kolejnych żądaniach.
-        cur.execute("PRAGMA foreign_keys=ON")
-        raw.commit()
-        cur.close()
-    finally:
-        raw.close()
-    # Dodatkowa gwarancja: wyrzuć pulę połączeń, by żadne nie zostało z FK=OFF.
+
+@pytest.fixture(scope="session")
+def _template_db():
+    """Zaseedowana baza-wzorzec: jeden `init_db()` na całą sesję testów."""
     engine.dispose()
+    _remove_db_files()
+    init_db()   # create_all + migracje + triggery + seed domyślnego obiegu
+    engine.dispose()   # zamknij połączenia, zanim skopiujemy plik
+    shutil.copyfile(_DB_FILE, _TEMPLATE_DB)
+    yield _TEMPLATE_DB
+
+
+def _reset_module_state() -> None:
+    """Wyzeruj stan modułowy (poza bazą), który przeciekałby między testami."""
+    from routers import auth as _auth
+    from routers import settings as _settings
+    # Limiter prób logowania per-IP — inaczej po ~10 logowaniach kolejne
+    # testy dostają 429/403.
+    _auth._ip_hits.clear()
+    _auth._sso_codes.clear()
+    _settings._factory_reset_failures.clear()
 
 
 @pytest.fixture(autouse=True)
-def _fresh_db():
-    """Każdy test dostaje świeżą, ponownie zaseedowaną bazę."""
-    _drop_everything()
-    init_db()   # create_all + migracje + triggery + seed domyślnego obiegu
-    # Wyzeruj globalny limiter prób logowania per-IP (stan modułowy, nie w bazie),
-    # inaczej po ~10 logowaniach kolejne testy dostają 429/403.
-    try:
-        from routers import auth as _auth
-        _auth._ip_hits.clear()
-    except Exception:
-        pass
+def _fresh_db(_template_db):
+    """Każdy test dostaje świeżą kopię zaseedowanej bazy."""
+    # Pula nie może trzymać połączeń do podmienianego pliku.
+    engine.dispose()
+    _remove_db_files()
+    shutil.copyfile(_template_db, _DB_FILE)
+    _reset_module_state()
     yield
-    _drop_everything()
+    engine.dispose()
 
 
 @pytest.fixture()

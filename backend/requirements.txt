@@ -20,8 +20,4 @@ xlrd>=2.0.1,<2.1
 # i pypdfium2 do renderowania stron, którego tu nie potrzebujemy.
 pdfminer.six>=20231228,<20270000
 
-# Testy (E2E) — sieć bezpieczeństwa regresji (G1)
-pytest>=8.0.0,<10
-httpx>=0.27.0,<0.29
-# generowanie przykładowych PDF-ów w testach importu (tests/test_perm_import.py)
-reportlab>=4.0.0,<6
+# Narzędzia testowe są w requirements-dev.txt — produkcja ich nie instaluje.

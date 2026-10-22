@@ -5,13 +5,14 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from database import get_session
-from models import Unit, Department, DepartmentDeputy, User, UserUnit, has_role
+from models import (Unit, Department, DepartmentDeputy, SecuritySeverity, User, UserUnit,
+                    has_role)
 from services.auth_service import get_current_user
 from services.permissions import require_admin, is_admin
 
@@ -27,6 +28,34 @@ def _guard_self_post(current_user: User, user_id: Optional[int]) -> None:
             status.HTTP_403_FORBIDDEN,
             "Administrator nie może przypisać samego siebie jako kierownika ani zastępcy "
             "— poproś o to superadmina",
+        )
+
+
+def _audit_post_change(session: Session, request: Optional[Request], actor: User, *,
+                       action: str, target_type: str, target_id: int, name: str,
+                       old_user_id: Optional[int], new_user_id: Optional[int],
+                       extra: Optional[dict] = None) -> None:
+    """Zmiana stanowiska w strukturze (kierownik komórki/jednostki, zastępca) →
+    wpis w audit logu. Objęcie stanowiska daje kroki kierownicze obiegu i rolę
+    „manager”, więc dodatkowo trafia do zdarzeń bezpieczeństwa (medium)."""
+    if old_user_id == new_user_id:
+        return
+    from services.audit import record_event, request_meta
+    from services.security_events import emit as emit_security_event
+    meta = request_meta(request)
+    details = {"name": name, "old_user_id": old_user_id, "new_user_id": new_user_id,
+               **(extra or {})}
+    record_event(session, action=action, user_id=actor.id, username=actor.username,
+                 target_type=target_type, target_id=target_id, ip=meta["ip"],
+                 user_agent=meta["user_agent"], details=details)
+    if new_user_id:
+        new_user = session.get(User, new_user_id)
+        who = (new_user.username if new_user else f"id={new_user_id}")
+        emit_security_event(
+            session, event_type="structure.post_assigned", source="units",
+            severity=SecuritySeverity.medium,
+            summary=f"{who} obejmuje stanowisko w „{name}” ({action}) — przez {actor.username}",
+            details={"action": action, **details}, user_id=actor.id, ip=meta["ip"],
         )
 
 
@@ -138,6 +167,7 @@ def create_unit(
 def update_unit(
     unit_id: int,
     data: UnitUpdate,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin),
 ):
@@ -163,6 +193,9 @@ def update_unit(
         from services.org_sync import sync_after_unit_manager_change
         sync_after_unit_manager_change(session, prev_manager_id, unit.manager_user_id)
         session.commit(); session.refresh(unit)
+        _audit_post_change(session, request, current_user, action="unit.manager_changed",
+                           target_type="unit", target_id=unit.id, name=unit.name,
+                           old_user_id=prev_manager_id, new_user_id=unit.manager_user_id)
     return _unit_read(session, unit)
 
 
@@ -326,6 +359,7 @@ def list_active_departments(
 @router.post("/departments", response_model=DepartmentRead, status_code=status.HTTP_201_CREATED)
 def create_department(
     data: DepartmentCreate,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin),
 ):
@@ -357,6 +391,9 @@ def create_department(
     from services.org_sync import sync_after_manager_change
     sync_after_manager_change(session, None, dept.manager_user_id)
     session.commit(); session.refresh(dept)
+    _audit_post_change(session, request, current_user, action="department.manager_changed",
+                       target_type="department", target_id=dept.id, name=dept.name,
+                       old_user_id=None, new_user_id=dept.manager_user_id)
     return _enrich_dept(dept, session)
 
 
@@ -364,6 +401,7 @@ def create_department(
 def update_department(
     dept_id: int,
     data: DepartmentUpdate,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin),
 ):
@@ -408,6 +446,9 @@ def update_department(
         from services.org_sync import sync_after_manager_change
         sync_after_manager_change(session, prev_manager_id, dept.manager_user_id)
         session.commit(); session.refresh(dept)
+        _audit_post_change(session, request, current_user, action="department.manager_changed",
+                           target_type="department", target_id=dept.id, name=dept.name,
+                           old_user_id=prev_manager_id, new_user_id=dept.manager_user_id)
     return _enrich_dept(dept, session)
 
 
@@ -427,6 +468,7 @@ class AutoManagersResult(BaseModel):
 @router.post("/departments/auto-managers", response_model=AutoManagersResult)
 def auto_assign_managers(
     data: AutoManagersIn,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin),
 ):
@@ -442,6 +484,7 @@ def auto_assign_managers(
 
     assigned = skipped = ambiguous = none = 0
     details: list[str] = []
+    changes: list[tuple[Department, Optional[int], int]] = []
 
     users = session.exec(select(User).where(User.is_active == True)).all()  # noqa: E712
     # Admin (nie superadmin) nie może w ten sposób przypisać SIEBIE (_guard_self_post).
@@ -475,12 +518,17 @@ def auto_assign_managers(
         dept.manager_user_id = chosen.id
         session.add(dept)
         sync_after_manager_change(session, prev, chosen.id)
+        changes.append((dept, prev, chosen.id))
         assigned += 1
         who = chosen.full_name or chosen.username
         extra = f" ({chosen.title})" if getattr(chosen, "title", None) else ""
         details.append(f"„{dept.name}” → {who}{extra}")
 
     session.commit()
+    for dept, prev, new in changes:
+        _audit_post_change(session, request, current_user, action="department.manager_changed",
+                           target_type="department", target_id=dept.id, name=dept.name,
+                           old_user_id=prev, new_user_id=new, extra={"source": "auto-managers"})
     return AutoManagersResult(
         assigned=assigned, skipped_has_manager=skipped,
         ambiguous=ambiguous, no_candidate=none, details=details)
@@ -992,6 +1040,7 @@ def list_deputies(
 def add_deputy(
     department_id: int,
     data: DeputyIn,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin),
 ):
@@ -1026,6 +1075,10 @@ def add_deputy(
     from services.org_sync import grant_manager_role
     if grant_manager_role(session, data.user_id):
         session.commit()
+    _audit_post_change(session, request, current_user, action="department.deputy_added",
+                       target_type="department", target_id=dept.id, name=dept.name,
+                       old_user_id=None, new_user_id=data.user_id,
+                       extra={"role_label": row.role_label})
     return _serialize_deputy(session, row)
 
 
@@ -1048,14 +1101,20 @@ def update_deputy(
 @router.delete("/departments/deputies/{deputy_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_deputy(
     deputy_id: int,
+    request: Request,
     session: Session = Depends(get_session),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
 ):
     row = session.get(DepartmentDeputy, deputy_id)
     if not row:
         raise HTTPException(404, "Zastępca nie istnieje")
     ex_user_id = row.user_id
+    dept = session.get(Department, row.department_id)
     session.delete(row); session.commit()
+    _audit_post_change(session, request, current_user, action="department.deputy_removed",
+                       target_type="department", target_id=row.department_id,
+                       name=dept.name if dept else f"id={row.department_id}",
+                       old_user_id=ex_user_id, new_user_id=None)
     # Jeśli nie kieruje już niczym i nie jest gdzie indziej zastępcą — zdejmij rolę.
     from services.org_sync import revoke_manager_role_if_unused
     if revoke_manager_role_if_unused(session, ex_user_id):

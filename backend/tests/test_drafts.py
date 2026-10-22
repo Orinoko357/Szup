@@ -113,13 +113,19 @@ def test_draft_save_replaces_items_without_advancing(api):
     assert _items(rid) == [(w["sid2"], w["pid2"])]
     assert api.node_type(rid, kier) == "select_permissions"
 
-    # Pusta wersja robocza jest dozwolona.
+    # Pusta wersja robocza na wniosku z pozycjami wymaga świadomego potwierdzenia.
     r = api.post(f"/requests/{rid}/draft", token=kier, json={"items": []})
+    assert r.status_code == 400
+    assert _items(rid) == [(w["sid2"], w["pid2"])]
+    r = api.post(f"/requests/{rid}/draft", token=kier, json={"items": [], "allow_empty": True})
     assert r.status_code == 200, r.text
     assert _items(rid) == []
 
     with Session(engine) as s:
-        assert s.exec(select(AuditLog).where(AuditLog.action == "request.draft_saved")).first()
+        row = s.exec(select(AuditLog).where(AuditLog.action == "request.draft_saved")).first()
+        assert row
+        # Dziennik (dostępny dla administratora) nie zawiera treści wersji roboczej.
+        assert "permission_id" not in (row.details or "")
 
     # Osoby spoza kręgu (IT) i przełożony bez przejęcia nie zapiszą wersji roboczej.
     assert api.post(f"/requests/{rid}/draft", token=api.login("it"),

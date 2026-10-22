@@ -165,7 +165,7 @@ function PermRow({ p, onChanged, selected = false, onToggleSel }) {
   async function del() {
     if (!await ask('Usunąć uprawnienie?', { title: 'Potwierdź operację', confirmLabel: 'Usuń uprawnienie', danger: true })) return
     try { await deletePermission(p.id); onChanged(); toast('Usunięto uprawnienie') }
-    catch (ex) { toast(errorMessage(ex, 'Błąd'), { tone: 'error' }) }
+    catch (ex) { toast(errorMessage(ex, 'Nie udało się usunąć uprawnienia'), { tone: 'error' }) }
   }
 
   if (editing) {
@@ -287,7 +287,7 @@ function GroupAddPerm({ systemId, group, subgroup = '', label, onAdded }) {
       setName(''); setDesc(''); setType('none'); setOpts(''); setRequired(false); setPrompt('')
       onAdded()
     } catch (ex) {
-      toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' })
+      toast(errorMessage(ex, 'Nie udało się dodać uprawnienia'), { tone: 'error' })
     } finally { setBusy(false) }
   }
 
@@ -891,7 +891,7 @@ function AddSystemForm({ units, vendors = [], allSystems = [], onCancel, onSaved
       }
       onSaved()
     } catch (ex) {
-      setErr(errorMessage(ex, 'Błąd zapisu'))
+      setErr(errorMessage(ex, 'Nie udało się dodać programu'))
     } finally { setSaving(false) }
   }
 
@@ -1349,7 +1349,7 @@ function EditSystemForm({ system: s, units, vendors = [], onCancel, onSaved }) {
       await updateSystem(s.id, payload)
       onSaved()
     } catch (ex) {
-      setErr(errorMessage(ex, 'Błąd zapisu'))
+      setErr(errorMessage(ex, 'Nie udało się zapisać programu'))
     } finally { setSaving(false) }
   }
 
@@ -1480,7 +1480,7 @@ function PermissionsPanel({ system: s }) {
       await setPermissionGroupState(s.id, group, active)
       load()
     } catch (ex) {
-      toast(errorMessage(ex, 'Błąd'), { tone: 'error' })
+      toast(errorMessage(ex, 'Nie udało się zmienić stanu grupy'), { tone: 'error' })
     }
   }
 
@@ -1523,7 +1523,7 @@ function PermissionsPanel({ system: s }) {
               + `Zachowano (użyte we wnioskach): ${r.data.skipped}`, { tone: 'info' })
       }
     } catch (ex) {
-      toast(errorMessage(ex, 'Błąd'), { tone: 'error' })
+      toast(errorMessage(ex, 'Nie udało się usunąć grupy'), { tone: 'error' })
     }
   }
 

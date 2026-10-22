@@ -58,8 +58,14 @@ klist -k "$KEYTAB" 2>/dev/null | sed 's/^/          /' | head -12 || true
 # 3. Vhost musi mieć IncludeOptional (nowa wersja deploy/szup-apache.conf)
 [ -f "$SITE_CONF" ] || fail "brak $SITE_CONF — najpierw: cp deploy/szup-apache.conf $SITE_CONF"
 grep -q "szup-sso.conf" "$SITE_CONF" || {
+    # Vhost bywa zmieniany lokalnie (certyfikaty, aliasy) — zachowaj kopię,
+    # żeby dało się przenieść te zmiany do nowej wersji.
+    SITE_BACKUP="$SITE_CONF.bak-$(date +%F-%H%M%S)"
+    cp -p "$SITE_CONF" "$SITE_BACKUP"
     cp deploy/szup-apache.conf "$SITE_CONF"
     ok "zaktualizowano $SITE_CONF (nowa wersja z deploy/)"
+    echo "        poprzednia wersja: $SITE_BACKUP — przenieś lokalne zmiany (np. ścieżki certyfikatów):"
+    echo "        diff -u $SITE_BACKUP $SITE_CONF"
 }
 
 # 4. Sekret między Apache a aplikacją

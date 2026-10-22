@@ -112,6 +112,19 @@ def _send(to_address: str, subject: str, body: str, *,
             msg["Cc"] = cc
             recipients.append(cc)
 
+        # Login i hasło SMTP nigdy nie idą otwartym tekstem: uwierzytelnienie
+        # tylko po STARTTLS. Bez TLS wysyłamy wyłącznie przez relay bez logowania.
+        if cfg.smtp_user and not cfg.use_tls:
+            logger.error(
+                "Odmowa wysyłki e-mail '%s': logowanie SMTP bez TLS ujawniłoby hasło. "
+                "Włącz STARTTLS w Ustawieniach → E-mail albo usuń login (relay bez "
+                "uwierzytelnienia).", subject)
+            if raise_errors:
+                raise RuntimeError(
+                    "Logowanie do serwera SMTP wymaga szyfrowania — włącz STARTTLS "
+                    "albo usuń login, jeśli serwer przyjmuje pocztę bez uwierzytelnienia.")
+            return
+
         with smtplib.SMTP(cfg.smtp_host, cfg.smtp_port, timeout=20) as smtp:
             if cfg.use_tls:
                 smtp.starttls(context=ssl.create_default_context())
@@ -138,21 +151,21 @@ def _send_event(event_key: str, to_address: str, ctx: dict, *,
           from_name=from_name, from_email=from_email, raise_errors=raise_errors)
 
 
-# Szablony `manager_new_request`, `selector_new_request` i `it_request_approved`
-# obsługiwała wyłącznie dawna ścieżka tworzenia wniosku bez typu (usunięta).
-# Definicje zostają w services.notifications.EVENTS (edycja w Ustawieniach),
-# ale nic ich już nie wysyła — obieg używa `workflow_stage` i `helpdesk_new_request`.
+# Szablony `manager_new_request`, `selector_new_request`, `higher_manager_request`
+# i `it_request_approved` obsługiwała wyłącznie dawna ścieżka tworzenia wniosku
+# bez typu (usunięta). Definicje zostają w services.notifications.EVENTS
+# (oznaczone `hidden`), ale nic ich już nie wysyła — obieg używa
+# `workflow_stage` i `helpdesk_new_request`.
 
 
 def notify_name_change_requested(full_name: str, new_name: str,
                                  from_name: str | None = None,
                                  from_email: str | None = None) -> None:
     """Nowy wniosek o zmianę nazwiska → skrzynka helpdesku z linkiem do kolejki IT."""
-    _send(resolve_helpdesk_email(),
-          "Nowy wniosek o zmianę nazwiska",
-          f"{full_name} zgłosił(a) zmianę nazwiska na: {new_name}.\n\n"
-          f"Rozpatrz wniosek w SZUP (Wnioski → Zmiany nazwisk): {names_queue_url()}",
-          from_name=from_name, from_email=from_email)
+    _send_event("name_change_requested", resolve_helpdesk_email(), {
+        "full_name": full_name, "new_name": new_name,
+        "names_url": names_queue_url(), "request_url": names_queue_url(),
+    }, from_name=from_name, from_email=from_email)
 
 
 def notify_helpdesk_new_request(request_id: int, worker_name: str,
@@ -240,12 +253,8 @@ def notify_request_taken_over(to_address: str, request_id: int, worker_name: str
                               from_email: str | None = None) -> None:
     """Przełożony przejął wniosek czekający u kierownika komórki — informacja
     dla kierownika (i zastępców), że krok kierowniczy wykona przejmujący."""
-    where = f" ({dept_name})" if dept_name else ""
-    _send(to_address,
-          f"Wniosek nr {request_id} przejęty przez przełożonego",
-          f"{taker_name} przejął(-ęła) wniosek nr {request_id} dotyczący "
-          f"pracownika {worker_name}{where}.\n\n"
-          f"Dalsze kroki na etapie kierownika komórki wykona przełożony — "
-          f"Ty możesz jedynie podejrzeć wniosek.\n\n"
-          f"Podgląd wniosku w SZUP: {request_url(request_id)}",
-          from_name=from_name, from_email=from_email)
+    _send_event("request_taken_over", to_address, {
+        "request_id": request_id, "worker_name": worker_name,
+        "dept_name": dept_name or "", "taker_name": taker_name,
+        "request_url": request_url(request_id),
+    }, from_name=from_name, from_email=from_email)

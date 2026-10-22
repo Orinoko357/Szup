@@ -6,6 +6,37 @@ Wersjonowanie: [Semantic Versioning](https://semver.org/lang/pl/).
 
 ## [Unreleased]
 
+## [3.5.0] — 2026-10-22
+
+Poprawki po audycie 3.4.
+
+### Dodano
+- „Oddaj” — przełożony może zwolnić przejęty wniosek; historia wniosku pokazuje
+  zapis roboczy, przejęcie i oddanie.
+- Kopia bazy i sprawdzenie usługi (`/api/health`) w `deploy.sh`; procedura
+  przywracania kopii w README i `docs/security/backup_and_dr.md`.
+- Dziennik zdarzeń: zmiany użytkowników, ról, haseł, kierowników, zastępców
+  i szablonów obiegu.
+
+### Zmieniono
+- Przejęcie obowiązuje tylko, gdy przejmujący jest aktywny i nadal jest
+  przełożonym; przełożony wyżej może przejąć ponownie; dezaktywacja zwalnia przejęcia.
+- Przełożony składający wniosek dla podległej komórki od razu go prowadzi.
+- Napis „Wyślij do akceptacji / realizacji” wynika z faktycznego kolejnego kroku.
+- Ustawienia SMTP tylko dla superadmina; zmiana serwera lub użytkownika czyści hasło;
+  logowanie SMTP bez TLS jest odrzucane.
+- Wymagania testowe przeniesione do `requirements-dev.txt`; testy ok. 7× szybsze.
+
+### Naprawiono
+- IT nie widzi już wniosków roboczych przez przypisanie / dowiązanie konta.
+- Listy IT i administratora nie są skracane przez ukryte wnioski.
+- Wniosek z jednostką niezgodną z komórką jest odrzucany.
+- Kierownik wyłączony w AD zwalnia stanowiska; nieaktywni kierownicy nie są adresatami.
+- Notatka z wersji roboczej nie trafia do IT; pusta wersja robocza wymaga potwierdzenia.
+- Ręczna migawka nie blokuje nocnej; spójne konto usługowe LDAP.
+- Interfejs: powrót fokusu po zamknięciu okien, tabele zadań i strona
+  „Bezpieczeństwo” na telefonie, przełącznik motywu w nagłówku na wąskich ekranach.
+
 ## [3.4.0] — 2026-10-22
 
 Wnioski robocze i przejmowanie przez przełożonego.

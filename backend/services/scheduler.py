@@ -62,10 +62,11 @@ def _seconds_until_next_run(now: datetime, hour: int, minute: int) -> float:
 def _run_once() -> None:
     from sqlmodel import Session
     from database import engine
-    from services.snapshots import create_snapshot
+    from services.snapshots import create_snapshot, NIGHTLY_GENERATOR
     try:
         with Session(engine) as session:
-            create_snapshot(session, generated_by="system")
+            # Jako migawka nocna: zastępuje ręczną z tego dnia (zob. create_snapshot).
+            create_snapshot(session, generated_by=NIGHTLY_GENERATOR)
     except Exception:
         _log.exception("Nocna migawka uprawnień nie powiodła się")
 

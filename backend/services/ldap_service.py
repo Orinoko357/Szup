@@ -168,7 +168,7 @@ def fetch_ou_structure(settings, search_base: str) -> list[dict]:
 
     base_norm = normalize_dn(search_base)
 
-    with Connection(server, user=settings.bind_dn, password=bind_password, auto_bind=True) as conn:
+    with Connection(server, user=service_bind_user(settings), password=bind_password, auto_bind=True) as conn:
         conn.search(search_base, "(objectClass=organizationalUnit)",
                     search_scope=SUBTREE, attributes=["ou", "description"])
         entries = [(e.entry_dn, _ou_name(e), _ou_desc(e)) for e in conn.entries]
@@ -234,7 +234,7 @@ def fetch_ldap_users(settings, search_base: str) -> list[dict]:
         return str(value) if value is not None else None
 
     out: list[dict] = []
-    with Connection(server, user=settings.bind_dn, password=bind_password, auto_bind=True) as conn:
+    with Connection(server, user=service_bind_user(settings), password=bind_password, auto_bind=True) as conn:
         conn.search(
             search_base,
             "(&(objectCategory=person)(objectClass=user))",
@@ -275,6 +275,11 @@ def authenticate_ldap(settings, username: str, password: str) -> bool:
     if not is_valid_login(username or ""):
         logger.warning("LDAP: rejected username with unsafe characters: %r", username)
         return False
+    # Puste hasło w simple bind to w LDAP „unauthenticated bind”, który część
+    # serwerów uznaje za udany — odrzucamy je jawnie, zanim dojdzie do AD.
+    if not password:
+        logger.warning("LDAP: rejected empty password for %r", username)
+        return False
     try:
         from ldap3 import Server, Connection, ALL, SUBTREE
         from ldap3.utils.conv import escape_filter_chars
@@ -286,7 +291,7 @@ def authenticate_ldap(settings, username: str, password: str) -> bool:
 
         server = Server(settings.host, port=settings.port, use_ssl=settings.use_ssl, get_info=ALL)
 
-        with Connection(server, user=settings.bind_dn, password=bind_password, auto_bind=True) as conn:
+        with Connection(server, user=service_bind_user(settings), password=bind_password, auto_bind=True) as conn:
             conn.search(search_base, search_filter, search_scope=SUBTREE, attributes=["distinguishedName"])
             if not conn.entries:
                 logger.info("LDAP: user %r not found", username)

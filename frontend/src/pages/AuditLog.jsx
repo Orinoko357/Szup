@@ -4,6 +4,15 @@ import { listAudit, auditStats, exportAuditCsv, errorMessage } from '../api'
 import { toast } from '../components/ui/feedback'
 import { fmtDateTime } from '../serverTime'
 
+// Pole datetime-local podaje czas LOKALNY bez strefy, a dziennik trzyma UTC —
+// zamieniamy na ISO UTC z 'Z' (np. 2026-10-22T08:00:00.000Z). Pusta lub
+// niepoprawna wartość → undefined (filtr pominięty).
+function localToUtcIso(v) {
+  if (!v) return undefined
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString()
+}
+
 export default function AuditLog() {
   const [rows, setRows] = useState([])
   const [stats, setStats] = useState(null)
@@ -17,8 +26,10 @@ export default function AuditLog() {
       const params = { limit: 500 }
       if (filters.username) params.username = filters.username
       if (filters.action)   params.action   = filters.action
-      if (filters.since)    params.since    = filters.since
-      if (filters.until)    params.until    = filters.until
+      const since = localToUtcIso(filters.since)
+      const until = localToUtcIso(filters.until)
+      if (since) params.since = since
+      if (until) params.until = until
       const [a, s] = await Promise.all([listAudit(params), auditStats()])
       setRows(a.data)
       setStats(s.data)
@@ -35,7 +46,7 @@ export default function AuditLog() {
   async function downloadCsv() {
     setExporting(true)
     try {
-      const res = await exportAuditCsv(filters.since, filters.until)
+      const res = await exportAuditCsv(localToUtcIso(filters.since), localToUtcIso(filters.until))
       const url = URL.createObjectURL(res.data)
       const a = document.createElement('a')
       a.href = url

@@ -169,7 +169,7 @@ function UnitAccordion({ unit: u, depts, users, onChanged, onlyDeptIds = null })
     try {
       await updateUnit(u.id, { name })
       setEditing(false); onChanged()
-    } catch (ex) { setErr(errorMessage(ex, 'Błąd zapisu')) }
+    } catch (ex) { setErr(errorMessage(ex, 'Nie udało się zapisać jednostki')) }
   }
 
   async function saveUnitManager(val) {
@@ -386,7 +386,7 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
         is_hr: isHr,
       })
       setEditing(false); onChanged()
-    } catch (ex) { toast(errorMessage(ex, 'Błąd zapisu'), { tone: 'error' }) }
+    } catch (ex) { toast(errorMessage(ex, 'Nie udało się zapisać komórki'), { tone: 'error' }) }
   }
 
   async function del() {
@@ -547,7 +547,7 @@ function AddDeptForm({ unitId, users, unitDepts, onAdded }) {
       })
       setName(''); setKind('department'); setParentId(''); setManagerId('')
       onAdded()
-    } catch (ex) { setErr(errorMessage(ex, 'Błąd zapisu')) }
+    } catch (ex) { setErr(errorMessage(ex, 'Nie udało się dodać komórki')) }
   }
 
   const parentCandidates = flattenDeptTree(unitDepts || [])
@@ -612,7 +612,7 @@ function AddUnitCard({ onAdded }) {
     try {
       await createUnit({ name })
       setName(''); setShow(false); onAdded()
-    } catch (ex) { setErr(errorMessage(ex, 'Błąd zapisu')) }
+    } catch (ex) { setErr(errorMessage(ex, 'Nie udało się dodać jednostki')) }
   }
 
   if (!show) {

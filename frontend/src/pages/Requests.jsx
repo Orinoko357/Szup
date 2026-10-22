@@ -62,7 +62,7 @@ export default function Requests() {
     setOpen(o => ({ id: urlOpen, tab, nonce: o.nonce + 1 }))
     const p = new URLSearchParams(params); p.delete('open')
     setParams(p, { replace: true })
-  }, [urlOpen])  // eslint-disable-line
+  }, [urlOpen])
   const openFor = (t) => (open.id && open.tab === t ? open.id : null)
 
   const [fullView, setFullView] = useState(false)

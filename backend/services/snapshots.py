@@ -113,20 +113,32 @@ def get_by_date(session: Session, snapshot_date: str) -> Optional[PermissionSnap
     ).first()
 
 
+# `generated_by` migawki nocnej (harmonogram). Ręczne mają login admina.
+NIGHTLY_GENERATOR = "system"
+
+
 def create_snapshot(
     session: Session,
-    generated_by: str = "system",
+    generated_by: str = NIGHTLY_GENERATOR,
     for_date: Optional[str] = None,
     force: bool = False,
 ) -> PermissionSnapshot:
     """Utwórz migawkę dla danego dnia. Idempotentne: jedna migawka na datę.
 
     `force=True` nadpisuje istniejącą migawkę tego dnia (np. ręczne odświeżenie
-    po korekcie danych). Bez `force` zwraca istniejącą, jeśli już jest.
+    po korekcie danych). Bez `force` zwraca istniejącą, jeśli już jest — z jednym
+    wyjątkiem: migawka nocna zastępuje RĘCZNĄ z tego samego dnia. Ręczna powstaje
+    w trakcie dnia, a nocna ma utrwalić stan na jego koniec; inaczej ręczne
+    odświeżenie rano blokowałoby nocny zapis.
     """
     date = for_date or local_today()
     existing = get_by_date(session, date)
-    if existing and not force:
+    nightly_over_manual = (
+        existing is not None
+        and generated_by == NIGHTLY_GENERATOR
+        and existing.generated_by != NIGHTLY_GENERATOR
+    )
+    if existing and not force and not nightly_over_manual:
         return existing
 
     rows = build_rows(session)

@@ -1,8 +1,9 @@
-import { LogOut, KeyRound, Menu } from 'lucide-react'
+import { LogOut, KeyRound, Menu, Moon, Sun } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { logout as apiLogout, changePassword, errorMessage } from '../../api'
 import { toast } from '../ui/feedback'
+import Modal from '../ui/Modal'
 import GlobalSearch from '../GlobalSearch'
 import { getCurrentUser, getUserRoles, clearSession } from '../../roles'
 import { ROLE_LABEL } from '../../labels'
@@ -11,6 +12,28 @@ import { setNavOpen } from './Sidebar'
 // Inicjały do awatara (np. „Jan Kowalski” → „JK”).
 export function initials(name) {
   return (name || '?').split(/\s+/).map(s => s[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
+}
+
+/** Przełącznik motywu w belce — widoczny tylko na wąskich ekranach (CSS), gdzie
+ *  pływający przycisk z App.jsx jest ukryty. Stan motywu trzyma App
+ *  (zdarzenia szup:theme / szup:theme-toggle). */
+function ThemeButton() {
+  const read = () => document.documentElement.getAttribute('data-theme') === 'dark'
+  const [dark, setDark] = useState(read)
+  useEffect(() => {
+    const onTheme = (e) => setDark(!!e.detail?.dark)
+    window.addEventListener('szup:theme', onTheme)
+    setDark(read())   // motyw mógł zostać ustawiony, zanim podpięliśmy nasłuch
+    return () => window.removeEventListener('szup:theme', onTheme)
+  }, [])
+  return (
+    <button type="button" className="szup-hdr-btn app-header__theme"
+            onClick={() => window.dispatchEvent(new Event('szup:theme-toggle'))}
+            title={dark ? 'Tryb jasny' : 'Tryb ciemny'}
+            aria-label={dark ? 'Włącz tryb jasny' : 'Włącz tryb ciemny'}>
+      {dark ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
+    </button>
+  )
 }
 
 export default function Header() {
@@ -62,6 +85,7 @@ export default function Header() {
           <span className="szup-hdr-btn__text">Hasło</span>
         </button>
       )}
+      <ThemeButton />
       <button type="button" className="szup-hdr-btn" onClick={handleLogout}
               title="Wyloguj" aria-label="Wyloguj">
         <LogOut size={15} aria-hidden="true" />
@@ -102,64 +126,56 @@ function ChangePasswordModal({ onClose, forced = false }) {
     }
   }
 
-  // v3.0 — okno wg projektu: biała karta, nagłówek z kluczem, pola 44 px.
+  // v3.0 — pola 44 px wg projektu.
   const fieldLabel = { display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, fontWeight: 700, color: 'var(--color-text)' }
   const input = {
     minHeight: 44, padding: '0 12px', borderRadius: 8, border: '1px solid var(--color-input-border)',
     background: 'var(--color-card)', color: 'var(--color-text)', font: 'inherit', fontSize: 14, fontWeight: 400,
   }
   const req = <span style={{ color: 'var(--color-error-text)' }} aria-hidden="true">*</span>
+  // Okno na wspólnym ui/Modal (pułapka fokusu, Escape, zwrot fokusu). W trybie
+  // wymuszonym (forced) nie da się go zamknąć — ani Escape, ani kliknięciem obok.
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && !forced && onClose()}
-         style={{ background: 'rgba(20, 30, 50, .45)' }}>
-      <section role="dialog" aria-modal="true" aria-label="Zmiana hasła"
-               style={{ width: '100%', maxWidth: 440, background: 'var(--color-card)', borderRadius: 10,
-                        boxShadow: '0 20px 50px rgba(15, 23, 42, .3)', overflow: 'hidden' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '18px 22px',
-                      borderBottom: '1px solid var(--color-border)' }}>
-          <KeyRound size={18} color="var(--color-gold)" aria-hidden="true" />
-          <h2 style={{ margin: 0, flex: 1, fontSize: 17, fontWeight: 800, color: 'var(--color-heading)' }}>Zmiana hasła</h2>
-          {!forced && (
-            <button type="button" onClick={onClose} aria-label="Zamknij"
-                    style={{ width: 36, height: 36, border: 0, background: 'transparent', cursor: 'pointer',
-                             fontSize: 22, lineHeight: 1, color: 'var(--color-text-muted)' }}>×</button>
-          )}
-        </div>
-        <form onSubmit={submit} style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {askCurrent && (
-            <label style={fieldLabel}>
-              <span>Obecne hasło {req}</span>
-              <input type="password" required autoComplete="current-password" style={input}
-                     value={current} onChange={e => setCurrent(e.target.value)} />
-            </label>
-          )}
+    <Modal
+      title={<><KeyRound size={18} color="var(--color-gold)" aria-hidden="true"
+                         style={{ verticalAlign: '-3px', marginRight: 8 }} />Zmiana hasła</>}
+      width={440} closable={!forced} onClose={forced ? undefined : onClose}
+      onSubmit={submit}
+      footer={<>
+        {!forced && (
+          <button type="button" className="btn btn--ghost" onClick={onClose}
+                  style={{ minHeight: 44, borderRadius: 8 }}>Anuluj</button>
+        )}
+        <button type="submit" className="btn btn--primary" disabled={busy}
+                style={{ minHeight: 44, padding: '0 20px', borderRadius: 8, fontSize: 14, fontWeight: 700 }}>
+          {busy ? 'Zapisywanie…' : 'Zmień hasło'}
+        </button>
+      </>}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {askCurrent && (
           <label style={fieldLabel}>
-            <span>Nowe hasło {req}</span>
-            <input type="password" required autoComplete="new-password" style={input}
-                   value={next} onChange={e => setNext(e.target.value)} />
-            <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--color-text-muted)' }}>
-              Min. 12 znaków, co najmniej 3 z 4 klas: małe litery, wielkie, cyfry, specjalne.
-            </span>
+            <span>Obecne hasło {req}</span>
+            <input type="password" required autoComplete="current-password" style={input} data-autofocus
+                   value={current} onChange={e => setCurrent(e.target.value)} />
           </label>
-          <label style={fieldLabel}>
-            <span>Powtórz nowe hasło {req}</span>
-            <input type="password" required autoComplete="new-password" style={input}
-                   value={next2} onChange={e => setNext2(e.target.value)} />
-          </label>
-          {err && <div className="alert alert--error" role="alert">{err}</div>}
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', paddingTop: 6 }}>
-            {!forced && (
-              <button type="button" className="btn btn--ghost" onClick={onClose}
-                      style={{ minHeight: 44, borderRadius: 8 }}>Anuluj</button>
-            )}
-            <button type="submit" className="btn btn--primary" disabled={busy}
-                    style={{ minHeight: 44, padding: '0 20px', borderRadius: 8, fontSize: 14, fontWeight: 700 }}>
-              {busy ? 'Zapisywanie…' : 'Zmień hasło'}
-            </button>
-          </div>
-        </form>
-      </section>
-    </div>
+        )}
+        <label style={fieldLabel}>
+          <span>Nowe hasło {req}</span>
+          <input type="password" required autoComplete="new-password" style={input}
+                 data-autofocus={askCurrent ? undefined : true}
+                 value={next} onChange={e => setNext(e.target.value)} />
+          <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--color-text-muted)' }}>
+            Min. 12 znaków, co najmniej 3 z 4 klas: małe litery, wielkie, cyfry, specjalne.
+          </span>
+        </label>
+        <label style={fieldLabel}>
+          <span>Powtórz nowe hasło {req}</span>
+          <input type="password" required autoComplete="new-password" style={input}
+                 value={next2} onChange={e => setNext2(e.target.value)} />
+        </label>
+        {err && <div className="alert alert--error" role="alert">{err}</div>}
+      </div>
+    </Modal>
   )
 }
 
