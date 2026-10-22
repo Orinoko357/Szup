@@ -1,15 +1,13 @@
 import { useEffect, useState } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import { Moon, Sun } from 'lucide-react'
 import Header from './components/Layout/Header'
 import Sidebar from './components/Layout/Sidebar'
 import Dashboard from './pages/Dashboard'
 import HR from './pages/HR'
-import Manager from './pages/Manager'
+import Requests from './pages/Requests'
 import MyTeam from './pages/MyTeam'
-import Structure from './pages/Structure'
 import MyPermissions from './pages/MyPermissions'
-import IT from './pages/IT'
 import SoftwareRegistry from './pages/SoftwareRegistry'
 import Vendors from './pages/Vendors'
 import PermissionRegistry from './pages/PermissionRegistry'
@@ -48,6 +46,18 @@ function DarkModeToggle() {
       {dark ? <Sun size={18} /> : <Moon size={18} />}
     </button>
   )
+}
+
+// v3.0 — stare adresy (zakładki w przeglądarce, linki z e-maili) prowadzą
+// do nowych miejsc: „Wnioski” i „Do realizacji” są jedną stroną /requests,
+// „Moja struktura” to zakładka „Moich pracowników”.
+function LegacyRedirect({ to }) {
+  const { search } = useLocation()
+  const tab = new URLSearchParams(search).get('tab')
+  const target = to === 'it' ? `/requests?tab=${tab === 'names' ? 'names' : 'it'}`
+    : to === 'manager' ? '/requests?tab=handle'
+    : '/my-team?tab=structure'
+  return <Navigate to={target} replace />
 }
 
 function AuthGate() {
@@ -178,10 +188,11 @@ function AuthGate() {
           <Route path="/my-permissions" element={<MyPermissions />} />
           {/* Operacyjne */}
           <Route path="/hr"        element={guard(<HR />,        ['hr'])} />
-          <Route path="/manager"   element={guard(<Manager />,   ['manager'])} />
+          <Route path="/requests"  element={guard(<Requests />,  ['manager','it_staff'])} />
           <Route path="/my-team"   element={guard(<MyTeam />,    ['manager'])} />
-          <Route path="/structure" element={guard(<Structure />, ['manager'])} />
-          <Route path="/it"        element={guard(<IT />,        ['it_staff'])} />
+          <Route path="/manager"   element={guard(<LegacyRedirect to="manager" />, ['manager'])} />
+          <Route path="/structure" element={guard(<LegacyRedirect to="structure" />, ['manager'])} />
+          <Route path="/it"        element={guard(<LegacyRedirect to="it" />, ['it_staff'])} />
           <Route path="/registry"  element={guard(<PermissionRegistry />, ['it_staff','admin','superadmin'])} />
           {/* Słowniki IT — rejestr oprogramowania obsługuje IT oraz admin */}
           <Route path="/software"  element={guard(<SoftwareRegistry />, ['it_staff','admin','superadmin'])} />

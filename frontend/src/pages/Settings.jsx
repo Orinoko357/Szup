@@ -223,7 +223,7 @@ export default function Settings() {
         </div>
       </div>
 
-      <Accordion icon={Mail} title="Powiadomienia e-mail" sub="Powiadomienia o wniosكach dla pracowników i kierowników"
+      <Accordion icon={Mail} title="Powiadomienia e-mail" sub="Powiadomienia o wnioskach dla pracowników i kierowników"
                  badge={email?.enabled ? 'ON' : 'OFF'} defaultOpen>
         {email && (
           <form onSubmit={saveEmail}>

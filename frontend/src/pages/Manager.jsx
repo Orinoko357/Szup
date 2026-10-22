@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { RefreshCw, Check, X, ListChecks, Search } from 'lucide-react'
 import { listRequests, workflowAction, listSystems, listPermissions, userPermissions, denyRequestItem } from '../api'
 import { fmtDate } from '../serverTime'
 import WorkflowRibbon from '../components/WorkflowRibbon'
-import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard, deptFull } from '../components/RequestView'
+import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard, deptFull, KindBadge } from '../components/RequestView'
 import DeclarationModal from '../components/DeclarationModal'
 import PermissionChanges, {
   permChangeState, changeStyle, changeTextStyle, ChangeBadge,
@@ -46,13 +46,17 @@ function grantProgressOf(r) {
   return { total: g.length, done, denied }
 }
 
-export default function Manager() {
-  const [tab, setTab]           = useState('handle')   // handle | mine
+// embedded — osadzony w stronie „Wnioski” (bez własnego nagłówka i zakładek;
+// zakładkę wybiera `view`). openId — od razu otwórz wskazany wniosek (z pulpitu).
+export default function Manager({ embedded = false, view, openId, onViewChange, onChanged }) {
+  const [tab, setTab]           = useState(view || 'handle')   // handle | mine
+  useEffect(() => { if (view) setTab(view) }, [view])
   const [managerReqs, setManagerReqs] = useState([])   // wnioski z moich komórek (scope=manager)
   const [myReqs, setMyReqs]     = useState([])          // wnioski złożone przeze mnie (scope=mine)
   const [loading, setLoading]   = useState(true)
   const [err, setErr]           = useState(null)
   const [openReq, setOpenReq]   = useState(null)   // jeden wspólny widok: podgląd + akcja
+  const openedRef = useRef(false)
 
   async function load({ silent = false } = {}) {
     if (!silent) setLoading(true)
@@ -67,6 +71,12 @@ export default function Manager() {
       // Po cichym odświeżeniu zsynchronizuj otwarty wniosek (badge odmów/realizacji).
       const all = [...(rMgr.data || []), ...(rMine.data || [])]
       setOpenReq(prev => (prev ? (all.find(x => x.id === prev.id) || prev) : prev))
+      // Wejście z pulpitu: otwórz wskazany wniosek (jednorazowo).
+      if (openId && !openedRef.current) {
+        openedRef.current = true
+        const hit = all.find(x => x.id === Number(openId))
+        if (hit) setOpenReq(hit)
+      }
     } catch (ex) {
       setErr(ex.response?.data?.detail || 'Błąd ładowania')
     } finally {
@@ -75,6 +85,7 @@ export default function Manager() {
   }
 
   useEffect(() => { load() }, [])
+  useEffect(() => { onViewChange?.(!!openReq) }, [openReq])
 
   // Do obsługi: kroki, na których kierownik MUSI działać (wybór / akceptacja,
   // w tym jako kierownik wyższego rzędu) — np. nowy pracownik do obsłużenia.
@@ -93,12 +104,19 @@ export default function Manager() {
   // Otwarty wniosek = pełnoekranowy widok (zamiast listy), spójnie z Kartoteką.
   if (openReq) {
     return <RequestModal request={openReq} onClose={() => setOpenReq(null)}
-                         onDone={() => { setOpenReq(null); load() }}
+                         onDone={() => { setOpenReq(null); load(); onChanged?.() }}
                          onRefresh={() => load({ silent: true })} />
   }
 
   return (
     <div>
+      {embedded ? (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+          <button className="btn btn--ghost btn--sm" onClick={() => load()} disabled={loading}>
+            <RefreshCw size={14} /> Odśwież
+          </button>
+        </div>
+      ) : (
       <div className="page-header">
         <div>
           <div className="page-header__title">Wnioski</div>
@@ -108,8 +126,9 @@ export default function Manager() {
           <RefreshCw size={14} /> Odśwież
         </button>
       </div>
+      )}
 
-      <div className="tabs" style={{ marginTop: 0 }}>
+      {!embedded && <div className="tabs" style={{ marginTop: 0 }}>
         {TABS.map(([v, label, count]) => (
           <button key={v} className={`tab-btn${tab === v ? ' active' : ''}`} onClick={() => setTab(v)}>
             {label}
@@ -118,7 +137,7 @@ export default function Manager() {
             )}
           </button>
         ))}
-      </div>
+      </div>}
 
       {err && <div className="alert alert--error mb-4">{err}</div>}
 
@@ -157,7 +176,7 @@ function HandleTable({ rows, onOpen }) {
             <td style={{ fontWeight: 600 }}>
               {r.worker_name}
               {r.kind === 'revoke' && (
-                <span className="badge badge--warning" style={{ fontSize: 10, marginLeft: 8 }}>ustanie</span>
+                <span style={{ marginLeft: 8 }}><KindBadge kind="revoke" label="Odejście" /></span>
               )}
             </td>
             <td style={{ color: 'var(--color-text-muted)' }}>{r.worker_position || '—'}</td>
@@ -213,7 +232,7 @@ function MineTable({ rows, onOpen }) {
               <td style={{ fontWeight: 600 }}>
                 {r.worker_name}
                 {r.kind === 'revoke' && (
-                  <span className="badge badge--warning" style={{ fontSize: 10, marginLeft: 8 }}>ustanie</span>
+                  <span style={{ marginLeft: 8 }}><KindBadge kind="revoke" label="Odejście" /></span>
                 )}
                 <div style={{ fontSize: 11, fontWeight: 400, color: 'var(--color-text-muted)' }}>
                   {r.items?.length || 0} uprawnień

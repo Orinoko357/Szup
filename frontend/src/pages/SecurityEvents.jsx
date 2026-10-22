@@ -9,6 +9,8 @@ const SEV_COLOR = {
   high:     'var(--color-warning)',
   critical: 'var(--color-error)',
 }
+// v3.0: polski opis istotności obok klucza z backendu.
+const SEV_PL = { low: 'niska', medium: 'średnia', high: 'wysoka', critical: 'krytyczna' }
 
 export default function SecurityEvents() {
   const [rows, setRows] = useState([])
@@ -59,7 +61,7 @@ export default function SecurityEvents() {
           </div>
           {Object.entries(sum.open_by_severity || {}).map(([sev, n]) => (
             <div key={sev} className="card" style={{ padding: 12, minWidth: 100 }}>
-              <div style={{ fontSize: 11, color: SEV_COLOR[sev] }}>{sev}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: SEV_COLOR[sev] }}>{SEV_PL[sev] || sev}</div>
               <div style={{ fontSize: 20, fontWeight: 700 }}>{n}</div>
             </div>
           ))}
@@ -100,7 +102,7 @@ export default function SecurityEvents() {
                 <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{r.event_type}</td>
                 <td>
                   <span className="badge" style={{ background: SEV_COLOR[r.severity], color: 'white' }}>
-                    {r.severity}
+                    {SEV_PL[r.severity] || r.severity}
                   </span>
                 </td>
                 <td>{r.summary}</td>

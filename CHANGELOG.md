@@ -6,6 +6,31 @@ Wersjonowanie: [Semantic Versioning](https://semver.org/lang/pl/).
 
 ## [Unreleased]
 
+## [3.0.0] — 2026-10-22
+
+Nowy wygląd interfejsu wg projektu „SZUP — modułowy pulpit” (wersja 3.0).
+Wyłącznie frontend — bez zmian w logice, API i bazie danych.
+
+### Zmieniono
+- Pasek boczny tylko do nawigacji (bez liczników): grupy PRACA, REJESTRY,
+  ADMINISTRACJA (zwijana, rozwinięta na swoich ekranach) i MOJE.
+- Pulpit pokazuje wyłącznie sprawy czekające na reakcję: alerty „Wymaga uwagi”
+  (umowy serwisowe; otwarte zdarzenia bezpieczeństwa dla admina), kafelki kolejek
+  działające jako filtr, lista od najdłużej czekających („Otwórz” prowadzi
+  wprost do wniosku), stan „Wszystko załatwione”.
+- „Wnioski” i „Do realizacji” połączone w jedną stronę /requests z zakładkami
+  Do obsługi · Moje wnioski · Realizacja IT · Zmiany nazwiska (wg ról).
+  Stare adresy /manager, /it, /it?tab=names przekierowują.
+- „Moja struktura” jest zakładką „Moich pracowników” (/structure przekierowuje).
+- Kartoteka: filtr W toku / Zakończone / Wszystkie i wyszukiwarka; lista pokazuje
+  wyłącznie własne zgłoszenia (wcześniej osoby z dodatkową rolą widziały cudze).
+- Rodzaj wniosku w tabelach jako odznaka ZATRUDNIENIE / ODEJŚCIE.
+- Styl: zaokrąglone karty, większe nagłówki stron, zakładki ze złotym
+  podkreśleniem i licznikami, polskie nazwy istotności zdarzeń.
+
+### Naprawiono
+- Literówka w podtytule „Powiadomienia e-mail” w Ustawieniach.
+
 ## [1.0.0] — 2025-04-17
 
 ### Dodano

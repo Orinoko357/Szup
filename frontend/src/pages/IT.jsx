@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Wrench, RefreshCw, CheckCircle, Link2, UserPlus, Plus } from 'lucide-react'
 import {
   listRequests, workflowAction, linkRequestWorker, listItStaff, assignRequest,
-  listSystems, denyRequestItem, fulfillRequestItem,
+  listSystems, denyRequestItem, fulfillRequestItem, getRequest,
 } from '../api'
 
 /** Kierownik IT = osoba mająca JEDNOCZEŚNIE rolę „manager" i „it_staff".
@@ -16,7 +16,7 @@ function useIsItManager() {
 }
 import { fmtDate } from '../serverTime'
 import WorkflowRibbon from '../components/WorkflowRibbon'
-import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard, deptFull } from '../components/RequestView'
+import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard, deptFull, KindBadge } from '../components/RequestView'
 import PermissionChanges from '../components/PermissionChanges'
 import AddPermissionsPicker from '../components/AddPermissionsPicker'
 import NameChangeQueue from '../components/NameChangeQueue'
@@ -58,11 +58,12 @@ export default function IT() {
   )
 }
 
-function RequestsTab({ onViewChange }) {
+export function RequestsTab({ onViewChange, openId, onChanged }) {
   const [requests, setRequests] = useState([])
   const [loading, setLoading]   = useState(true)
   const [filter, setFilter]     = useState('pending_it')
   const [openReq, setOpenReq]   = useState(null)   // jeden wspólny widok: podgląd + realizacja
+  const openedRef = useRef(false)
 
   async function load({ silent = false } = {}) {
     if (!silent) setLoading(true)
@@ -74,6 +75,14 @@ function RequestsTab({ onViewChange }) {
       // pozycji) zsynchronizuj też otwarty wniosek, żeby po zamknięciu i
       // ponownym otwarciu stan pozycji zgadzał się z bazą.
       setOpenReq(prev => (prev ? (r.data.find(x => x.id === prev.id) || prev) : prev))
+      // Wejście z pulpitu: otwórz wskazany wniosek (jednorazowo); spoza
+      // bieżącego filtra — dociągnij pojedynczo.
+      if (openId && !openedRef.current) {
+        openedRef.current = true
+        const hit = r.data.find(x => x.id === Number(openId))
+        if (hit) setOpenReq(hit)
+        else getRequest(openId).then(x => setOpenReq(x.data)).catch(() => {})
+      }
       return r.data
     } finally { if (!silent) setLoading(false) }
   }
@@ -87,7 +96,7 @@ function RequestsTab({ onViewChange }) {
   // Otwarty wniosek = pełnoekranowy widok (zamiast listy), spójnie z Kartoteką.
   if (openReq) {
     return <RequestModal request={openReq} onClose={() => setOpenReq(null)}
-                         onDone={() => { setOpenReq(null); load() }}
+                         onDone={() => { setOpenReq(null); load(); onChanged?.() }}
                          onRefresh={() => load({ silent: true })} />
   }
 
@@ -111,7 +120,7 @@ function RequestsTab({ onViewChange }) {
                   <td style={{ fontWeight: 600 }}>
                     {r.worker_name}
                     {r.kind === 'revoke' && (
-                      <span className="badge badge--warning" style={{ fontSize: 10, marginLeft: 8 }}>ustanie</span>
+                      <span style={{ marginLeft: 8 }}><KindBadge kind="revoke" label="Odejście" /></span>
                     )}
                   </td>
                   <td>{deptFull(r.department_name, r.department_description)}</td>

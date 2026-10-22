@@ -112,7 +112,8 @@ function StepItem({ step }) {
   const isCurrent = state === 'current'
   const isDone = state === 'done'
   const isSkipped = state === 'skipped'
-  const bg = isCurrent ? '#FEF6E3' : 'var(--color-card)'
+  // v3.0: zakończone kroki z delikatnym zielonym tłem (wg projektu).
+  const bg = isCurrent ? '#FEF6E3' : isDone ? 'var(--color-success-bg)' : 'var(--color-card)'
   const bd = isCurrent ? '#E6C34D' : 'var(--color-border)'
   return (
     <div style={{

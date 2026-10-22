@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import Structure from './Structure'
 import { Users, RefreshCw, FilePlus, Search, ListChecks, Send, ChevronDown, ChevronRight } from 'lucide-react'
 import {
   listMyWorkers, listSystems, listPermissions, createRequest, listRequestTypes,
@@ -15,7 +17,43 @@ import PermInput, {
   isScopeGated, missingScopeSystems,
 } from '../components/ItemFields'
 
+// v3.0 — „Moi pracownicy” ma dwie zakładki: Pracownicy (lista + wnioski)
+// oraz Struktura (dawna strona „Moja struktura”, ta sama logika).
 export default function MyTeam() {
+  const [params, setParams] = useSearchParams()
+  const tab = params.get('tab') === 'structure' ? 'structure' : 'workers'
+  const SUB = {
+    workers: 'Pracownicy, którymi kierujesz — możesz dla nich występować o nadanie lub zmianę uprawnień',
+    structure: 'Podgląd wydziałów podrzędnych, ich kierowników i pracowników wraz z nadanymi uprawnieniami',
+  }
+  const renderHeader = (onRefresh, loading) => (
+    <>
+      <div className="page-header">
+        <div>
+          <div className="page-header__title">Moi pracownicy</div>
+          <div className="page-header__sub">{SUB[tab]}</div>
+        </div>
+        <button className="btn btn--ghost" onClick={onRefresh} disabled={loading}>
+          <RefreshCw size={14} /> Odśwież
+        </button>
+      </div>
+      <div className="tabs" role="tablist" style={{ marginTop: 0 }}>
+        {[['workers', 'Pracownicy'], ['structure', 'Struktura']].map(([id, label]) => (
+          <button key={id} role="tab" aria-selected={tab === id}
+                  className={`tab-btn${tab === id ? ' active' : ''}`}
+                  onClick={() => setParams(id === 'structure' ? { tab: 'structure' } : {})}>
+            {label}
+          </button>
+        ))}
+      </div>
+    </>
+  )
+  return tab === 'structure'
+    ? <Structure renderHeader={renderHeader} />
+    : <WorkersTab renderHeader={renderHeader} />
+}
+
+function WorkersTab({ renderHeader }) {
   const [workers, setWorkers] = useState([])
   const [loading, setLoading] = useState(true)
   const [err, setErr]         = useState(null)
@@ -62,18 +100,7 @@ export default function MyTeam() {
 
   return (
     <div>
-      <div className="page-header">
-        <div>
-          <div className="page-header__title">Moi pracownicy</div>
-          <div className="page-header__sub">
-            Pracownicy, którymi kierujesz — możesz dla nich występować
-            o nadanie lub zmianę uprawnień
-          </div>
-        </div>
-        <button className="btn btn--ghost btn--sm" onClick={load} disabled={loading}>
-          <RefreshCw size={14} /> Odśwież
-        </button>
-      </div>
+      {renderHeader(load, loading)}
 
       <div className="card" style={{ marginBottom: 12 }}>
         <div style={{ position: 'relative', maxWidth: 420 }}>

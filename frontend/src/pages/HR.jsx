@@ -2,10 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { FilePlus, UserMinus, ChevronDown, ChevronRight, Building2, Check, Search } from 'lucide-react'
 import { listRequests, createRequest, listActiveDepts, listActiveUnits, listRequestTypes, usersByDepartment, searchUsers } from '../api'
 import { fmtDate } from '../serverTime'
-import RequestViewShell, { Section, buildWorkflowSteps } from '../components/RequestView'
+import RequestViewShell, { Section, buildWorkflowSteps, KindBadge } from '../components/RequestView'
 
-const KIND_BADGE = { grant: 'badge--info', revoke: 'badge--warning' }
-const KIND_LABEL = { grant: 'Zatrudnienie', revoke: 'Ustanie stosunku pracy' }
 
 // Mały nagłówek sekcji w oknach kadrowych — spójny, czytelny podział.
 function SectionLabel({ children }) {
@@ -55,11 +53,15 @@ export default function HR() {
   const [loading, setLoading]   = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [showTermination, setShowTermination] = useState(false)
+  const [view, setView]         = useState('open')   // open | done | all
+  const [q, setQ]               = useState('')
 
   async function load() {
     setLoading(true)
     try {
-      const r = await listRequests()
+      // scope=mine — wyłącznie zgłoszenia tej osoby (bez tego osoba z dodatkową
+      // rolą IT/admin/kierownik dostawała pod „Moje zgłoszenia” cudze wnioski).
+      const r = await listRequests({ scope: 'mine' })
       setRequests(r.data)
     } finally {
       setLoading(false)
@@ -67,6 +69,16 @@ export default function HR() {
   }
 
   useEffect(() => { load() }, [])
+
+  const DONE = ['completed', 'rejected']
+  const counts = {
+    open: requests.filter(r => !DONE.includes(r.status)).length,
+    done: requests.filter(r => DONE.includes(r.status)).length,
+    all: requests.length,
+  }
+  const shown = requests
+    .filter(r => view === 'all' || (view === 'done') === DONE.includes(r.status))
+    .filter(r => !q.trim() || (r.worker_name || '').toLowerCase().includes(q.trim().toLowerCase()))
 
   // Formularze jako PEŁNOEKRANOWE widoki (nie małe modale) — spójny układ.
   if (showForm) {
@@ -98,12 +110,32 @@ export default function HR() {
       </div>
 
       <div className="card">
-        <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--color-navy)', marginBottom: 16 }}>
-          Moje zgłoszenia
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+          <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--color-navy)', flex: '1 1 auto' }}>
+            Moje zgłoszenia
+          </div>
+          <div role="group" aria-label="Filtr statusu" style={{ display: 'inline-flex', border: '1px solid var(--color-input-border)', borderRadius: 8, overflow: 'hidden' }}>
+            {[['open', 'W toku'], ['done', 'Zakończone'], ['all', 'Wszystkie']].map(([id, label]) => (
+              <button key={id} type="button" aria-pressed={view === id} onClick={() => setView(id)}
+                      style={{
+                        minHeight: 36, padding: '0 12px', border: 0, cursor: 'pointer', font: 'inherit', fontSize: 13,
+                        fontWeight: view === id ? 700 : 500,
+                        background: view === id ? 'var(--color-navy)' : 'transparent',
+                        color: view === id ? '#fff' : 'var(--color-navy)',
+                      }}>
+                {label} ({counts[id]})
+              </button>
+            ))}
+          </div>
+          <div style={{ position: 'relative', flex: '0 1 260px' }}>
+            <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-muted)' }} />
+            <input className="form-input" style={{ paddingLeft: 30 }} aria-label="Szukaj pracownika"
+                   placeholder="Szukaj pracownika…" value={q} onChange={e => setQ(e.target.value)} />
+          </div>
         </div>
         {loading ? (
           <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
-        ) : requests.length === 0 ? (
+        ) : shown.length === 0 ? (
           <div style={{ color: 'var(--color-text-muted)' }}>Brak zgłoszeń</div>
         ) : (
           <table className="data-table">
@@ -113,16 +145,14 @@ export default function HR() {
               </tr>
             </thead>
             <tbody>
-              {requests.map(r => {
+              {shown.map(r => {
                 const kind = r.kind || 'grant'
                 return (
                   <tr key={r.id}>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
                     <td style={{ fontWeight: 600 }}>{r.worker_name}</td>
                     <td>
-                      <span className={`badge ${KIND_BADGE[kind] || 'badge--neutral'}`} style={{ fontSize: 11 }}>
-                        {KIND_LABEL[kind] || kind}
-                      </span>
+                      <KindBadge kind={kind} label={kind === 'revoke' ? 'Odejście' : 'Zatrudnienie'} />
                     </td>
                     <td style={{ color: 'var(--color-text-muted)' }}>{r.worker_position || '—'}</td>
                     <td><span className={`badge ${STATUS_BADGE[r.status] || 'badge--neutral'}`}>

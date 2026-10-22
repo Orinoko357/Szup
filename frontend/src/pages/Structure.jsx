@@ -7,7 +7,7 @@ import { getMySubtree } from '../api'
 import { fmtDate } from '../serverTime'
 import { KindBadge, kindMeta } from './Units'
 
-export default function Structure() {
+export default function Structure({ renderHeader }) {
   const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr]         = useState(null)
@@ -29,6 +29,7 @@ export default function Structure() {
 
   return (
     <div>
+      {renderHeader ? renderHeader(load, loading) : (
       <div className="page-header">
         <div>
           <div className="page-header__title">Moja struktura</div>
@@ -41,6 +42,7 @@ export default function Structure() {
           <RefreshCw size={14} /> Odśwież
         </button>
       </div>
+      )}
 
       {err && <div className="alert alert--error mb-4">{err}</div>}
 

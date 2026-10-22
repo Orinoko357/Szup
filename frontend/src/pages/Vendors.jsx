@@ -242,7 +242,8 @@ function VendorRow({ vendor: v, onReload }) {
   return (
     <div className="card" style={{
       padding: 0,
-      borderLeft: v.status === 'expired' ? '3px solid var(--color-error)' : undefined,
+      // v3.0: wygasła umowa — pasek u góry karty (zamiast lewej krawędzi).
+      borderTop: v.status === 'expired' ? '3px solid var(--color-error)' : undefined,
     }}>
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
