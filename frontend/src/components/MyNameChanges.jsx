@@ -2,12 +2,8 @@ import { useEffect, useState } from 'react'
 import { UserPen, X, Check } from 'lucide-react'
 import { myNameChanges, createNameChange } from '../api'
 import { fmtDate } from '../serverTime'
-
-const STATUS = {
-  pending:  ['badge--warning', 'oczekuje na IT'],
-  done:     ['badge--success', 'zrealizowany'],
-  rejected: ['badge--error', 'odrzucony'],
-}
+import { NAME_CHANGE_STATUS } from '../labels'
+import { toast } from './ui/feedback'
 
 /**
  * Samoobsługowe zgłoszenie zmiany nazwiska (pracownik → IT). Widoczne w
@@ -41,6 +37,7 @@ export default function MyNameChanges() {
     try {
       await createNameChange({ requested_full_name: name.trim() })
       setOpen(false); setName('')
+      toast('Wysłano zgłoszenie zmiany nazwiska do IT.')
       load()
     } catch (ex) {
       setErr(ex.response?.data?.detail || 'Nie udało się wysłać zgłoszenia')
@@ -81,8 +78,8 @@ export default function MyNameChanges() {
                 <td style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>{fmtDate(r.created_at)}</td>
                 <td style={{ fontWeight: 700 }}>{r.requested_full_name}</td>
                 <td>
-                  <span className={`badge ${STATUS[r.status]?.[0] || 'badge--neutral'}`}>
-                    {STATUS[r.status]?.[1] || r.status}
+                  <span className={`badge ${NAME_CHANGE_STATUS[r.status]?.badge || 'badge--neutral'}`}>
+                    {NAME_CHANGE_STATUS[r.status]?.label || r.status}
                   </span>
                   {r.username_changed && (
                     <span className="badge badge--info" style={{ fontSize: 9, marginLeft: 6 }}

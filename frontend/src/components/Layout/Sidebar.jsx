@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, FolderOpen, CheckSquare,
@@ -57,6 +57,9 @@ export default function Sidebar() {
   const { pathname } = useLocation()
   // Zwijana grupa: domyślnie zwinięta, rozwinięta gdy jesteśmy na jej ekranie.
   const [openOverride, setOpenOverride] = useState({})
+  // Po przejściu na inny ekran zapominamy ręczne zwinięcie — sekcja z aktywną
+  // pozycją znów się rozwija (np. wejście z pulpitu w „Bezpieczeństwo”).
+  useEffect(() => { setOpenOverride({}) }, [pathname])
 
   return (
     <aside className="app-sidebar">
@@ -103,7 +106,7 @@ export default function Sidebar() {
         })}
       </nav>
 
-      <div className="sidebar-footer">v3.0 · NIS2/KSC</div>
+      <div className="sidebar-footer">v3.1 · NIS2/KSC</div>
     </aside>
   )
 }

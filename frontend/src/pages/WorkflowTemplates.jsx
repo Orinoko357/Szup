@@ -9,6 +9,17 @@ import {
   deleteWorkflowTemplate, getWorkflowTemplate,
 } from '../api'
 import { fmtDateTime } from '../serverTime'
+import { toast, confirmDialog } from '../components/ui/feedback'
+
+// Potwierdzenie w oknie aplikacji (zamiast systemowego confirm). Operacje
+// usuwające / odbierające / nieodwracalne oznaczamy na czerwono.
+const ask = (message) => {
+  const danger = /usun|odebra|wygas|ostrze|nieodwracal/i.test(message)
+  return confirmDialog({
+    title: danger ? 'Potwierdź operację' : 'Potwierdź',
+    message, danger, confirmLabel: danger ? 'Tak, wykonaj' : 'Potwierdź',
+  })
+}
 
 /**
  * Liniowy edytor obiegu wniosków.
@@ -176,7 +187,7 @@ export default function WorkflowTemplates() {
         {!loading && items.length === 0 && (
           <div className="card" style={{ color: 'var(--color-text-muted)', padding: 16 }}>
             <GitBranch size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-            Brak szablonów. Zacznij od stworzenia pierwszego.
+            Brak szablonów. Utwórz pierwszy przyciskiem „Nowy szablon” — bez szablonu obiegu nie da się dodać typu wniosku.
           </div>
         )}
         {items.map(t => (
@@ -193,9 +204,9 @@ function TemplateCard({ tpl, onEdit, onReload }) {
   let graph = null
   try { graph = JSON.parse(tpl.graph_json) } catch {}
   async function del() {
-    if (!confirm(`Usunąć szablon "${tpl.name}"?`)) return
-    try { await deleteWorkflowTemplate(tpl.id); onReload() }
-    catch (ex) { alert(ex.response?.data?.detail || 'Błąd') }
+    if (!await ask(`Usunąć szablon "${tpl.name}"?`)) return
+    try { await deleteWorkflowTemplate(tpl.id); onReload(); toast(`Usunięto szablon „${tpl.name}”`) }
+    catch (ex) { toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' }) }
   }
   return (
     <section className="card" style={{ padding: '18px 20px', opacity: tpl.is_active ? 1 : 0.8 }}>
@@ -309,7 +320,7 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
     if (!meta.name.trim()) { setErr('Podaj nazwę szablonu'); return }
     if (middle.length === 0) { setErr('Dodaj przynajmniej jeden krok między zgłoszeniem a zakończeniem'); return }
     if (!middle.some(s => s.type === 'it_execute')) {
-      if (!confirm('Obieg nie ma kroku „Realizacja przez IT" — wniosek zakończy się bez realizacji technicznej. Zapisać mimo to?')) return
+      if (!await ask('Obieg nie ma kroku „Realizacja przez IT" — wniosek zakończy się bez realizacji technicznej. Zapisać mimo to?')) return
     }
     setSaving(true)
     try {

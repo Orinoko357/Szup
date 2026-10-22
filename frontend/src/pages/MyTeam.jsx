@@ -10,6 +10,9 @@ import {
 } from '../components/PermissionChanges'
 import DeclarationModal from '../components/DeclarationModal'
 import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard, deptFull } from '../components/RequestView'
+import { toast } from '../components/ui/feedback'
+import { ReviewDialog, describeKeys } from '../components/ChangeSummary'
+import CopyFromColleague, { buildCopiedSelection } from '../components/CopyFromColleague'
 import PermInput, {
   permInput, missingRequiredFields, splitAdminPerm, AdminPermRow,
   adminGrantNames, confirmAdminRights, ADMIN_CONFIRM_ABORTED,
@@ -57,7 +60,8 @@ function WorkersTab({ renderHeader }) {
   const [workers, setWorkers] = useState([])
   const [loading, setLoading] = useState(true)
   const [err, setErr]         = useState(null)
-  const [search, setSearch]   = useState('')
+  // ?q= — wejście z wyszukiwarki globalnej (Ctrl+K) od razu filtruje listę.
+  const [search, setSearch]   = useState(() => new URLSearchParams(window.location.search).get('q') || '')
   const [requestFor, setRequestFor] = useState(null)
   const [expanded, setExpanded] = useState(() => new Set())
 
@@ -123,16 +127,20 @@ function WorkersTab({ renderHeader }) {
         {loading ? (
           <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Ładowanie…</div>
         ) : workers.length === 0 ? (
-          <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>
-            <Users size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-            Nie kierujesz żadnym wydziałem albo nie ma przypisanych do
-            niego aktywnych pracowników. Sprawdź konfigurację wydziałów
-            w panelu administracyjnym.
+          <div style={{ padding: 18 }}>
+            <div style={{ fontWeight: 700 }}>
+              <Users size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} aria-hidden="true" />
+              Brak pracowników w Twoim zakresie.
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--color-text-muted)', marginTop: 4 }}>
+              Poproś administratora o przypisanie Cię jako kierownika komórki w „Jednostkach”
+              albo o przypisanie pracowników do Twojej komórki.
+            </div>
           </div>
         ) : filtered.length === 0 ? (
           <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>
-            <Search size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-            Brak wyników dla „{search}"
+            <Search size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} aria-hidden="true" />
+            Brak wyników dla „{search}”. Spróbuj nazwiska, loginu albo nazwy komórki.
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
@@ -403,8 +411,16 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
              + noScope.join(', ') + '. Wybierz co najmniej jedno uprawnienie albo odznacz program.')
       return
     }
+    // v3.1 — najpierw krok PODSUMOWANIA; wysłanie dopiero z okna.
+    setErr(null)
+    setReviewOpen(true)
+  }
+
+  const [reviewOpen, setReviewOpen] = useState(false)
+  async function confirmFromReview() {
+    // Nadanie uprawnień administracyjnych wymaga twardego potwierdzenia.
     const admins = adminGrantNames([...toGrant, ...scopeChanged], systems, permsBySys)
-    if (!confirmAdminRights(admins)) { setErr(ADMIN_CONFIRM_ABORTED); return }
+    if (!(await confirmAdminRights(admins))) { setErr(ADMIN_CONFIRM_ABORTED); setReviewOpen(false); return }
 
     setBusy(true); setErr(null)
     const mk = (k, kind) => {
@@ -443,11 +459,14 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
     }
     if (declaration) body.declaration = declaration
     try {
-      await createRequest(body)
+      const res = await createRequest(body)
+      setReviewOpen(false)
+      toast(`Wniosek${res?.data?.id ? ` #${res.data.id}` : ''} dla ${w.full_name || w.username} został wysłany.`)
       onDone()
     } catch (ex) {
       const st = ex.response?.status
       const det = ex.response?.data?.detail
+      setReviewOpen(false)
       if (st === 428 && det?.code === 'DECLARATION_REQUIRED') {
         setDeclText(det.declaration_text || '')
         setDeclItems(items)
@@ -459,6 +478,14 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
     }
   }
 
+  // Kopiowanie uprawnień od współpracownika → nowy stan docelowy.
+  function copyFrom(perms) {
+    const res = buildCopiedSelection(perms, systems, permsBySys)
+    setPicked(res.keys)
+    setFieldValues(prev => ({ ...prev, ...res.values }))
+    return { count: res.keys.size, skippedAdmin: res.skippedAdmin, skippedUnavailable: res.skippedUnavailable }
+  }
+
   const _steps = buildWorkflowSteps({
     sent: true, nodeType: 'select_permissions',
     requiresHigher: !!w.requires_higher_approval, kind: 'grant',
@@ -466,24 +493,25 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
   const _summary = [
     { label: 'Pracownik', value: w.full_name || w.username },
     { label: 'Komórka', value: `${w.department_name || '—'} · ${w.unit_name || '—'}` },
-    { label: 'Zmiany', value: `+${toGrant.length} / −${toRevoke.length}` },
+    { label: 'Zmiany', value: `+${toGrant.length + scopeChanged.length} / −${toRevoke.length}` },
     { label: 'Akceptacja', value: w.requires_higher_approval ? 'wymagana' : 'nie wymagana' },
   ]
 
   return (
     <>
     <RequestViewShell
-      icon={ListChecks} kind="grant" kindLabel="Zatrudnienie"
+      icon={ListChecks} kind="change" kindLabel="Zmiana"
       statusText="Nowy wniosek · nie wysłany"
       title={`Wniosek o uprawnienia — ${w.full_name || w.username}`}
       subtitle="Zaznacz stan docelowy uprawnień — po wysłaniu wniosek trafi do kierownika nadrzędnego lub do IT."
       backLabel="← Wróć do moich pracowników" onBack={onClose}
       steps={_steps} summary={_summary} history={[]}
-      footerLeft={<>+{toGrant.length} nadania · −{toRevoke.length} odebrania</>}
+      footerLeft={<><strong style={{ color: 'var(--color-success-text)' }}>+{toGrant.length + scopeChanged.length}</strong> nadania
+        {' · '}<strong style={{ color: 'var(--color-error-text)' }}>−{toRevoke.length}</strong> odebrania</>}
       footerActions={<>
         <button className="btn btn--ghost" onClick={onClose} disabled={busy}>Anuluj</button>
         <button className="btn btn--success" onClick={submit} disabled={busy || loading || noChange}>
-          <Send size={13} /> Wyślij wniosek (+{toGrant.length} / −{toRevoke.length})
+          <Send size={13} /> Sprawdź i wyślij
         </button>
       </>}>
           <Section n={1} title="Pracownik">
@@ -502,6 +530,11 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
             to uprawnienia, które pracownik ma obecnie. To <strong>stan docelowy</strong>:
             zaznacz dodatkowe, aby je <strong>nadać</strong>; odznacz posiadane, aby je <strong>odebrać</strong>.
           </div>
+          {!loading && systems.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <CopyFromColleague excludeUserId={w.id} onCopy={copyFrom} disabled={busy} />
+            </div>
+          )}
           {loading ? (
             <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie uprawnień…</div>
           ) : systems.length === 0 ? (
@@ -702,6 +735,20 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
 
           {err && <div className="alert alert--error">{err}</div>}
     </RequestViewShell>
+
+      <ReviewDialog
+        open={reviewOpen}
+        workerName={w.full_name || w.username}
+        grants={describeKeys([...toGrant, ...scopeChanged], systems, permsBySys, fieldValues)}
+        revokes={describeKeys(toRevoke, systems, permsBySys)}
+        target={w.requires_higher_approval
+          ? 'Po wysłaniu wniosek trafi do akceptacji kierownika wyższego rzędu, potem do IT.'
+          : 'Po wysłaniu wniosek trafi do realizacji przez IT.'}
+        confirmLabel="Wyślij wniosek"
+        busy={busy}
+        onBack={() => setReviewOpen(false)}
+        onConfirm={confirmFromReview}
+      />
 
       {declItems && (
         <DeclarationModal

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import {
   Truck, Plus, Trash2, Edit2, Save, RefreshCw, FileText, X,
 } from 'lucide-react'
@@ -7,6 +7,17 @@ import {
   listContracts, addContract, updateContract, deleteContract,
 } from '../api'
 import { fmtDate } from '../serverTime'
+import { toast, confirmDialog } from '../components/ui/feedback'
+
+// Potwierdzenie w oknie aplikacji (zamiast systemowego confirm). Operacje
+// usuwające / odbierające / nieodwracalne oznaczamy na czerwono.
+const ask = (message) => {
+  const danger = /usun|odebra|wygas|ostrze|nieodwracal/i.test(message)
+  return confirmDialog({
+    title: danger ? 'Potwierdź operację' : 'Potwierdź',
+    message, danger, confirmLabel: danger ? 'Tak, wykonaj' : 'Potwierdź',
+  })
+}
 
 /**
  * Słownik dostawców oprogramowania.
@@ -100,7 +111,7 @@ export default function Vendors() {
       ) : vendors.length === 0 ? (
         <div className="card" style={{ color: 'var(--color-text-muted)', padding: 16 }}>
           <Truck size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-          Brak dostawców w słowniku.
+          Brak dostawców w słowniku. Dodaj pierwszego przyciskiem „Dodaj dostawcę” — potem przypiszesz go do programów w „Oprogramowaniu”.
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -118,6 +129,8 @@ export default function Vendors() {
 // Formularz dostawcy — wspólny dla dodawania i edycji
 // ---------------------------------------------------------------------------
 function VendorForm({ vendor, onCancel, onSaved }) {
+  // Unikalne id pól per formularz — dodawanie i edycja mogą być otwarte naraz.
+  const uid = useId()
   const [f, setF] = useState({
     name: vendor?.name || '',
     nip: vendor?.nip || '',
@@ -144,6 +157,7 @@ function VendorForm({ vendor, onCancel, onSaved }) {
       if (!payload.name) { setErr('Nazwa dostawcy jest wymagana'); setSaving(false); return }
       if (vendor) await updateVendor(vendor.id, payload)
       else await createVendor(payload)
+      toast(vendor ? `Zapisano zmiany: ${payload.name}` : `Dodano dostawcę: ${payload.name}`)
       onSaved()
     } catch (ex) {
       setErr(ex.response?.data?.detail || 'Błąd zapisu')
@@ -173,16 +187,16 @@ function VendorForm({ vendor, onCancel, onSaved }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
           {FIELDS.map(([k, label, extra]) => (
             <div key={k}>
-              <label className="form-label" htmlFor={`vendor-${k}`}>{label}</label>
-              <input id={`vendor-${k}`} className="form-control" style={{ minHeight: 44 }}
+              <label className="form-label" htmlFor={`${uid}-${k}`}>{label}</label>
+              <input id={`${uid}-${k}`} className="form-control" style={{ minHeight: 44 }}
                      required={k === 'name'} autoFocus={k === 'name'}
                      value={f[k]} onChange={e => set(k, e.target.value)} {...extra} />
             </div>
           ))}
         </div>
         <div>
-          <label className="form-label" htmlFor="vendor-notes">Uwagi</label>
-          <textarea id="vendor-notes" className="form-control" style={{ minHeight: 70 }}
+          <label className="form-label" htmlFor={`${uid}-notes`}>Uwagi</label>
+          <textarea id={`${uid}-notes`} className="form-control" style={{ minHeight: 70 }}
                     value={f.notes} onChange={e => set('notes', e.target.value)} />
         </div>
 
@@ -209,9 +223,9 @@ function VendorRow({ vendor: v, onReload }) {
   const [contractsOpen, setContractsOpen] = useState(false)
 
   async function del() {
-    if (!confirm(`Usunąć dostawcę „${v.name}"? Jego umowy serwisowe też zostaną usunięte.`)) return
-    try { await deleteVendor(v.id); onReload() }
-    catch (ex) { alert(ex.response?.data?.detail || 'Nie można usunąć') }
+    if (!await ask(`Usunąć dostawcę „${v.name}"? Jego umowy serwisowe też zostaną usunięte.`)) return
+    try { await deleteVendor(v.id); onReload(); toast(`Usunięto dostawcę „${v.name}”`) }
+    catch (ex) { toast(ex.response?.data?.detail || 'Nie można usunąć', { tone: 'error' }) }
   }
 
   const addr = [v.address, [v.postal_code, v.city].filter(Boolean).join(' ')]
@@ -338,9 +352,9 @@ function ContractsModal({ vendor, onClose, onChanged }) {
   }
 
   async function onDelete(row) {
-    if (!confirm('Usunąć tę umowę serwisową?')) return
-    try { await deleteContract(row.id); await load(); onChanged?.() }
-    catch (ex) { alert(ex.response?.data?.detail || 'Błąd') }
+    if (!await ask('Usunąć tę umowę serwisową?')) return
+    try { await deleteContract(row.id); await load(); onChanged?.(); toast('Usunięto umowę serwisową') }
+    catch (ex) { toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' }) }
   }
 
   return (

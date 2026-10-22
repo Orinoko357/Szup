@@ -3,6 +3,7 @@ import { AlertTriangle, Eye, EyeOff } from 'lucide-react'
 import { loginLocal, loginLdap, loginTest } from '../api'
 import { syncServerTime } from '../serverTime'
 import WodsLogo from '../components/Layout/WodsLogo'
+import { toast } from '../components/ui/feedback'
 import '../styles/login.css'
 
 // Ekran logowania (v3.0, wg projektu): karta na jasnym tle, herb + sygnet +
@@ -25,8 +26,12 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
   }
 
   // Komunikat o nieudanym SSO (z ?sso=... albo po powrocie bez przekierowania).
+  // Błąd (error/notfound/disabled/inactive/expired) → czerwony alert; brak
+  // przekazanych poświadczeń → informacja.
+  const ssoErrKey = new URLSearchParams(window.location.search).get('sso')
+  const ssoIsError = !!ssoErrKey && ssoErrKey !== 'off'
   const [ssoInfo] = useState(() => {
-    const ssoErr = new URLSearchParams(window.location.search).get('sso')
+    const ssoErr = ssoErrKey
     if (ssoErr && ssoErr !== 'off') return SSO_MESSAGES[ssoErr] || SSO_MESSAGES.error
     try {
       if (ssoEnabled && sessionStorage.getItem('szup_sso_tried') === '1') {
@@ -93,10 +98,10 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
         must_change_password: !!res.data.must_change_password,
       }))
       if (res.data.must_change_password) {
-        alert('Twoje hasło musi zostać zmienione. Za chwilę otworzy się formularz.')
+        toast('Twoje hasło musi zostać zmienione — za chwilę otworzy się formularz.', { tone: 'warning' })
       } else if (typeof res.data.password_expires_in_days === 'number'
                  && res.data.password_expires_in_days <= 7) {
-        alert(`Twoje hasło wygaśnie za ${res.data.password_expires_in_days} dni — zmień je w ustawieniach konta.`)
+        toast(`Twoje hasło wygaśnie za ${res.data.password_expires_in_days} dni — zmień je przyciskiem „Hasło” w belce.`, { tone: 'warning', timeout: 9000 })
       }
       await syncServerTime()
       onLogin()
@@ -167,7 +172,9 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
                 </svg>
                 Zaloguj poświadczeniami Windows
               </button>
-              {ssoInfo && <div className="wl-msg" role="status">{ssoInfo}</div>}
+              {ssoInfo && (ssoIsError
+                ? <div className="wl-msg wl-msg--error" role="alert">{ssoInfo}</div>
+                : <div className="wl-msg" role="status">{ssoInfo}</div>)}
               <button type="button" className={`wl-toggle${open ? ' is-open' : ''}`}
                       aria-expanded={open} aria-controls="wl-classic" onClick={toggleClassic}>
                 <span className="wl-rule" aria-hidden="true" />

@@ -6,6 +6,38 @@ Wersjonowanie: [Semantic Versioning](https://semver.org/lang/pl/).
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-10-22
+
+Intuicyjność wg analizy UX: prowadzenie od zadania, jeden język, mniej zgadywania.
+
+### Dodano
+- Linki w e-mailach prowadzą wprost do wniosku (makro `{request_url}`).
+- „Czeka na: kto · od kiedy” (liczone od wejścia na bieżący etap) — pulpit, listy,
+  nagłówek wniosku, Kartoteka („Gdzie teraz”).
+- Wybór uprawnień: stały pasek zmian i krok „Sprawdź przed wysłaniem”.
+- „Skopiuj uprawnienia od współpracownika” (Moi pracownicy, wybór uprawnień kierownika).
+- IT: filtr Wszystkie / Moje / Nieprzypisane, skróty klawiaturowe (Z, O, ↑↓),
+  po realizacji automatycznie następny wniosek.
+- Wyszukiwarka globalna Ctrl+K (osoby i wnioski, zależnie od roli).
+- Lista kontrolna konfiguracji i sygnały jakości danych na pulpicie administratora
+  (GET /api/settings/health).
+- „Twój kierownik” w Moich uprawnieniach; „Co stanie się dalej” i komunikat do
+  skopiowania w Kartotece; etykiety perspektywy („jako kierownik” / „jako IT”).
+- Powiadomienia (toasty) i okna dialogowe zamiast systemowych alert/confirm/prompt
+  (w tym potwierdzenie POTWIERDZAM).
+- E-mail przy odrzuceniu wniosku (do zgłaszającego i kierownika wybierającego).
+
+### Zmieniono
+- Jeden słownik statusów, kroków i rodzajów (w tym „Zmiana”) dla wszystkich ekranów.
+- Pulpit: lista sortowana od najdłużej czekających, do 50 pozycji.
+- Widok wniosku na telefonie z przyciskami akcji przyklejonymi u dołu.
+
+### Naprawiono
+- Tryb ciemny: nagłówki i akcenty (granat na granacie) — zmienna `--color-heading`.
+- Link „Otwórz” z pulpitu nie otwiera wniosku ponownie / w złej zakładce.
+- Pozycje do odebrania znów przekreślone; błąd SSO jako błąd; liczniki zakładek
+  odświeżane; „Administracja” rozwija się na swoich ekranach; usunięty martwy kod.
+
 ## [3.0.0] — 2026-10-22
 
 Nowy wygląd interfejsu wg projektu „SZUP — modułowy pulpit” (wersja 3.0).

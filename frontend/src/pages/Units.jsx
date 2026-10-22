@@ -11,6 +11,17 @@ import {
   listDeputies, addDeputy, updateDeputy, deleteDeputy,
   dedupeDepartments,
 } from '../api'
+import { toast, confirmDialog } from '../components/ui/feedback'
+
+// Potwierdzenie w oknie aplikacji (zamiast systemowego confirm). Operacje
+// usuwające / odbierające / nieodwracalne oznaczamy na czerwono.
+const ask = (message) => {
+  const danger = /usun|odebra|wygas|ostrze|nieodwracal/i.test(message)
+  return confirmDialog({
+    title: danger ? 'Potwierdź operację' : 'Potwierdź',
+    message, danger, confirmLabel: danger ? 'Tak, wykonaj' : 'Potwierdź',
+  })
+}
 
 // Typy węzłów struktury organizacyjnej (zsynchronizowane z backend: models.DEPARTMENT_KINDS)
 export const DEPT_KINDS = [
@@ -56,19 +67,19 @@ export default function Units() {
 
   const [dedupeBusy, setDedupeBusy] = useState(false)
   async function runDedupe() {
-    if (!confirm('Usunąć zduplikowane komórki (np. po ponownym imporcie)?\n\n'
+    if (!await ask('Usunąć zduplikowane komórki (np. po ponownym imporcie)?\n\n'
       + 'Usunięte zostaną WYŁĄCZNIE kopie BEZ danych — bez przypisanych pracowników, '
       + 'wniosków i bez ustawionego kierownika. Rekord z danymi zawsze zostaje.')) return
     setDedupeBusy(true)
     try {
       const r = await dedupeDepartments()
       const d = r.data
-      alert(`Usunięto duplikatów: ${d.deleted}\n`
+      toast(`Usunięto duplikatów: ${d.deleted}\n`
         + `Grup z duplikatami: ${d.clusters_found}`
         + (d.details.length ? `\n\n${d.details.join('\n')}` : ''))
       load()
     } catch (ex) {
-      alert(ex.response?.data?.detail || 'Nie udało się usunąć duplikatów')
+      toast(ex.response?.data?.detail || 'Nie udało się usunąć duplikatów', { tone: 'error' })
     } finally { setDedupeBusy(false) }
   }
 
@@ -100,6 +111,12 @@ export default function Units() {
         // zostawiamy akordeony zamontowane — inaczej traciłyby stan rozwinięcia
         // i cała struktura by się zwijała.
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {!loading && units.length === 0 && (
+            <div className="card" style={{ fontSize: 14, color: 'var(--color-text-muted)' }}>
+              <strong style={{ color: 'var(--color-text)' }}>Brak jednostek.</strong>{' '}
+              Zaimportuj strukturę z AD przyciskiem „Importuj strukturę z AD” powyżej albo dodaj jednostkę ręcznie poniżej.
+            </div>
+          )}
           {units.map(u => (
             <UnitAccordion key={u.id} unit={u}
               depts={depts.filter(d => d.unit_id === u.id)}
@@ -133,14 +150,14 @@ function UnitAccordion({ unit: u, depts, users, onChanged }) {
     try {
       await updateUnit(u.id, { manager_user_id: val ? Number(val) : null })
       onChanged()
-    } catch (ex) { alert(ex.response?.data?.detail || 'Nie udało się ustawić kierownika jednostki') }
+    } catch (ex) { toast(ex.response?.data?.detail || 'Nie udało się ustawić kierownika jednostki', { tone: 'error' }) }
     finally { setMgrBusy(false) }
   }
 
   async function delUnit() {
-    if (!confirm(`Usunąć jednostkę "${u.name}"? Usunięte zostaną też powiązane wydziały.`)) return
-    try { await deleteUnit(u.id); onChanged() }
-    catch (ex) { alert(ex.response?.data?.detail || 'Błąd usuwania') }
+    if (!await ask(`Usunąć jednostkę "${u.name}"? Usunięte zostaną też powiązane wydziały.`)) return
+    try { await deleteUnit(u.id); onChanged(); toast(`Usunięto jednostkę „${u.name}”`) }
+    catch (ex) { toast(ex.response?.data?.detail || 'Błąd usuwania', { tone: 'error' }) }
   }
 
   // v3.0 — jednostka jako karta: nagłówek (rozwiń/zwiń) + osobne przyciski
@@ -306,13 +323,13 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
         is_hr: isHr,
       })
       setEditing(false); onChanged()
-    } catch (ex) { alert(ex.response?.data?.detail || 'Błąd zapisu') }
+    } catch (ex) { toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' }) }
   }
 
   async function del() {
-    if (!confirm(`Usunąć "${d.name}"?`)) return
-    try { await deleteDepartment(d.id); onChanged() }
-    catch (ex) { alert(ex.response?.data?.detail || 'Błąd usuwania') }
+    if (!await ask(`Usunąć "${d.name}"?`)) return
+    try { await deleteDepartment(d.id); onChanged(); toast(`Usunięto „${d.name}”`) }
+    catch (ex) { toast(ex.response?.data?.detail || 'Błąd usuwania', { tone: 'error' }) }
   }
 
   const indentPx = depth * 18
@@ -1332,15 +1349,16 @@ function DeputiesModal({ dept, users, onClose, onChanged }) {
     try {
       await updateDeputy(row.id, { user_id: row.user_id, role_label: newLabel })
       await load(); onChanged?.()
-    } catch (ex) { alert(ex.response?.data?.detail || 'Blad') }
+    } catch (ex) { toast(ex.response?.data?.detail || 'Blad', { tone: 'error' }) }
   }
 
   async function onDelete(row) {
-    if (!confirm('Odebrac uprawnienia zastepcy: ' + row.user_name + '?')) return
+    if (!await ask('Odebrać uprawnienia zastępcy: ' + row.user_name + '?')) return
     try {
       await deleteDeputy(row.id)
       await load(); onChanged?.()
-    } catch (ex) { alert(ex.response?.data?.detail || 'Blad') }
+      toast(`Odebrano uprawnienia zastępcy: ${row.user_name}`)
+    } catch (ex) { toast(ex.response?.data?.detail || 'Blad', { tone: 'error' }) }
   }
 
   return (

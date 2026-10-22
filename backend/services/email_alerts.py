@@ -20,6 +20,18 @@ HELPDESK_EMAIL = os.getenv("SZUP_HELPDESK_EMAIL", "helpdesk@wodzislaw-slaski.pl"
 APP_URL = os.getenv("SZUP_APP_URL", "https://szup.intranet.wods.pl")
 
 
+def request_url(request_id: int, tab: str = "handle") -> str:
+    """Link prosto do wniosku w aplikacji (v3.1) — /requests?tab=…&open=<id>."""
+    return f"{APP_URL.rstrip('/')}/requests?tab={tab}&open={request_id}"
+
+
+def requester_url(request_id: int, requester_is_manager: bool | None) -> str:
+    """Link dla wnioskodawcy: kierownik → „Moje wnioski”, kadry → Kartoteka."""
+    if requester_is_manager:
+        return request_url(request_id, "mine")
+    return f"{APP_URL.rstrip('/')}/hr"
+
+
 def _get_settings():
     from database import engine
     from sqlmodel import Session, select
@@ -125,6 +137,7 @@ def notify_manager_new_request(manager_email: str, request_id: int, worker_name:
     _send_event("manager_new_request", manager_email, {
         "request_id": request_id, "worker_name": worker_name,
         "dept_name": dept_name, "created_by": created_by,
+        "request_url": request_url(request_id, "handle"),
     }, from_name=from_name, from_email=from_email)
 
 
@@ -135,6 +148,7 @@ def notify_selector_new_request(manager_email: str, request_id: int, worker_name
     _send_event("selector_new_request", manager_email, {
         "request_id": request_id, "worker_name": worker_name,
         "dept_name": dept_name, "created_by": created_by,
+        "request_url": request_url(request_id, "handle"),
     }, from_name=from_name, from_email=from_email)
 
 
@@ -143,6 +157,7 @@ def notify_higher_manager_request(manager_email: str, request_id: int, worker_na
     _send_event("higher_manager_request", manager_email, {
         "request_id": request_id, "worker_name": worker_name,
         "dept_name": dept_name, "selector_name": selector_name,
+        "request_url": request_url(request_id, "handle"),
     })
 
 
@@ -154,6 +169,7 @@ def notify_it_request_approved(it_emails: list[str], request_id: int, worker_nam
         _send_event("it_request_approved", email, {
             "request_id": request_id, "worker_name": worker_name,
             "dept_name": dept_name, "manager_name": manager_name,
+            "request_url": request_url(request_id, "it"),
         }, from_name=from_name, from_email=from_email)
 
 
@@ -184,13 +200,15 @@ def notify_helpdesk_new_request(request_id: int, worker_name: str,
         "request_id": request_id, "worker_name": worker_name,
         "manager_name": manager_name, "what": what,
         "applicant": applicant, "applicant_line": applicant_line,
+        "request_url": request_url(request_id, "it"),
     }, from_name=from_name, from_email=from_email)
 
 
 def notify_request_completed(requester_email: str, request_id: int, worker_name: str,
                              from_name: str | None = None,
                              from_email: str | None = None,
-                             denied_lines: list[str] | None = None) -> None:
+                             denied_lines: list[str] | None = None,
+                             requester_is_manager: bool | None = None) -> None:
     # Sekcja z pozycjami, których NIE nadano (odmowa IT / kierownika nadrzędnego).
     denied_block = ""
     denied_suffix = ""
@@ -202,14 +220,17 @@ def notify_request_completed(requester_email: str, request_id: int, worker_name:
     _send_event("request_completed", requester_email, {
         "request_id": request_id, "worker_name": worker_name,
         "denied_block": denied_block, "denied_suffix": denied_suffix,
+        "request_url": requester_url(request_id, requester_is_manager),
     }, from_name=from_name, from_email=from_email)
 
 
 def notify_request_rejected(requester_email: str, request_id: int,
-                              worker_name: str, comment: str) -> None:
+                              worker_name: str, comment: str,
+                              requester_is_manager: bool | None = None) -> None:
     _send_event("request_rejected", requester_email, {
         "request_id": request_id, "worker_name": worker_name,
         "comment": comment or "(brak komentarza)",
+        "request_url": requester_url(request_id, requester_is_manager),
     })
 
 
@@ -225,4 +246,5 @@ def notify_workflow_stage(to_address: str, request_id: int, worker_name: str,
         "request_id": request_id, "worker_name": worker_name,
         "dept_name": dept_name, "stage_label": stage_label,
         "action_hint": action_hint,
+        "request_url": request_url(request_id, "it" if node_type == "it_execute" else "handle"),
     }, from_name=from_name, from_email=from_email)

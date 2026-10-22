@@ -280,8 +280,31 @@ def my_permissions(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Uprawnienia zalogowanego użytkownika (NIS2/KSC — transparentność)."""
-    return _effective_permissions(session, current_user.id)
+    """Uprawnienia zalogowanego użytkownika (NIS2/KSC — transparentność).
+    v3.1: + `manager` — kto składa wnioski o uprawnienia dla tej osoby."""
+    out = _effective_permissions(session, current_user.id)
+    out["manager"] = _my_manager(session, current_user)
+    return out
+
+
+def _my_manager(session: Session, user: User) -> Optional[dict]:
+    """Efektywny kierownik użytkownika: kierownik jego komórki (dla samodzielnych
+    stanowisk / komórek bez kierownika — najbliższy wyżej). Gdy użytkownik SAM
+    kieruje tą komórką — kierownik komórki nadrzędnej. None, gdy brak."""
+    from services.permissions import effective_manager_dept
+    if not user.department_id:
+        return None
+    dept = session.get(Department, user.department_id)
+    resp = effective_manager_dept(session, dept) if dept else None
+    if resp and resp.manager_user_id == user.id:
+        parent = session.get(Department, resp.parent_dept_id) if resp.parent_dept_id else None
+        resp = effective_manager_dept(session, parent) if parent else None
+    if not resp or not resp.manager_user_id:
+        return None
+    m = session.get(User, resp.manager_user_id)
+    if not m:
+        return None
+    return {"name": m.full_name or m.username, "department": resp.name, "email": m.email}
 
 
 @router.get("/{user_id}/permissions")

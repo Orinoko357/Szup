@@ -696,3 +696,117 @@ def factory_reset(
     if not details:
         details.append("Brak danych do usunięcia — system był już pusty.")
     return FactoryResetResult(deleted=deleted, details=details)
+
+
+# ---------------------------------------------------------------------------
+# v3.1 — Lista kontrolna konfiguracji + sygnały jakości danych (pulpit admina)
+# ---------------------------------------------------------------------------
+
+@router.get("/health")
+def config_health(
+    session: Session = Depends(get_session),
+    _: User = Depends(require_admin),
+):
+    """Czy system jest gotowy do pracy i co wymaga uporządkowania.
+
+    checks — elementy konfiguracji (ok / brak), issues — liczniki problemów
+    w danych. `link` to trasa frontendu, pod którą admin to naprawi.
+    """
+    import json as _json
+    from datetime import timedelta
+    from models import (Unit, Department, RequestType, WorkflowTemplate,
+                        WorkflowInstance, WorkflowInstanceStatus, SecurityEvent,
+                        parse_roles)
+    from services.workflow import current_step_since
+    from services.email_alerts import HELPDESK_EMAIL
+
+    ldap = session.exec(select(LdapSettings)).first()
+    email = session.exec(select(EmailSettings)).first()
+    app = session.exec(select(AppSettings)).first()
+    units = session.exec(select(Unit)).all()
+    depts = session.exec(select(Department)).all()
+    users = session.exec(select(User)).all()
+    users_by_id = {u.id: u for u in users}
+
+    active_depts = [d for d in depts if d.is_active]
+    no_manager = [d for d in active_depts
+                  if getattr(d, "kind", "department") != "standalone" and not d.manager_user_id]
+    inactive_mgr = [d for d in active_depts
+                    if d.manager_user_id and users_by_id.get(d.manager_user_id)
+                    and not users_by_id[d.manager_user_id].is_active]
+
+    templates = {t.id: t for t in session.exec(select(WorkflowTemplate)).all()}
+    active_tpl = [t for t in templates.values() if t.is_active]
+
+    def _has_it_step(t) -> bool:
+        try:
+            return any(n.get("type") == "it_execute"
+                       for n in (_json.loads(t.graph_json) or {}).get("nodes", []))
+        except Exception:
+            return False
+
+    req_types_ok = [rt for rt in session.exec(select(RequestType)).all()
+                    if rt.is_active and templates.get(rt.workflow_template_id)
+                    and templates[rt.workflow_template_id].is_active]
+
+    helpdesk = (app.helpdesk_email or "").strip() if app else ""
+
+    checks = [
+        {"key": "ldap", "label": "AD/LDAP skonfigurowane",
+         "ok": bool(ldap and ldap.enabled and (ldap.host or "").strip()),
+         "detail": (ldap.host if ldap and ldap.host else "Brak serwera lub logowanie AD wyłączone"),
+         "link": "/settings"},
+        {"key": "structure", "label": "Struktura zaimportowana",
+         "ok": bool(units) and bool(depts),
+         "detail": f"Jednostek: {len(units)}, komórek: {len(depts)}",
+         "link": "/units"},
+        {"key": "managers", "label": "Kierownicy przypisani",
+         "ok": not no_manager,
+         "detail": ("Wszystkie komórki mają kierownika" if not no_manager
+                    else f"Komórek bez kierownika: {len(no_manager)}"),
+         "link": "/units"},
+        {"key": "request_types", "label": "Typy wniosków",
+         "ok": bool(req_types_ok),
+         "detail": f"Aktywnych z aktywnym szablonem: {len(req_types_ok)}",
+         "link": "/request-types"},
+        {"key": "it_step", "label": "Szablon obiegu z krokiem IT",
+         "ok": any(_has_it_step(t) for t in active_tpl),
+         "detail": f"Aktywnych szablonów: {len(active_tpl)}",
+         "link": "/workflow-templates"},
+        {"key": "email", "label": "Powiadomienia e-mail",
+         "ok": bool(email and email.enabled and (email.smtp_host or "").strip()),
+         "detail": (email.smtp_host if email and email.smtp_host else "Brak serwera SMTP lub wyłączone"),
+         "link": "/settings"},
+        {"key": "helpdesk", "label": "Adres helpdesku IT",
+         "ok": bool(helpdesk or HELPDESK_EMAIL),
+         "detail": helpdesk or f"{HELPDESK_EMAIL} (domyślny)",
+         "link": "/settings"},
+    ]
+
+    # Użytkownicy bez komórki — pomijamy nieaktywnych i konta czysto administracyjne.
+    admin_only = {"admin", "superadmin"}
+    no_dept = [u for u in users if u.is_active and not u.department_id
+               and not set(parse_roles(u.roles)) <= admin_only]
+
+    # Wnioski czekające > 7 dni na bieżącym kroku (aktywna instancja obiegu).
+    limit = datetime.utcnow() - timedelta(days=7)
+    stale = 0
+    for inst in session.exec(
+        select(WorkflowInstance).where(WorkflowInstance.status == WorkflowInstanceStatus.active)
+    ).all():
+        since = current_step_since(session, inst)
+        if since and since < limit:
+            stale += 1
+
+    open_sec = len(session.exec(
+        select(SecurityEvent).where(SecurityEvent.resolved_at == None)  # noqa: E711
+    ).all())
+
+    issues = [
+        {"key": "dept_no_manager", "label": "Komórki bez kierownika", "count": len(no_manager), "link": "/units"},
+        {"key": "users_no_dept", "label": "Użytkownicy bez komórki", "count": len(no_dept), "link": "/users"},
+        {"key": "stale_requests", "label": "Wnioski czekające ponad 7 dni", "count": stale, "link": "/requests"},
+        {"key": "inactive_managers", "label": "Nieaktywni kierownicy na stanowisku", "count": len(inactive_mgr), "link": "/units"},
+        {"key": "security_open", "label": "Otwarte zdarzenia bezpieczeństwa", "count": open_sec, "link": "/security"},
+    ]
+    return {"checks": checks, "issues": issues}

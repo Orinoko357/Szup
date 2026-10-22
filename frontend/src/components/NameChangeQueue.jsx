@@ -2,15 +2,14 @@ import { useEffect, useState } from 'react'
 import { RefreshCw, UserPen, X } from 'lucide-react'
 import { listNameChanges, resolveNameChange } from '../api'
 import { fmtDate } from '../serverTime'
+import { NAME_CHANGE_STATUS } from '../labels'
+import { toast } from './ui/feedback'
 
-const STATUS = {
-  pending:  ['badge--warning', 'oczekuje'],
-  done:     ['badge--success', 'zrealizowany'],
-  rejected: ['badge--error', 'odrzucony'],
-}
+// Wspólny słownik statusów zmian nazwiska (labels.js).
+const STATUS = Object.fromEntries(Object.entries(NAME_CHANGE_STATUS).map(([k, v]) => [k, [v.badge, v.label]]))
 
 /** Kolejka wniosków o zmianę nazwiska dla IT — realizacja lub odrzucenie. */
-export default function NameChangeQueue() {
+export default function NameChangeQueue({ onChanged } = {}) {
   const [filter, setFilter] = useState('pending')
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -35,7 +34,7 @@ export default function NameChangeQueue() {
                       minHeight: 36, padding: '0 14px', border: 0, borderRadius: 6, cursor: 'pointer',
                       font: 'inherit', fontSize: 13, fontWeight: filter === v ? 700 : 600,
                       background: filter === v ? 'var(--color-card)' : 'transparent',
-                      color: filter === v ? 'var(--color-navy)' : 'var(--color-text-muted)',
+                      color: filter === v ? 'var(--color-heading)' : 'var(--color-text-muted)',
                     }}>{l}</button>
           ))}
         </div>
@@ -48,7 +47,12 @@ export default function NameChangeQueue() {
         {loading ? (
           <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Ładowanie…</div>
         ) : rows.length === 0 ? (
-          <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Brak wniosków.</div>
+          <div style={{ padding: 18 }}>
+            <div style={{ fontWeight: 700 }}>{filter === 'pending' ? 'Brak zgłoszeń do rozpatrzenia.' : 'Brak zgłoszeń.'}</div>
+            <div style={{ fontSize: 13, color: 'var(--color-text-muted)', marginTop: 4 }}>
+              Pracownicy zgłaszają zmianę nazwiska w „Moich uprawnieniach”.
+            </div>
+          </div>
         ) : (
           <table className="data-table" style={{ minWidth: 860 }}>
             <thead>
@@ -92,7 +96,7 @@ export default function NameChangeQueue() {
 
       {open && (
         <ResolveModal req={open} onClose={() => setOpen(null)}
-                      onDone={() => { setOpen(null); load() }} />
+                      onDone={() => { setOpen(null); load(); onChanged?.() }} />
       )}
     </>
   )
@@ -114,6 +118,9 @@ function ResolveModal({ req, onClose, onDone }) {
         comment: comment.trim() || null,
         new_username: action === 'apply' && changeLogin ? newLogin.trim() : null,
       })
+      toast(action === 'apply'
+        ? `Zmiana nazwiska rozpatrzona: ${req.requested_full_name}.`
+        : `Odrzucono zgłoszenie zmiany nazwiska (${req.username}).`)
       onDone()
     } catch (ex) {
       setErr(ex.response?.data?.detail || 'Błąd operacji'); setBusy(false)

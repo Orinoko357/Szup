@@ -8,6 +8,7 @@ import {
   listSnapshots, getSnapshot, snapshotCsvUrl, runSnapshot,
 } from '../api'
 import { fmtDate } from '../serverTime'
+import { toast } from '../components/ui/feedback'
 
 /**
  * Rejestr uprawnień — dwie zakładki:
@@ -99,7 +100,9 @@ function CurrentRegistry() {
   const [units, setUnits] = useState([])
   const [systems, setSystems] = useState([])
   const [detail, setDetail] = useState(null)
-  const [f, setF] = useState({ unit_id: '', system_id: '', q: '', only_with_declaration: false })
+  // ?q= — wejście z wyszukiwarki globalnej (Ctrl+K) od razu filtruje po pracowniku.
+  const [f, setF] = useState(() => ({ unit_id: '', system_id: '',
+    q: new URLSearchParams(window.location.search).get('q') || '', only_with_declaration: false }))
 
   const params = () => ({
     ...(f.unit_id ? { unit_id: f.unit_id } : {}),
@@ -261,7 +264,7 @@ function SnapshotsRegistry({ isAdmin }) {
       await loadList()
       setDate(r.data.snapshot_date)
     } catch (ex) {
-      alert(ex.response?.data?.detail || 'Nie udało się wygenerować migawki')
+      toast(ex.response?.data?.detail || 'Nie udało się wygenerować migawki', { tone: 'error' })
     } finally { setBusy(false) }
   }
 

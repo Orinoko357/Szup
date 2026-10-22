@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Wrench, RefreshCw, CheckCircle, Link2, UserPlus, Plus } from 'lucide-react'
 import {
   listRequests, workflowAction, linkRequestWorker, listItStaff, assignRequest,
-  listSystems, denyRequestItem, fulfillRequestItem, getRequest,
+  listSystems, denyRequestItem, fulfillRequestItem, getRequest, getMe,
 } from '../api'
 
 /** Kierownik IT = osoba mająca JEDNOCZEŚNIE rolę „manager" i „it_staff".
@@ -14,54 +14,29 @@ function useIsItManager() {
   const roles = Array.isArray(u?.roles) ? u.roles : (u?.role ? [u.role] : [])
   return roles.includes('manager') && roles.includes('it_staff')
 }
-import { fmtDate } from '../serverTime'
-import WorkflowRibbon from '../components/WorkflowRibbon'
-import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard, deptFull, KindBadge } from '../components/RequestView'
+import { fmtDate, serverTs } from '../serverTime'
+import RequestViewShell, {
+  buildWorkflowSteps, Section, WorkerCard, deptFull, KindBadge, perspectiveLabel, waitingText,
+} from '../components/RequestView'
 import PermissionChanges from '../components/PermissionChanges'
 import AddPermissionsPicker from '../components/AddPermissionsPicker'
-import NameChangeQueue from '../components/NameChangeQueue'
+import { statusLabel, statusBadge, kindLabel, daysSince, waitText } from '../labels'
+import { toast, confirmDialog } from '../components/ui/feedback'
 import {
   missingRequiredFields, adminGrantNames, confirmAdminRights, ADMIN_CONFIRM_ABORTED,
 } from '../components/ItemFields'
 
-export default function IT() {
-  // Pozwól wejść wprost na zakładkę „Zmiany nazwiska" z pulpitu (?tab=names).
-  const initialTab = new URLSearchParams(window.location.search).get('tab') === 'names'
-    ? 'names' : 'requests'
-  const [tab, setTab] = useState(initialTab)
-  // Otwarty wniosek = pełnoekranowy widok (jak Kartoteka / Moi pracownicy) —
-  // bez nagłówka „Panel IT” i zakładek nad nim.
-  const [fullView, setFullView] = useState(false)
-  // Nagłówek i zakładki ukrywane warunkowo (nie wczesnym return), żeby
-  // RequestsTab nie był przemontowywany i nie gubił otwartego wniosku.
-  const hideChrome = tab === 'requests' && fullView
-  return (
-    <div>
-      {!hideChrome && (
-        <div className="page-header">
-          <div>
-            <div className="page-header__title">Panel IT</div>
-            <div className="page-header__sub">Realizacja wniosków o uprawnienia i zmian nazwiska</div>
-          </div>
-        </div>
-      )}
-      {!hideChrome && (
-        <div className="tabs" style={{ marginTop: 0 }}>
-          <button className={`tab-btn${tab === 'requests' ? ' active' : ''}`}
-                  onClick={() => setTab('requests')}>Wnioski o uprawnienia</button>
-          <button className={`tab-btn${tab === 'names' ? ' active' : ''}`}
-                  onClick={() => setTab('names')}>Zmiany nazwiska</button>
-        </div>
-      )}
-      {tab === 'requests' ? <RequestsTab onViewChange={setFullView} /> : <NameChangeQueue />}
-    </div>
-  )
-}
+const kindPill = (k) => <KindBadge kind={['revoke', 'change'].includes(k) ? k : 'grant'} label={kindLabel(k)} />
 
-export function RequestsTab({ onViewChange, openId, onChanged }) {
+// Lista realizacji IT (zakładka „Realizacja IT” strony Wnioski).
+export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged }) {
   const [requests, setRequests] = useState([])
   const [loading, setLoading]   = useState(true)
   const [filter, setFilter]     = useState('pending_it')
+  // v3.1 — szybki filtr kolejki: wszystkie / moje / nieprzypisane.
+  const [who, setWho]           = useState('all')
+  const [meId, setMeId]         = useState(null)
+  useEffect(() => { getMe().then(r => setMeId(r.data?.id ?? null)).catch(() => {}) }, [])
   const [openReq, setOpenReq]   = useState(null)   // jeden wspólny widok: podgląd + realizacja
   const openedRef = useRef(false)
 
@@ -81,7 +56,9 @@ export function RequestsTab({ onViewChange, openId, onChanged }) {
         openedRef.current = true
         const hit = r.data.find(x => x.id === Number(openId))
         if (hit) setOpenReq(hit)
-        else getRequest(openId).then(x => setOpenReq(x.data)).catch(() => {})
+        else getRequest(openId).then(x => setOpenReq(x.data))
+          .catch(() => toast(`Wniosek #${openId} nie jest dostępny.`, { tone: 'info' }))
+        onOpenConsumed?.()
       }
       return r.data
     } finally { if (!silent) setLoading(false) }
@@ -90,57 +67,122 @@ export function RequestsTab({ onViewChange, openId, onChanged }) {
   useEffect(() => { load() }, [filter])
   useEffect(() => { onViewChange?.(!!openReq) }, [openReq])
 
-  const STATUS_BADGE = { pending_selection: 'badge--warning', pending_it: 'badge--info', completed: 'badge--success', pending_manager: 'badge--warning', rejected: 'badge--error' }
-  const STATUS_LABELS = { pending_selection: 'Wybór uprawnień', pending_it: 'Do realizacji', completed: 'Zrealizowany', pending_manager: 'Oczekuje kierownika', rejected: 'Odrzucony' }
+  const matchWho = (x) => who === 'all' || filter !== 'pending_it'
+    || (who === 'mine' ? (meId != null && x.assigned_to_user_id === meId) : !x.assigned_to_user_id)
+  const shown = requests.filter(matchWho)
+  const counts = {
+    all: requests.length,
+    mine: requests.filter(x => meId != null && x.assigned_to_user_id === meId).length,
+    unassigned: requests.filter(x => !x.assigned_to_user_id).length,
+  }
+
+  // Po zakończeniu: przy realizacji od razu otwórz NASTĘPNY wniosek z kolejki.
+  async function handleDone(result) {
+    setOpenReq(null)
+    onChanged?.()
+    const data = await load().catch(() => [])
+    if (result?.realizedId) {
+      const next = (data || [])
+        .filter(x => x.status === 'pending_it' && x.id !== result.realizedId)
+        .filter(matchWho)
+        .sort((a, b) => (serverTs(a.step_since || a.created_at) || 0) - (serverTs(b.step_since || b.created_at) || 0))[0]
+      if (next) {
+        toast(`Zrealizowano #${result.realizedId} — otwieram następny (#${next.id}).`)
+        setOpenReq(next)
+      } else {
+        toast(`Zrealizowano #${result.realizedId}. Kolejka realizacji jest pusta.`)
+      }
+    }
+  }
 
   // Otwarty wniosek = pełnoekranowy widok (zamiast listy), spójnie z Kartoteką.
   if (openReq) {
-    return <RequestModal request={openReq} onClose={() => setOpenReq(null)}
-                         onDone={() => { setOpenReq(null); load(); onChanged?.() }}
+    return <RequestModal key={openReq.id} request={openReq} onClose={() => setOpenReq(null)}
+                         onDone={handleDone}
                          onRefresh={() => load({ silent: true })} />
   }
 
   return (
     <>
       {/* Filtr jako przełącznik segmentowy (wg projektu). */}
-      <div role="group" aria-label="Filtr" style={{ display: 'inline-flex', padding: 3, gap: 2, borderRadius: 8,
-                                                    background: 'var(--color-neutral-bg)', marginBottom: 16 }}>
-        {[['pending_it','Do realizacji'],['all','Wszystkie']].map(([v,l]) => (
-          <button key={v} type="button" aria-pressed={filter===v} onClick={() => setFilter(v)}
-                  style={{
-                    minHeight: 36, padding: '0 14px', border: 0, borderRadius: 6, cursor: 'pointer',
-                    font: 'inherit', fontSize: 13, fontWeight: filter===v ? 700 : 600,
-                    background: filter===v ? 'var(--color-card)' : 'transparent',
-                    color: filter===v ? 'var(--color-navy)' : 'var(--color-text-muted)',
-                  }}>{l}</button>
-        ))}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+        <div role="group" aria-label="Filtr statusu" style={{ display: 'inline-flex', padding: 3, gap: 2, borderRadius: 8,
+                                                      background: 'var(--color-neutral-bg)' }}>
+          {[['pending_it','Do realizacji'],['all','Wszystkie']].map(([v,l]) => (
+            <button key={v} type="button" aria-pressed={filter===v} onClick={() => setFilter(v)}
+                    style={{
+                      minHeight: 36, padding: '0 14px', border: 0, borderRadius: 6, cursor: 'pointer',
+                      font: 'inherit', fontSize: 13, fontWeight: filter===v ? 700 : 600,
+                      background: filter===v ? 'var(--color-card)' : 'transparent',
+                      color: filter===v ? 'var(--color-heading)' : 'var(--color-text-muted)',
+                    }}>{l}</button>
+          ))}
+        </div>
+        {filter === 'pending_it' && (
+          <div role="group" aria-label="Kto realizuje" style={{ display: 'inline-flex', padding: 3, gap: 2, borderRadius: 8,
+                                                        background: 'var(--color-neutral-bg)' }}>
+            {[['all','Wszystkie'],['mine','Moje'],['unassigned','Nieprzypisane']].map(([v,l]) => (
+              <button key={v} type="button" aria-pressed={who===v} onClick={() => setWho(v)}
+                      style={{
+                        minHeight: 36, padding: '0 14px', border: 0, borderRadius: 6, cursor: 'pointer',
+                        font: 'inherit', fontSize: 13, fontWeight: who===v ? 700 : 600,
+                        background: who===v ? 'var(--color-card)' : 'transparent',
+                        color: who===v ? 'var(--color-heading)' : 'var(--color-text-muted)',
+                      }}>{l} ({counts[v]})</button>
+            ))}
+          </div>
+        )}
       </div>
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        {loading ? <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Ładowanie…</div> : requests.length === 0 ? (
-          <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Brak wniosków</div>
+        {loading ? <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Ładowanie…</div> : shown.length === 0 ? (
+          <div style={{ padding: 18 }}>
+            <div style={{ fontWeight: 700 }}>
+              {filter === 'pending_it'
+                ? (who === 'mine' ? 'Nie masz przypisanych wniosków.' : who === 'unassigned' ? 'Brak nieprzypisanych wniosków.' : 'Kolejka realizacji jest pusta.')
+                : 'Brak wniosków.'}
+            </div>
+            {filter === 'pending_it' && who !== 'all' && (
+              <button type="button" className="btn btn--ghost btn--sm" style={{ marginTop: 8 }} onClick={() => setWho('all')}>
+                Pokaż całą kolejkę
+              </button>
+            )}
+          </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
           <table className="data-table" style={{ minWidth: 1080 }}>
-            <thead><tr><th>#</th><th>Pracownik</th><th>Wydział</th><th>Jednostka</th><th>Uprawnień</th><th>Status</th><th>Przypisany</th><th>Data</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>Pracownik</th><th>Wydział</th><th>Jednostka</th><th>Uprawnień</th><th>Status</th><th>Przypisany</th><th>Czeka</th><th></th></tr></thead>
             <tbody>
-              {requests.map(r => (
+              {shown.map(r => (
                 <tr key={r.id}>
                   <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
                   <td>
                     <div style={{ fontWeight: 700 }}>{r.worker_name}</div>
-                    <KindBadge kind={r.kind === 'revoke' ? 'revoke' : 'grant'}
-                               label={r.kind === 'revoke' ? 'Odejście' : 'Zatrudnienie'} />
+                    {kindPill(r.kind)}
                   </td>
                   <td>{deptFull(r.department_name, r.department_description)}</td>
                   <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{r.unit_name || '—'}</td>
                   <td>{r.items?.length||0}</td>
-                  <td><span className={`badge ${STATUS_BADGE[r.status]||'badge--neutral'}`}>{STATUS_LABELS[r.status]||r.status}</span></td>
+                  <td>
+                    <span className={`badge ${statusBadge(r.status)}`}>{statusLabel(r.status)}</span>
+                    {r.status !== 'pending_it' && waitingText(r) && (
+                      <div style={{ fontSize: 12, color: 'var(--color-warning-text)', marginTop: 2 }}>{waitingText(r)}</div>
+                    )}
+                  </td>
                   <td style={{ fontSize: 12 }}>
                     {r.assigned_to_name
                       ? <span className="badge badge--info">{r.assigned_to_name}</span>
                       : <span style={{ color: 'var(--color-text-muted)' }}>nieprzypisany</span>}
                   </td>
-                  <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{fmtDate(r.created_at)}</td>
+                  <td style={{ fontSize: 12 }}>
+                    {(() => {
+                      const d = daysSince(serverTs(r.step_since || r.created_at))
+                      return <span style={{ fontWeight: d >= 7 ? 700 : 400,
+                                            color: d >= 7 ? 'var(--color-error-text)' : 'var(--color-text-muted)' }}>
+                        {r.status === 'pending_it' ? waitText(d) : '—'}
+                      </span>
+                    })()}
+                    <div style={{ color: 'var(--color-text-muted)' }}>złożono {fmtDate(r.created_at)}</div>
+                  </td>
                   <td>
                     {r.status === 'pending_it' ? (
                       <button className="btn btn--success btn--sm" onClick={() => setOpenReq(r)}>
@@ -295,6 +337,9 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     setBusy(true); setErr(null)
     try {
       await assignRequest(r.id, assignee ? Number(assignee) : null)
+      const who = itStaff.find(u => String(u.id) === String(assignee))
+      toast(assignee ? `Przekazano wniosek #${r.id}: ${who?.full_name || who?.username || 'pracownik IT'}.`
+                     : `Wniosek #${r.id} jest teraz nieprzypisany.`)
       onDone()
     } catch (ex) {
       setErr(ex.response?.data?.detail || 'Nie udało się przekazać wniosku'); setBusy(false)
@@ -308,9 +353,12 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     // Praca etapowa: jeśli zostały pozycje nadania ani nieodhaczone, ani
     // nieodmówione — upewnij się, że realizator chce zamknąć wniosek teraz.
     if (!isRevoke && grantProgress.pending > 0) {
-      const ok = window.confirm(
-        `Pozostało ${grantProgress.pending} pozycji bez decyzji (nieodhaczonych i `
-        + `nieodmówionych). Zamknąć wniosek teraz? Pozostałe zostaną nadane.`)
+      const ok = await confirmDialog({
+        title: 'Zostały pozycje bez decyzji',
+        message: `Pozostało ${grantProgress.pending} pozycji bez decyzji (nieodhaczonych i `
+          + `nieodmówionych). Zamknąć wniosek teraz? Pozostałe zostaną oznaczone jako nadane.`,
+        confirmLabel: 'Zamknij wniosek',
+      })
       if (!ok) return
     }
 
@@ -336,7 +384,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       // Także IT musi twardo potwierdzić uprawnienia administracyjne —
       // dokładanie ich na etapie realizacji omija akceptację kierownika.
       const admins = adminGrantNames(addedKeys, addSystems, addPerms)
-      if (!confirmAdminRights(admins)) { setErr(ADMIN_CONFIRM_ABORTED); return }
+      if (!(await confirmAdminRights(admins))) { setErr(ADMIN_CONFIRM_ABORTED); return }
     }
 
     setBusy(true); setErr(null)
@@ -351,9 +399,10 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       // Ochrona przed równoległą akcją — IT mutuje teraz pozycje wniosku.
       if (r.current_node_id) extra.expected_node_id = r.current_node_id
       await workflowAction(r.id, extra)
-      onDone()
+      onDone({ realizedId: r.id })
     } catch (ex) {
       setErr(ex.response?.data?.detail || 'Błąd'); setBusy(false)
+      if (ex.response?.status === 409) onRefresh?.()
     }
   }
 
@@ -363,11 +412,69 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     setBusy(true); setErr(null)
     try {
       await linkRequestWorker(r.id, u)
+      toast(`Dowiązano konto ${u} do wniosku #${r.id}.`)
       onDone()
     } catch (ex) {
       setErr(ex.response?.data?.detail || 'Błąd'); setBusy(false)
     }
   }
+
+  // v3.1 — skróty klawiaturowe realizacji: Z = zrobione, O = odmów,
+  // ↓/J i ↑/K = następna/poprzednia pozycja. Kolejność jak na ekranie (DOM).
+  const changesRef = useRef(null)
+  const [focusId, setFocusId] = useState(null)
+  const isUndecided = (it) => it && (it.kind || 'grant') !== 'revoke' && !it.fulfilled && !it.denied
+  function orderedIds() {
+    const els = changesRef.current ? changesRef.current.querySelectorAll('[data-item-id]') : []
+    return [...els].map(el => Number(el.getAttribute('data-item-id')))
+      .filter(id => items.some(it => it.id === id && (it.kind || 'grant') !== 'revoke'))
+  }
+  useEffect(() => {
+    if (!canRealize) return
+    // Startowy fokus: pierwsza pozycja bez decyzji.
+    if (focusId == null || !items.some(it => it.id === focusId)) {
+      const first = orderedIds().find(id => isUndecided(items.find(it => it.id === id)))
+      if (first != null) setFocusId(first)
+    }
+  }, [items, canRealize])
+  useEffect(() => {
+    if (!canRealize) return
+    function onKey(e) {
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const tag = (e.target?.tagName || '').toLowerCase()
+      if (['input', 'textarea', 'select'].includes(tag) || e.target?.isContentEditable) return
+      if (document.querySelector('[role="dialog"]')) return
+      const ids = orderedIds()
+      if (!ids.length) return
+      const idx = Math.max(0, ids.indexOf(focusId))
+      const key = e.key.toLowerCase()
+      const move = (d) => {
+        const n = ids[Math.min(ids.length - 1, Math.max(0, idx + d))]
+        setFocusId(n)
+        changesRef.current?.querySelector(`[data-item-id="${n}"]`)?.scrollIntoView({ block: 'nearest' })
+      }
+      if (key === 'arrowdown' || key === 'j') { e.preventDefault(); move(1) }
+      else if (key === 'arrowup' || key === 'k') { e.preventDefault(); move(-1) }
+      else if (key === 'z') {
+        const it = items.find(x => x.id === focusId)
+        if (isUndecided(it) && denyBusy == null) {
+          e.preventDefault()
+          setFulfill(it.id, true)
+          // Przejdź do kolejnej pozycji bez decyzji.
+          const next = ids.slice(idx + 1).find(id => isUndecided(items.find(x => x.id === id)))
+          if (next != null) setFocusId(next)
+        }
+      } else if (key === 'o') {
+        const it = items.find(x => x.id === focusId)
+        if (isUndecided(it) && !Object.prototype.hasOwnProperty.call(denials, it.id)) {
+          e.preventDefault()
+          toggleDeny(it.id)
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [canRealize, items, focusId, denials, denyBusy])
 
   const title = canRealize
     ? (isRevoke ? 'Odebranie uprawnień' : 'Realizacja wniosku')
@@ -388,7 +495,9 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
 
   return (
     <RequestViewShell
-      icon={Wrench} kind={r.kind} kindLabel={isRevoke ? 'Odejście' : 'Zatrudnienie'}
+      icon={Wrench} kind={['revoke', 'change'].includes(r.kind) ? r.kind : 'grant'} kindLabel={kindLabel(r.kind)}
+      perspective={canRealize ? perspectiveLabel('it_execute') : null}
+      waiting={!canRealize ? waitingText(r) : null}
       statusText={`Wniosek #${r.id}${r.created_at ? ` · złożony ${fmtDate(r.created_at)}` : ''}`} title={title}
       subtitle="Wykonaj zmiany w systemach i oznacz każdą pozycję — decyzje zapisują się od razu."
       backLabel="← Wróć do listy" onBack={onClose}
@@ -453,12 +562,19 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
             </div>
           </div>
         )}
-        <PermissionChanges items={items}
-          deny={{ can: canRealize, map: denials, toggle: toggleDeny, setComment: setDenyComment,
-                  save: saveDeny, remove: removeDeny, busyId: denyBusy }}
-          fulfill={canRealize
-            ? { can: true, set: setFulfill, busyId: denyBusy }
-            : undefined} />
+        {canRealize && !isRevoke && grantProgress.total > 0 && (
+          <div aria-hidden="true" style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 8 }}>
+            Skróty: <kbd>Z</kbd> zrobione · <kbd>O</kbd> odmów · <kbd>↑</kbd><kbd>↓</kbd> pozycja
+          </div>
+        )}
+        <div ref={changesRef}>
+          <PermissionChanges items={items} focusId={canRealize ? focusId : null}
+            deny={{ can: canRealize, map: denials, toggle: toggleDeny, setComment: setDenyComment,
+                    save: saveDeny, remove: removeDeny, busyId: denyBusy }}
+            fulfill={canRealize
+              ? { can: true, set: setFulfill, busyId: denyBusy }
+              : undefined} />
+        </div>
         {r.manager_comment && (
           <div style={{ marginTop: 14 }}>
             <div className="form-label">Komentarz kierownika</div>

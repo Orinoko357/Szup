@@ -30,7 +30,12 @@ export default function Requests() {
   const wanted = params.get('tab')
   const tab = tabs.some(t => t.id === wanted) ? wanted : tabs[0]?.id
   // ?open= odczytujemy raz i usuwamy z adresu, żeby odświeżenie nie otwierało ponownie.
-  const [openId] = useState(() => params.get('open'))
+  // Trafia WYŁĄCZNIE do zakładki z adresu (openTab) i jest czyszczony po użyciu
+  // oraz przy zmianie zakładki — wcześniej ten sam wniosek otwierał się ponownie
+  // (także w złym widoku) po przełączeniu zakładki.
+  const [openId, setOpenId] = useState(() => params.get('open'))
+  const [openTab] = useState(() => tab)
+  const consumeOpen = () => setOpenId(null)
   useEffect(() => {
     if (params.get('open')) {
       const p = new URLSearchParams(params); p.delete('open')
@@ -53,7 +58,7 @@ export default function Requests() {
   useEffect(() => { loadCounts() }, [])
 
   const current = tabs.find(t => t.id === tab)
-  const pick = (id) => { setFullView(false); setParams({ tab: id }) }
+  const pick = (id) => { setFullView(false); setOpenId(null); setParams({ tab: id }) }
 
   // Nagłówek i zakładki ukrywane warunkowo (nie wczesnym return), żeby osadzone
   // widoki nie były przemontowywane i nie gubiły otwartego wniosku.
@@ -79,13 +84,14 @@ export default function Requests() {
         </div>
       )}
       {(tab === 'handle' || tab === 'mine') && (
-        <Manager embedded view={tab} openId={tab === 'handle' || tab === 'mine' ? openId : null}
+        <Manager view={tab} openId={tab === openTab ? openId : null} onOpenConsumed={consumeOpen}
                  onViewChange={setFullView} onChanged={loadCounts} />
       )}
       {tab === 'it' && (
-        <RequestsTab openId={openId} onViewChange={setFullView} onChanged={loadCounts} />
+        <RequestsTab openId={tab === openTab ? openId : null} onOpenConsumed={consumeOpen}
+                     onViewChange={setFullView} onChanged={loadCounts} />
       )}
-      {tab === 'names' && <NameChangeQueue />}
+      {tab === 'names' && <NameChangeQueue onChanged={loadCounts} />}
     </div>
   )
 }

@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { RefreshCw, CheckCircle } from 'lucide-react'
 import { workflowDashboard, vendorContractAlerts, securityEventsSummary } from '../api'
-import { serverNow, serverTs } from '../serverTime'
+import { serverNow, serverTs, fmtDateTime } from '../serverTime'
 import { deptFull } from '../components/RequestView'
 import { getUserRoles, hasAnyRole } from '../roles'
+import { nodeLabel, daysSince, waitText } from '../labels'
+import AdminChecklist from '../components/AdminChecklist'
 
 /**
  * Pulpit (v3.0) — WYŁĄCZNIE sprawy czekające na reakcję użytkownika:
@@ -22,13 +24,17 @@ const NODE_TONE = {
   it_execute:             'badge--info',
 }
 
-function waitsLabel(ts) {
-  const d = serverTs(ts)
-  if (!d) return { text: '—', late: false }
-  const days = Math.floor((serverNow() - d) / 86400000)
-  if (days <= 0) return { text: 'dziś', late: false }
-  return { text: days === 1 ? '1 dzień' : `${days} dni`, late: days >= 7 }
+// „Czeka” = czas na BIEŻĄCYM etapie (step_since), awaryjnie od złożenia wniosku.
+function waitsLabel(p) {
+  const d = serverTs(p.step_since || p.created_at)
+  if (!d) return { text: '—', late: false, title: '' }
+  const days = daysSince(d, serverNow())
+  return {
+    text: waitText(days), late: days >= 7,
+    title: `${p.step_since ? 'na tym etapie od' : 'od złożenia'} ${fmtDateTime(p.step_since || p.created_at)}`,
+  }
 }
+const sinceTs = (p) => serverTs(p.step_since || p.created_at) || 0
 
 export default function Dashboard() {
   const roles = getUserRoles()
@@ -37,6 +43,9 @@ export default function Dashboard() {
   const canSeeContracts = hasAnyRole(roles, ['it_staff', 'admin', 'superadmin'])
   const canSeeSecurity  = hasAnyRole(roles, ['admin', 'superadmin'])
   const adminOnly = !hasAnyRole(roles, ['manager', 'it_staff'])
+  const isAdmin = hasAnyRole(roles, ['admin', 'superadmin'])
+  // Kilka ról operacyjnych → przy każdej sprawie pokazujemy perspektywę.
+  const multiRole = hasAnyRole(roles, ['manager']) && hasAnyRole(roles, ['it_staff'])
 
   const [data, setData]         = useState(null)
   const [contracts, setContracts] = useState(null)
@@ -104,7 +113,7 @@ export default function Dashboard() {
   }
   const list = useMemo(() => {
     const all = [...(data?.pending_approvals_list || [])]
-      .sort((a, b) => (serverTs(a.created_at) || 0) - (serverTs(b.created_at) || 0))
+      .sort((a, b) => sinceTs(a) - sinceTs(b))
     if (!filter || filter === 'names') return filter === 'names' ? [] : all
     return all.filter(p => FILTER_NODES[filter].includes(p.node_type))
   }, [data, filter])
@@ -153,6 +162,17 @@ export default function Dashboard() {
         </section>
       )}
 
+      {isAdmin && <AdminChecklist />}
+
+      {!hasQueue && !loading && !err && hasAnyRole(roles, ['manager']) && !hasAnyRole(roles, ['it_staff']) && (
+        <div className="card" style={{ fontSize: 14, marginBottom: 18 }}>
+          <strong style={{ color: 'var(--color-heading)' }}>Brak kolejki do obsługi.</strong>
+          <span style={{ color: 'var(--color-text-muted)' }}>
+            {' '}Nie masz przypisanych komórek — poproś administratora o przypisanie w „Jednostkach”.
+          </span>
+        </div>
+      )}
+
       {hasQueue && (
         <section aria-label="Czeka na Ciebie" className="card" style={{ padding: 0, overflow: 'hidden' }}>
           <div style={{ padding: '16px 18px 6px', display: 'grid',
@@ -166,7 +186,7 @@ export default function Dashboard() {
                           textAlign: 'left', padding: '12px 14px', borderRadius: 8, cursor: 'pointer',
                           font: 'inherit', color: 'inherit',
                           background: active ? 'var(--color-warning-bg)' : 'var(--color-card)',
-                          border: active ? '2px solid var(--color-navy)' : '1px solid var(--color-input-border)',
+                          border: active ? '2px solid var(--color-heading)' : '1px solid var(--color-input-border)',
                         }}>
                   <span style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.07em',
                                  textTransform: 'uppercase', color: 'var(--color-text-muted)' }}>{t.label}</span>
@@ -206,7 +226,7 @@ export default function Dashboard() {
                 </thead>
                 <tbody>
                   {list.map(p => {
-                    const w = waitsLabel(p.created_at)
+                    const w = waitsLabel(p)
                     const tab = p.node_type === 'it_execute' ? 'it' : 'handle'
                     return (
                       <tr key={p.request_id}>
@@ -220,9 +240,23 @@ export default function Dashboard() {
                           )}
                         </td>
                         <td>
-                          <span className={`badge ${NODE_TONE[p.node_type] || 'badge--neutral'}`} style={{ fontSize: 12, fontWeight: 700 }}>{p.node_label}</span>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+                            <span className={`badge ${NODE_TONE[p.node_type] || 'badge--neutral'}`} style={{ fontSize: 12, fontWeight: 700 }}>
+                              {nodeLabel(p.node_type, p.node_label)}
+                            </span>
+                            {multiRole && (
+                              <span className="badge badge--neutral" style={{ fontSize: 11 }}>
+                                {p.node_type === 'it_execute' ? 'jako IT' : 'jako kierownik'}
+                              </span>
+                            )}
+                          </div>
+                          {p.waiting_for && (
+                            <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 3 }}>
+                              Czeka na: {p.waiting_for}
+                            </div>
+                          )}
                         </td>
-                        <td style={{ fontSize: 13, fontWeight: w.late ? 700 : 400,
+                        <td title={w.title} style={{ fontSize: 13, fontWeight: w.late ? 700 : 400,
                                      color: w.late ? 'var(--color-error-text)' : 'var(--color-text-muted)' }}>
                           {w.text}
                         </td>

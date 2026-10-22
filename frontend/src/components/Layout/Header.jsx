@@ -2,6 +2,8 @@ import { LogOut, KeyRound } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useState } from 'react'
 import { logout as apiLogout, changePassword } from '../../api'
+import { toast } from '../ui/feedback'
+import GlobalSearch from '../GlobalSearch'
 
 export default function Header() {
   const navigate = useNavigate()
@@ -30,6 +32,7 @@ export default function Header() {
         Urząd Miasta Wodzisławia Śląskiego
       </span>
       <div className="app-header__spacer" />
+      <GlobalSearch />
       <div className="app-header__user" style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, minHeight: 44 }}>
         <span className="app-header__avatar" aria-hidden="true"
               style={{ width: 30, height: 30, fontSize: 11, fontWeight: 800 }}>{initials}</span>
@@ -41,27 +44,35 @@ export default function Header() {
         </span>
       </div>
       {user?.auth_type === 'local' && (
-        <button className="app-header__logout" onClick={() => setShowPw(true)} title="Zmień hasło"
-                style={HEADER_BTN}>
+        <button type="button" className="szup-hdr-btn" onClick={() => setShowPw(true)} title="Zmień hasło">
           <KeyRound size={15} aria-hidden="true" />
           Hasło
         </button>
       )}
-      <button className="app-header__logout" onClick={handleLogout} title="Wyloguj" style={HEADER_BTN}>
+      <button type="button" className="szup-hdr-btn" onClick={handleLogout} title="Wyloguj">
         <LogOut size={15} aria-hidden="true" />
         Wyloguj
       </button>
 
       {showPw && <ChangePasswordModal onClose={() => setShowPw(false)} />}
+      {/* Style przycisków belki w klasie (nie inline), żeby działał :hover i :focus. */}
+      <style>{HEADER_CSS}</style>
     </header>
   )
 }
 
-const HEADER_BTN = {
-  display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 44, padding: '0 8px',
-  border: 0, background: 'transparent', fontSize: 13, fontWeight: 600,
-  color: 'var(--color-text-muted)', textTransform: 'none', letterSpacing: 0,
+const HEADER_CSS = `
+.szup-hdr-btn {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 10px;
+  border: 0; border-radius: 6px; background: transparent; cursor: pointer;
+  font: 600 13px var(--font-base); color: var(--color-text-muted);
+  transition: background .15s, color .15s;
 }
+.szup-hdr-btn:hover, .szup-hdr-btn:focus-visible {
+  color: var(--color-heading); background: var(--color-table-head); outline: none;
+}
+.szup-hdr-btn:focus-visible { box-shadow: 0 0 0 2px var(--color-gold); }
+`
 
 const ROLE_MAP = {
   superadmin: ['badge--error',   'superadmin'],
@@ -106,8 +117,8 @@ function ChangePasswordModal({ onClose, forced = false }) {
       await changePassword({ current_password: forced ? undefined : current, new_password: next })
       localStorage.removeItem('szup_token')
       localStorage.removeItem('szup_user')
-      alert('Hasło zostało zmienione. Zaloguj się ponownie.')
-      window.location.href = '/login'
+      toast('Hasło zostało zmienione. Zaloguj się ponownie.')
+      setTimeout(() => { window.location.href = '/login' }, 1500)
     } catch (ex) {
       setErr(ex.response?.data?.detail || 'Nie udało się zmienić hasła')
       setBusy(false)

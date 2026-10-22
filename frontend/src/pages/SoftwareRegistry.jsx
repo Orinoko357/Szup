@@ -16,6 +16,17 @@ import PermissionImportModal from '../components/PermissionImportModal'
 import PermissionGroupModal from '../components/PermissionGroupModal'
 import CopyGroupModal from '../components/CopyGroupModal'
 import { groupPerms, subgroupPerms, subgroupNames } from '../components/ItemFields'
+import { toast, confirmDialog } from '../components/ui/feedback'
+
+// Potwierdzenie w oknie aplikacji (zamiast systemowego confirm). Operacje
+// usuwające / odbierające / nieodwracalne oznaczamy na czerwono.
+const ask = (message) => {
+  const danger = /usun|odebra|wygas|ostrze|nieodwracal/i.test(message)
+  return confirmDialog({
+    title: danger ? 'Potwierdź operację' : 'Potwierdź',
+    message, danger, confirmLabel: danger ? 'Tak, wykonaj' : 'Potwierdź',
+  })
+}
 
 /**
  * Rejestr oprogramowania — osobna zakładka dla IT / admin.
@@ -139,7 +150,7 @@ function PermRow({ p, onChanged, selected = false, onToggleSel }) {
   }
 
   async function save() {
-    if (!name.trim()) { alert('Podaj nazwę uprawnienia.'); return }
+    if (!name.trim()) { toast('Podaj nazwę uprawnienia.', { tone: 'warning' }); return }
     setBusy(true)
     try {
       await updatePermission(p.id, {
@@ -154,14 +165,14 @@ function PermRow({ p, onChanged, selected = false, onToggleSel }) {
       })
       setEditing(false); onChanged()
     } catch (ex) {
-      alert(ex.response?.data?.detail || 'Nie udało się zapisać zmian')
+      toast(ex.response?.data?.detail || 'Nie udało się zapisać zmian', { tone: 'error' })
     } finally { setBusy(false) }
   }
 
   async function del() {
-    if (!confirm('Usunąć uprawnienie?')) return
-    try { await deletePermission(p.id); onChanged() }
-    catch (ex) { alert(ex.response?.data?.detail || 'Błąd') }
+    if (!await ask('Usunąć uprawnienie?')) return
+    try { await deletePermission(p.id); onChanged(); toast('Usunięto uprawnienie') }
+    catch (ex) { toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' }) }
   }
 
   if (editing) {
@@ -282,7 +293,7 @@ function GroupAddPerm({ systemId, group, subgroup = '', label, onAdded }) {
       setName(''); setDesc(''); setType('none'); setOpts(''); setRequired(false); setPrompt('')
       onAdded()
     } catch (ex) {
-      alert(ex.response?.data?.detail || 'Błąd zapisu')
+      toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' })
     } finally { setBusy(false) }
   }
 
@@ -347,7 +358,7 @@ function BulkSubgroupBar({ systemId, selectedIds, onDone }) {
       await assignPermissionSubgroup(systemId, selectedIds, clear ? '' : sub.trim())
       setSub(''); onDone()
     } catch (ex) {
-      alert(ex.response?.data?.detail || 'Nie udało się przypisać podgrupy')
+      toast(ex.response?.data?.detail || 'Nie udało się przypisać podgrupy', { tone: 'error' })
     } finally { setBusy(false) }
   }
   return (
@@ -513,7 +524,7 @@ export default function SoftwareRegistry() {
     'Obecna definicja uprawnień tych programów zostanie zastąpiona.') {
     const targets = systems.filter(s => selected.has(s.id))
     if (targets.length === 0) return
-    if (!confirm(
+    if (!await ask(
       `${label} dla ${targets.length} zaznaczonych programów?\n\n${warning}`
     )) return
 
@@ -531,11 +542,12 @@ export default function SoftwareRegistry() {
     setSelected(new Set())
     await load()
 
-    alert(
+    toast(
       `Zmieniono: ${ok.length}` + (ok.length ? `\n  • ${ok.join('\n  • ')}` : '') +
       (failed.length
         ? `\n\nPominięto: ${failed.length}\n  • ${failed.join('\n  • ')}`
-        : '')
+        : ''),
+      { tone: failed.length ? 'warning' : 'success', timeout: failed.length ? 12000 : 5000 }
     )
   }
 
@@ -780,7 +792,7 @@ export default function SoftwareRegistry() {
       ) : systems.length === 0 ? (
         <div className="card" style={{ color: 'var(--color-text-muted)', padding: 16 }}>
           <Package size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-          Brak zarejestrowanego oprogramowania.
+          Brak zarejestrowanego oprogramowania. Dodaj program przyciskiem „Dodaj oprogramowanie”.
         </div>
       ) : visibleSystems.length === 0 ? (
         <div className="card" style={{ color: 'var(--color-text-muted)', padding: 16 }}>
@@ -1000,8 +1012,8 @@ function VendorField({ vendors, value, onChange }) {
       </select>
       <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
         {vendors.length === 0
-          ? 'Słownik dostawców jest pusty — dodaj dostawcę w zakładce „Dostawcy oprogramowania".'
-          : 'Lista pochodzi ze słownika „Dostawcy oprogramowania".'}
+          ? 'Słownik dostawców jest pusty — dodaj dostawcę na stronie „Dostawcy i umowy".'
+          : 'Lista pochodzi ze słownika „Dostawcy i umowy".'}
       </div>
     </div>
   )
@@ -1135,7 +1147,7 @@ function SystemRow({ system: s, units, vendors = [], allSystems = [], selected =
   const canSetDefault = !s.access_only && !(s.permission_count > 0)
 
   async function applyDefault() {
-    if (!confirm(
+    if (!await ask(
       `Ustawić domyślną definicję uprawnień dla „${s.name}"?\n\n` +
       'Wnioskodawca (kierownik) będzie wpisywał „Zakres uprawnień" — ' +
       'pole opisowe, obowiązkowe.'
@@ -1143,11 +1155,11 @@ function SystemRow({ system: s, units, vendors = [], allSystems = [], selected =
     setSettingDefault(true)
     try {
       const r = await setSystemDefaultPermissions(s.id)
-      alert('Ustawiono domyślną definicję uprawnień.\n\n'
+      toast('Ustawiono domyślną definicję uprawnień.\n\n'
             + (r.data.details || []).join('\n'))
       onReload()
     } catch (ex) {
-      alert(ex.response?.data?.detail || 'Nie udało się ustawić')
+      toast(ex.response?.data?.detail || 'Nie udało się ustawić', { tone: 'error' })
     } finally { setSettingDefault(false) }
   }
 
@@ -1161,12 +1173,13 @@ function SystemRow({ system: s, units, vendors = [], allSystems = [], selected =
   }
 
   async function del() {
-    if (!confirm(`Usunąć oprogramowanie „${s.name}"?`)) return
+    if (!await ask(`Usunąć oprogramowanie „${s.name}"?`)) return
     try {
       await deleteSystem(s.id)
       onReload()
+      toast(`Usunięto oprogramowanie „${s.name}”`)
     } catch (ex) {
-      alert(ex.response?.data?.detail || 'Nie można usunąć')
+      toast(ex.response?.data?.detail || 'Nie można usunąć', { tone: 'error' })
     }
   }
 
@@ -1457,7 +1470,7 @@ function PermissionsPanel({ system: s }) {
       await setPermissionGroupState(s.id, group, active)
       load()
     } catch (ex) {
-      alert(ex.response?.data?.detail || 'Błąd')
+      toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' })
     }
   }
 
@@ -1469,7 +1482,7 @@ function PermissionsPanel({ system: s }) {
       setRenaming(null)
       load()
     } catch (ex) {
-      alert(ex.response?.data?.detail || 'Nie udało się zmienić nazwy grupy')
+      toast(ex.response?.data?.detail || 'Nie udało się zmienić nazwy grupy', { tone: 'error' })
     }
   }
 
@@ -1482,11 +1495,11 @@ function PermissionsPanel({ system: s }) {
     if (i < 0 || j < 0 || j >= names.length) return
     ;[names[i], names[j]] = [names[j], names[i]]
     try { await setPermissionGroupOrder(s.id, names); load() }
-    catch (ex) { alert(ex.response?.data?.detail || 'Nie udało się zmienić kolejności grup') }
+    catch (ex) { toast(ex.response?.data?.detail || 'Nie udało się zmienić kolejności grup', { tone: 'error' }) }
   }
 
   async function removeGroup(group, count) {
-    if (!confirm(
+    if (!await ask(
       `Usunąć grupę „${group}" (${count} pozycji)?\n\n`
       + 'Uprawnienia użyte już we wnioskach nie zostaną usunięte — '
       + 'zostaną wygaszone, żeby nie zerwać ewidencji.'
@@ -1495,11 +1508,11 @@ function PermissionsPanel({ system: s }) {
       const r = await deletePermissionGroup(s.id, group)
       load()
       if (r.data.skipped > 0) {
-        alert(`Usunięto: ${r.data.deactivated}\n`
-              + `Zachowano (użyte we wnioskach): ${r.data.skipped}`)
+        toast(`Usunięto: ${r.data.deactivated}\n`
+              + `Zachowano (użyte we wnioskach): ${r.data.skipped}`, { tone: 'info' })
       }
     } catch (ex) {
-      alert(ex.response?.data?.detail || 'Błąd')
+      toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' })
     }
   }
 

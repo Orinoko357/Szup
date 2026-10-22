@@ -7,6 +7,17 @@ import {
   listRequestTypes, createRequestType, updateRequestType, deleteRequestType,
   listWorkflowTemplates,
 } from '../api'
+import { toast, confirmDialog } from '../components/ui/feedback'
+
+// Potwierdzenie w oknie aplikacji (zamiast systemowego confirm). Operacje
+// usuwające / odbierające / nieodwracalne oznaczamy na czerwono.
+const ask = (message) => {
+  const danger = /usun|odebra|wygas|ostrze|nieodwracal/i.test(message)
+  return confirmDialog({
+    title: danger ? 'Potwierdź operację' : 'Potwierdź',
+    message, danger, confirmLabel: danger ? 'Tak, wykonaj' : 'Potwierdź',
+  })
+}
 
 const ICON_MAP = {
   'user-plus':  UserPlus,
@@ -75,7 +86,7 @@ export default function RequestTypes() {
             {!loading && items.length === 0 && editing !== 'new' && (
               <tr><td colSpan={7} style={{ color: 'var(--color-text-muted)', padding: 16 }}>
                 <ListFilter size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-                Brak typów wniosków. Dodaj pierwszy.
+                Brak typów wniosków. Najpierw utwórz szablon obiegu (Administracja → Szablony obiegu), potem dodaj typ przyciskiem „Nowy typ”.
               </td></tr>
             )}
             {items.map(t => editing === t.id ? (
@@ -100,9 +111,9 @@ export default function RequestTypes() {
 function TypeRow({ t, onEdit, onReload }) {
   const Icon = ICON_MAP[t.icon] || Package
   async function del() {
-    if (!confirm(`Usunąć typ wniosku "${t.name}"?`)) return
-    try { await deleteRequestType(t.id); onReload() }
-    catch (ex) { alert(ex.response?.data?.detail || 'Błąd') }
+    if (!await ask(`Usunąć typ wniosku "${t.name}"?`)) return
+    try { await deleteRequestType(t.id); onReload(); toast(`Usunięto typ wniosku „${t.name}”`) }
+    catch (ex) { toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' }) }
   }
   return (
     <tr>

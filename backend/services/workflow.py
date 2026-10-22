@@ -635,6 +635,59 @@ def _addressee_for_node(session: Session, node: dict, request: AccessRequest,
     return emails
 
 
+def _person_name(session: Session, user_id: Optional[int]) -> Optional[str]:
+    if not user_id:
+        return None
+    u = session.get(User, user_id)
+    return (u.full_name or u.username) if u else None
+
+
+def waiting_for_label(session: Session, node: Optional[dict], request: AccessRequest,
+                      dept: Optional[Department]) -> Optional[str]:
+    """Krótki opis, KTO ma teraz działać na wniosku (v3.1 — „Czeka na: …”).
+
+    Odpowiada logice adresata powiadomień: samodzielne stanowisko / komórka bez
+    kierownika → najbliższy kierownik wyżej; akceptacja wyższa → kierownik
+    komórki nadrzędnej; realizacja → przypisany pracownik IT albo Biuro Informatyki.
+    """
+    if not node:
+        return None
+    from services.permissions import effective_manager_dept
+    ntype = node.get("type")
+    if ntype in ("manager_approve", "select_permissions"):
+        resp = dept
+        if dept and (getattr(dept, "kind", None) == "standalone" or not dept.manager_user_id):
+            resp = effective_manager_dept(session, dept) or dept
+        name = _person_name(session, resp.manager_user_id) if resp else None
+        if name:
+            return f"{name} (kierownik {resp.name})"
+        return "kierownik komórki (nieprzypisany)"
+    if ntype == "higher_manager_approve":
+        parent = session.get(Department, dept.parent_dept_id) if dept and dept.parent_dept_id else None
+        resp = parent
+        if parent and (getattr(parent, "kind", None) == "standalone" or not parent.manager_user_id):
+            resp = effective_manager_dept(session, parent) or parent
+        name = _person_name(session, resp.manager_user_id) if resp else None
+        if name:
+            return f"kierownik nadrzędny: {name} ({resp.name})"
+        return "kierownik nadrzędny (nieprzypisany)"
+    if ntype == "it_execute":
+        name = _person_name(session, getattr(request, "assigned_to_user_id", None))
+        return f"IT: {name}" if name else "Biuro Informatyki (IT)"
+    return node.get("label") or ntype
+
+
+def current_step_since(session: Session, instance: WorkflowInstance) -> Optional[datetime]:
+    """Kiedy wniosek wszedł w bieżący węzeł = data ostatniego kroku obiegu."""
+    from models import WorkflowStep
+    last = session.exec(
+        select(WorkflowStep)
+        .where(WorkflowStep.instance_id == instance.id)
+        .order_by(WorkflowStep.step_index.desc())
+    ).first()
+    return last.created_at if last else instance.created_at
+
+
 def _selector_step(session: Session, request: AccessRequest):
     """Ostatni krok „wybór uprawnień" — czyli kierownik, który zawnioskował
     o konkretne uprawnienia. To on jest właściwym adresatem powiadomień
@@ -770,9 +823,43 @@ def _notify_request_completed(session: Session, request: AccessRequest,
                 "worker_name": request.worker_name,
                 "from_name": s_name, "from_email": s_email,
                 "denied_lines": denied_lines,
+                # Link w mailu: kierownik → „Moje wnioski”, kadry → Kartoteka.
+                "requester_is_manager": has_role(u, "manager"),
             }).start()
     except Exception as exc:
         _log.warning("Powiadomienie o zakończeniu wniosku nie wysłane: %s", exc)
+
+
+def _notify_request_rejected(session: Session, request: AccessRequest,
+                             actor_user: Optional[User], comment: Optional[str]) -> None:
+    """Wniosek odrzucony — powiadom twórcę zgłoszenia (zwykle kadry) oraz
+    kierownika, który wybierał uprawnienia (jeśli to inna osoba niż odrzucający).
+    Wcześniej szablon `request_rejected` istniał, ale nie był nigdzie wysyłany."""
+    try:
+        targets: list[int] = []
+        if request.created_by_id:
+            targets.append(request.created_by_id)
+        step = _selector_step(session, request)
+        if step and step.actor_user_id and step.actor_user_id not in targets:
+            targets.append(step.actor_user_id)
+        import threading
+        from services.email_alerts import notify_request_rejected
+        for uid in targets:
+            if actor_user and uid == actor_user.id:
+                continue   # odrzucający nie dostaje maila o własnej decyzji
+            u = session.get(User, uid)
+            if not u or not u.email:
+                continue
+            threading.Thread(
+                target=notify_request_rejected, daemon=True, kwargs={
+                    "requester_email": u.email,
+                    "request_id": request.id,
+                    "worker_name": request.worker_name,
+                    "comment": comment or "",
+                    "requester_is_manager": has_role(u, "manager"),
+                }).start()
+    except Exception as exc:
+        _log.warning("Powiadomienie o odrzuceniu wniosku nie wysłane: %s", exc)
 
 
 def _sync_request_status(request: AccessRequest, instance: WorkflowInstance) -> None:
@@ -873,6 +960,7 @@ def execute_action(
         instance.completed_at = datetime.utcnow()
         session.add(instance)
         _sync_request_status(request, instance)
+        _notify_request_rejected(session, request, user, comment)
         return instance
 
     # Dodatkowa logika: przy select_permissions zapisujemy wybrane item_ids

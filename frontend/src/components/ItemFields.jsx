@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { promptDialog } from './ui/feedback'
 
 /**
  * Kontrolka doprecyzowująca POJEDYNCZE uprawnienie na wniosku.
@@ -415,15 +416,21 @@ export function adminGrantNames(keys, systems, permsBySys) {
  * wymagamy przepisania słowa. To wyklucza przypadkowe wysłanie wniosku
  * (np. odruchowe kliknięcie w potwierdzenie).
  *
- * Zwraca `true` tylko przy wpisaniu POTWIERDZAM i zatwierdzeniu OK.
+ * Zwraca (asynchronicznie) `true` tylko po wpisaniu POTWIERDZAM i zatwierdzeniu.
+ * v3.1: zamiast systemowego `window.prompt` — okno aplikacji (promptDialog).
  */
-export function confirmAdminRights(names) {
+export async function confirmAdminRights(names) {
   if (names.length === 0) return true
-  const answer = window.prompt(
-    'Próbujesz wysłać wniosek o uprawnienia administracyjne dla:\n\n'
-    + names.map(n => `  • ${n}`).join('\n')
-    + '\n\nCzy potwierdzasz?\nWpisz POTWIERDZAM i naciśnij OK.'
-  )
+  const answer = await promptDialog({
+    title: 'Uprawnienia administracyjne',
+    message: 'Próbujesz wysłać wniosek o uprawnienia administracyjne dla:\n\n'
+      + names.map(n => `  • ${n}`).join('\n')
+      + '\n\nTo najpoważniejsze uprawnienie w systemie dziedzinowym. Aby potwierdzić, wpisz POTWIERDZAM.',
+    label: 'Potwierdzenie',
+    requiredText: 'POTWIERDZAM',
+    confirmLabel: 'Potwierdzam i wysyłam',
+    danger: true,
+  })
   return (answer || '').trim().toUpperCase() === 'POTWIERDZAM'
 }
 

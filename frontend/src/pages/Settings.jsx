@@ -7,6 +7,17 @@ import {
   listNotificationTemplates, saveNotificationTemplate,
   resetNotificationTemplate, testNotificationTemplate,
 } from '../api'
+import { toast, confirmDialog } from '../components/ui/feedback'
+
+// Potwierdzenie w oknie aplikacji (zamiast systemowego confirm). Operacje
+// usuwające / odbierające / nieodwracalne oznaczamy na czerwono.
+const ask = (message) => {
+  const danger = /usun|odebra|wygas|ostrze|nieodwracal/i.test(message)
+  return confirmDialog({
+    title: danger ? 'Potwierdź operację' : 'Potwierdź',
+    message, danger, confirmLabel: danger ? 'Tak, wykonaj' : 'Potwierdź',
+  })
+}
 
 // v3.0 — sekcja ustawień jako karta z nagłówkiem-przyciskiem (ikona w kafelku,
 // tytuł z odznaką stanu, opis pod spodem, strzałka). `danger` = strefa niebezpieczna.
@@ -128,7 +139,7 @@ export default function Settings() {
       setSnapSaved(true)
       setTimeout(() => setSnapSaved(false), 3000)
     } catch (ex) {
-      alert(ex.response?.data?.detail || 'Błąd zapisu')
+      toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' })
     } finally { setSnapSaving(false) }
   }
 
@@ -146,13 +157,13 @@ export default function Settings() {
       setDeclSaved(true)
       setTimeout(() => setDeclSaved(false), 3000)
     } catch (ex) {
-      alert(ex.response?.data?.detail || 'Błąd zapisu')
+      toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' })
     } finally { setDeclSaving(false) }
   }
 
   async function toggleTestMode(enabled) {
     if (enabled) {
-      const ok = confirm(
+      const ok = await ask(
         'UWAGA: Tryb testowy pozwala zalogować się DOWOLNEMU użytkownikowi bez podania hasła.\n\n' +
         'To jest WYŁĄCZNIE do testów przepływu wniosków na środowisku nieprodukcyjnym.\n' +
         'Każde takie logowanie jest rejestrowane jako security event.\n\n' +
@@ -172,7 +183,7 @@ export default function Settings() {
       setAppSaved(true)
       setTimeout(() => setAppSaved(false), 3000)
     } catch (ex) {
-      alert(ex.response?.data?.detail || 'Błąd zapisu')
+      toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' })
     } finally { setAppSaving(false) }
   }
 
@@ -188,7 +199,7 @@ export default function Settings() {
       setAppSaved(true)
       setTimeout(() => setAppSaved(false), 3000)
     } catch (ex) {
-      alert(ex.response?.data?.detail || 'Błąd zapisu')
+      toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' })
     } finally { setAppSaving(false) }
   }
 
@@ -201,7 +212,7 @@ export default function Settings() {
       await updateEmailSettings(data)
       setEmailSaved(true)
       setTimeout(() => setEmailSaved(false), 3000)
-    } catch (ex) { alert(ex.response?.data?.detail || 'Błąd zapisu') }
+    } catch (ex) { toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' }) }
     finally { setEmailSaving(false) }
   }
 
@@ -229,7 +240,7 @@ export default function Settings() {
       await updateLdapSettings({ ...ldap, bind_password: ldapBindPassword || null })
       setLdapBindPassword(''); setLdapSaved(true)
       setTimeout(() => setLdapSaved(false), 3000)
-    } catch (ex) { alert(ex.response?.data?.detail || 'Błąd zapisu') }
+    } catch (ex) { toast(ex.response?.data?.detail || 'Błąd zapisu', { tone: 'error' }) }
     finally { setLdapSaving(false) }
   }
 
@@ -544,7 +555,7 @@ export default function Settings() {
               Użyj SSL (LDAPS, port 636)
             </label>
             <div className="form-group">
-              <label className="form-label">Base DN</label>
+              <label className="form-label">Kontener bazowy (Base DN)</label>
               <input className="form-control" value={ldap.base_dn || ''}
                      onChange={e => setL('base_dn', e.target.value)}
                      placeholder="DC=firma,DC=local" />
@@ -658,7 +669,7 @@ function FactoryResetSection() {
     setErr(null)
     if (confirm.trim() !== 'RESET') { setErr('Wpisz dokładnie: RESET'); return }
     if (!password) { setErr('Podaj swoje hasło.'); return }
-    const ok = window.confirm(
+    const ok = await ask(
       'OSTATNIE OSTRZEŻENIE\n\n' +
       'Ta operacja jest NIEODWRACALNA i usunie wybrane dane z systemu.\n' +
       'Twoje konto superadmina zostanie zachowane.\n\n' +
@@ -809,7 +820,7 @@ function TplEditor({ tpl, onSaved }) {
     } finally { setBusy(false) }
   }
   async function reset() {
-    if (!confirm('Przywrócić domyślną treść tego powiadomienia?')) return
+    if (!await ask('Przywrócić domyślną treść tego powiadomienia?')) return
     setBusy(true); setMsg(null)
     try {
       const r = await resetNotificationTemplate(tpl.event_key)

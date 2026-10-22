@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { AlertTriangle, Check, RefreshCw } from 'lucide-react'
 import { listSecurityEvents, securityEventsSummary, resolveSecurityEvent } from '../api'
 import { fmtDateTime } from '../serverTime'
+import { toast, promptDialog } from '../components/ui/feedback'
+import { SEVERITY_LABEL } from '../labels'
 
 const SEV_COLOR = {
   low:      'var(--color-text-muted)',
@@ -10,7 +12,6 @@ const SEV_COLOR = {
   critical: 'var(--color-error)',
 }
 // v3.0: polski opis istotności obok klucza z backendu.
-const SEV_PL = { low: 'niska', medium: 'średnia', high: 'wysoka', critical: 'krytyczna' }
 // Odznaka istotności (tło / tekst) — zgodna z paletą odznak.
 const SEV_BADGE = {
   low:      ['var(--color-neutral-bg)', 'var(--color-neutral-text)'],
@@ -51,9 +52,13 @@ export default function SecurityEvents() {
   useEffect(() => { load() }, [onlyOpen])
 
   async function resolve(id) {
-    const note = prompt('Notatka do rozwiązania (opcjonalna):') ?? ''
-    try { await resolveSecurityEvent(id, note); load() }
-    catch (ex) { alert(ex.response?.data?.detail || 'Błąd') }
+    const note = await promptDialog({
+      title: 'Oznacz zdarzenie jako rozwiązane', label: 'Notatka do rozwiązania (opcjonalna)',
+      multiline: true, confirmLabel: 'Oznacz jako rozwiązane',
+    })
+    if (note === null) return   // Anuluj
+    try { await resolveSecurityEvent(id, note); load(); toast('Zdarzenie oznaczone jako rozwiązane') }
+    catch (ex) { toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' }) }
   }
 
   return (
@@ -78,7 +83,7 @@ export default function SecurityEvents() {
             <div key={sev} style={tileStyle(SEV_COLOR[sev])}>
               <span style={TILE_LBL}>{sev}</span>
               <span style={TILE_VAL}>{n}</span>
-              <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>{SEV_PL[sev] || ''}</span>
+              <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>{SEVERITY_LABEL[sev] || ''}</span>
             </div>
           ))}
         </div>
@@ -123,7 +128,7 @@ export default function SecurityEvents() {
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-heading)' }}>{r.event_type}</td>
                     <td>
                       <span className="badge" style={{ background: sb[0], color: sb[1] }}>
-                        {SEV_PL[r.severity] || r.severity}
+                        {SEVERITY_LABEL[r.severity] || r.severity}
                       </span>
                     </td>
                     <td>{r.summary}</td>

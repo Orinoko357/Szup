@@ -55,7 +55,7 @@ export default function Structure({ renderHeader }) {
             Brak wydziałów w Twoim zakresie
           </div>
         ) : (
-          <div role="tree" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {roots.map(d => (
               <DeptNode key={d.id} dept={d} depth={0} defaultOpen />
             ))}
@@ -72,11 +72,15 @@ function DeptNode({ dept: d, depth, defaultOpen = false }) {
   const hasWorkers  = (d.workers  || []).length > 0
 
   return (
-    <div role="treeitem" aria-expanded={open} style={{ marginLeft: depth > 0 ? 24 : 0 }}>
+    <div style={{ marginLeft: depth > 0 ? 24 : 0 }}>
+      {/* Nagłówek komórki = przycisk rozwijania (bez pozornego wzorca „tree”,
+          który wymagałby pełnej obsługi strzałek). */}
       <div
-        role="button" tabIndex={0}
-        onClick={() => setOpen(v => !v)}
-        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(v => !v) } }}
+        role={hasChildren || hasWorkers ? 'button' : undefined}
+        tabIndex={hasChildren || hasWorkers ? 0 : undefined}
+        aria-expanded={hasChildren || hasWorkers ? open : undefined}
+        onClick={() => (hasChildren || hasWorkers) && setOpen(v => !v)}
+        onKeyDown={e => { if ((hasChildren || hasWorkers) && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setOpen(v => !v) } }}
         style={{
           display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, minHeight: 48,
           padding: '4px 12px', boxSizing: 'border-box',

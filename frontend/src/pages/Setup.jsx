@@ -37,7 +37,7 @@ export default function Setup({ onSetup }) {
     <div className="wl-page">
       <main className="wl-wrap wl-wrap--wide">
         <div className="wl-head">
-          <WodsLogo size={56} />
+          <WodsLogo size={56} onNavy />
           <h1>Pierwsze uruchomienie</h1>
           <p>Utwórz konto administratora systemu szup · WODS</p>
         </div>

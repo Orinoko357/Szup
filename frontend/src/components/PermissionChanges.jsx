@@ -40,14 +40,14 @@ export function splitItems(items = []) {
 //   save(id)   — zapisuje odmowę OD RAZU (POST .../deny), bez kończenia wniosku
 //   remove(id) — cofa zapisaną odmowę (POST .../deny { denied:false })
 //   busyId  — id pozycji aktualnie zapisywanej (blokuje przyciski)
-export default function PermissionChanges({ items = [], emptyText = 'Brak', deny, fulfill }) {
+export default function PermissionChanges({ items = [], emptyText = 'Brak', deny, fulfill, focusId }) {
   const { grants, revokes } = splitItems(items)
   if (items.length === 0) {
     return <div style={{ color: 'var(--color-text-muted)' }}>{emptyText}</div>
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {grants.length  > 0 && <Group kind="grant"  items={grants} deny={deny} fulfill={fulfill} />}
+      {grants.length  > 0 && <Group kind="grant"  items={grants} deny={deny} fulfill={fulfill} focusId={focusId} />}
       {revokes.length > 0 && <Group kind="revoke" items={revokes} />}
     </div>
   )
@@ -87,7 +87,7 @@ function groupBySystemAndGroup(items) {
     }))
 }
 
-function PermRow({ it, isRevoke, deny, fulfill, crumb }) {
+function PermRow({ it, isRevoke, deny, fulfill, crumb, focused }) {
   const cv = it.custom_values && typeof it.custom_values === 'object'
     ? Object.entries(it.custom_values).filter(([, v]) => v)
     : []
@@ -101,14 +101,18 @@ function PermRow({ it, isRevoke, deny, fulfill, crumb }) {
   const busy = (deny?.busyId ?? fulfill?.busyId) === it.id
   const canSave = typeof deny?.save === 'function'       // natychmiastowy zapis dostępny
   const canUndo = typeof deny?.remove === 'function'
-  const struck = persistedDenied || denyingNow
+  // Pozycje DO ODEBRANIA są przekreślone (jak przed v3.0), a ich wartości dodatkowe ukryte.
+  const struck = isRevoke || persistedDenied || denyingNow
   const undecided = canFulfill && !persistedFulfilled && !persistedDenied && !denyingNow
   const rowBg = persistedFulfilled ? 'var(--color-success-bg)'
     : (persistedDenied || denyingNow || isRevoke) ? 'var(--color-error-bg)' : 'transparent'
   const btn = { minHeight: 38, fontSize: 13 }
   return (
-    <div style={{ padding: '12px 14px', fontSize: 14,
-                  borderTop: '1px solid var(--color-border)', background: rowBg }}>
+    <div data-item-id={it.id ?? undefined}
+         style={{ padding: '12px 14px', fontSize: 14,
+                  borderTop: '1px solid var(--color-border)', background: rowBg,
+                  // Fokus skrótów klawiaturowych (IT): wyraźna ramka wewnętrzna.
+                  boxShadow: focused ? 'inset 0 0 0 2px var(--color-heading)' : 'none' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <span style={{ flex: '1 1 240px', minWidth: 0 }}>
           {crumb && (
@@ -222,7 +226,7 @@ function PermRow({ it, isRevoke, deny, fulfill, crumb }) {
   )
 }
 
-function Group({ kind, items, deny, fulfill }) {
+function Group({ kind, items, deny, fulfill, focusId }) {
   const isRevoke = kind === 'revoke'
   const color = isRevoke ? 'var(--color-error)'      : 'var(--color-success)'
   const text  = isRevoke ? 'var(--color-error-text)' : 'var(--color-success-text)'
@@ -243,6 +247,7 @@ function Group({ kind, items, deny, fulfill }) {
       {systems.map(sys => sys.groups.map(g => g.subgroups.map(sg => sg.items.map(it => (
         <PermRow key={it.id ?? `${it.system_id}:${it.permission_id}`}
                  it={it} isRevoke={isRevoke} deny={deny} fulfill={fulfill}
+                 focused={focusId != null && focusId === it.id}
                  crumb={[sys.system_name, g.group_name, sg.subgroup_name].filter(Boolean).join(' · ')} />
       )))))}
     </div>

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { FilePlus, UserMinus, ChevronDown, ChevronRight, Check, Search, Info, Lock } from 'lucide-react'
+import { FilePlus, UserMinus, ChevronDown, ChevronRight, Check, Search, Info, Lock, Copy, X } from 'lucide-react'
 import { listRequests, createRequest, listActiveDepts, listActiveUnits, listRequestTypes, usersByDepartment, searchUsers } from '../api'
-import { fmtDate } from '../serverTime'
+import { fmtDate, serverTs, serverNow } from '../serverTime'
+import { statusLabel, statusBadge, kindLabel, daysSince, waitText } from '../labels'
+import { toast } from '../components/ui/feedback'
 import RequestViewShell, { Section, buildWorkflowSteps, KindBadge } from '../components/RequestView'
 
 
@@ -32,14 +34,6 @@ function SelectedPlace({ unit, dept }) {
   )
 }
 
-const STATUS_LABELS = {
-  pending_selection: 'Wybór uprawnień',
-  pending_manager:   'Oczekuje na kierownika',
-  pending_it:        'Oczekuje na IT',
-  completed:         'Zrealizowane',
-  rejected:          'Odrzucone',
-}
-
 // v3.0 — wspólne style formularzy kadrowych (wg projektu).
 const FIELD_GRID  = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px 16px' }
 const FIELD_INPUT = { minHeight: 44, borderRadius: 8, fontSize: 14 }
@@ -49,12 +43,85 @@ const NOTE_BOX = {
   fontSize: 13, color: 'var(--color-text-muted)',
 }
 
-const STATUS_BADGE = {
-  pending_selection: 'badge--warning',
-  pending_manager:   'badge--warning',
-  pending_it:        'badge--info',
-  completed:         'badge--success',
-  rejected:          'badge--error',
+// „Co stanie się dalej” — formularze kadrowe są używane rzadko, więc
+// przypominamy, jak idzie obieg po wysłaniu (v3.1).
+function NextSteps({ revoke = false }) {
+  const steps = [
+    revoke ? 'Kierownik komórki wskaże uprawnienia do odebrania.' : 'Kierownik komórki wybierze uprawnienia.',
+    'Jeśli komórka tego wymaga — akceptacja kierownika wyższego rzędu.',
+    revoke ? 'IT odbierze dostępy w systemach.' : 'IT zrealizuje uprawnienia w systemach.',
+    'Dostaniesz potwierdzenie e-mailem, a status zobaczysz w Kartotece.',
+  ]
+  return (
+    <section aria-label="Co stanie się dalej" style={{
+      marginTop: 4, padding: '14px 16px', borderRadius: 8,
+      background: 'var(--bg-secondary)', border: '1px solid var(--color-border)',
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--color-heading)', marginBottom: 8 }}>
+        Co stanie się dalej
+      </div>
+      <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13, lineHeight: 1.6, color: 'var(--color-text)' }}>
+        {steps.map((t, i) => <li key={i}>{t}</li>)}
+      </ol>
+    </section>
+  )
+}
+
+// Gotowa wiadomość do skopiowania po zgłoszeniu nowego pracownika.
+function CopyMessageDialog({ info, onClose }) {
+  const text = [
+    `Zgłoszono zatrudnienie w SZUP (wniosek #${info.id ?? '—'}):`,
+    `Pracownik: ${info.name}`,
+    `Stanowisko: ${info.position}`,
+    `Komórka: ${info.dept}`,
+    `Data zatrudnienia od: ${info.from || 'nie podano'}`,
+    '',
+    'Uprawnienia do systemów wskaże kierownik komórki w SZUP; po akceptacji zrealizuje je Biuro Informatyki.',
+  ].join('\n')
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text)
+      toast('Skopiowano wiadomość do schowka.')
+    } catch {
+      toast('Nie udało się skopiować — zaznacz tekst i skopiuj ręcznie.', { tone: 'error' })
+    }
+  }
+  return (
+    <div role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}
+         style={{ position: 'fixed', inset: 0, zIndex: 2500, background: 'rgba(13,20,36,.5)',
+                  display: 'grid', placeItems: 'center', padding: 16 }}>
+      <div role="dialog" aria-modal="true" aria-labelledby="hr-copy-title"
+           onKeyDown={e => { if (e.key === 'Escape') onClose() }}
+           style={{ width: '100%', maxWidth: 560, background: 'var(--color-card)', color: 'var(--color-text)',
+                    border: '1px solid var(--color-border)', borderRadius: 10, boxShadow: '0 16px 40px rgba(13,20,36,.3)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 12px 12px 20px',
+                      borderBottom: '1px solid var(--color-border)' }}>
+          <h2 id="hr-copy-title" style={{ margin: 0, flex: 1, fontSize: 18, fontWeight: 800, color: 'var(--color-heading)' }}>
+            Zgłoszenie wysłane
+          </h2>
+          <button type="button" aria-label="Zamknij" onClick={onClose}
+                  style={{ width: 44, height: 44, display: 'grid', placeItems: 'center', border: 0,
+                           background: 'transparent', color: 'var(--color-text-muted)', cursor: 'pointer' }}>
+            <X size={18} />
+          </button>
+        </div>
+        <div style={{ padding: '16px 20px' }}>
+          <p style={{ margin: '0 0 10px', fontSize: 14 }}>
+            Możesz przekazać tę informację kierownikowi komórki lub nowemu pracownikowi:
+          </p>
+          <textarea readOnly value={text} rows={8} className="form-control" aria-label="Treść wiadomości"
+                    onFocus={e => e.target.select()}
+                    style={{ width: '100%', boxSizing: 'border-box', fontSize: 13, lineHeight: 1.5 }} />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '0 20px 18px' }}>
+          <button type="button" className="btn btn--ghost" onClick={onClose}>Zamknij</button>
+          <button type="button" className="btn btn--action" autoFocus onClick={copy}>
+            <Copy size={15} aria-hidden="true" /> Kopiuj
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 export default function HR() {
@@ -62,7 +129,8 @@ export default function HR() {
   const [loading, setLoading]   = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [showTermination, setShowTermination] = useState(false)
-  const [view, setView]         = useState('open')   // open | done | all
+  const [view, setView]         = useState('all')    // open | done | all
+  const [created, setCreated]   = useState(null)     // dane do wiadomości po zgłoszeniu
   const [q, setQ]               = useState('')
 
   async function load() {
@@ -92,7 +160,7 @@ export default function HR() {
   // Formularze jako PEŁNOEKRANOWE widoki (nie małe modale) — spójny układ.
   if (showForm) {
     return <RequestFormView onCancel={() => setShowForm(false)}
-                            onCreated={() => { setShowForm(false); load() }} />
+                            onCreated={(info) => { setShowForm(false); setCreated(info || null); load() }} />
   }
   if (showTermination) {
     return <TerminationFormView onCancel={() => setShowTermination(false)}
@@ -135,7 +203,7 @@ export default function HR() {
                         minHeight: 36, padding: '0 14px', border: 0, borderRadius: 6, cursor: 'pointer',
                         font: 'inherit', fontSize: 13, fontWeight: view === id ? 700 : 600,
                         background: view === id ? 'var(--color-navy)' : 'transparent',
-                        color: view === id ? '#fff' : 'var(--color-navy)',
+                        color: view === id ? '#fff' : 'var(--color-heading)',
                       }}>
                 {label} ({counts[id]})
               </button>
@@ -170,12 +238,18 @@ export default function HR() {
                       <td style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--color-text-muted)' }}>{r.id}</td>
                       <td style={{ fontWeight: 700 }}>{r.worker_name}</td>
                       <td>
-                        <KindBadge kind={kind} label={kind === 'revoke' ? 'Odejście' : 'Zatrudnienie'} />
+                        <KindBadge kind={kind} label={kindLabel(kind)} />
                       </td>
                       <td style={{ color: 'var(--color-text-muted)' }}>{r.worker_position || '—'}</td>
-                      <td><span className={`badge ${STATUS_BADGE[r.status] || 'badge--neutral'}`}>
-                        {STATUS_LABELS[r.status] || r.status}
-                      </span></td>
+                      <td>
+                        <span className={`badge ${statusBadge(r.status)}`}>{statusLabel(r.status)}</span>
+                        {!DONE.includes(r.status) && (r.waiting_for || r.step_since) && (
+                          <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 4 }}>
+                            Gdzie teraz: {r.waiting_for || '—'}
+                            {r.step_since && <> · od {waitText(daysSince(serverTs(r.step_since), serverNow()))}</>}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>
                         {fmtDate(r.created_at)}
                       </td>
@@ -188,6 +262,7 @@ export default function HR() {
         )}
       </section>
 
+      {created && <CopyMessageDialog info={created} onClose={() => setCreated(null)} />}
     </div>
   )
 }
@@ -275,7 +350,7 @@ function RequestFormView({ onCancel, onCreated }) {
 
     setBusy(true)
     try {
-      await createRequest({
+      const res = await createRequest({
         worker_name:     workerName,
         worker_position: position.trim(),
         employment_from: startDate || null,
@@ -284,7 +359,13 @@ function RequestFormView({ onCancel, onCreated }) {
         items:           [],
         request_type_id: requestTypeId || null,
       })
-      onCreated()
+      toast(`Wysłano zgłoszenie zatrudnienia: ${workerName}. Trafi teraz do kierownika komórki.`)
+      onCreated({
+        id: res?.data?.id, name: workerName, position: position.trim(),
+        dept: `${selectedUnit?.name ? selectedUnit.name + ' › ' : ''}${selectedDept.name}`
+              + (selectedDept.description ? ` (${selectedDept.description})` : ''),
+        from: startDate,
+      })
     } catch (ex) {
       setErr(ex.response?.data?.detail || 'Błąd zapisu zgłoszenia')
       setBusy(false)
@@ -356,6 +437,8 @@ function RequestFormView({ onCancel, onCreated }) {
           </span>
         </div>
       </Section>
+
+      <NextSteps />
 
       {err && <div className="alert alert--error mt-4">{err}</div>}
     </RequestViewShell>
@@ -470,6 +553,7 @@ function TerminationFormView({ onCancel, onCreated }) {
         items:           [],
         request_type_id: requestTypeId || null,
       })
+      toast(`Wysłano zgłoszenie odejścia: ${effWorker.name}. Trafi teraz do kierownika komórki.`)
       onCreated()
     } catch (ex) {
       setErr(ex.response?.data?.detail || 'Błąd zapisu zgłoszenia')
@@ -665,6 +749,8 @@ function TerminationFormView({ onCancel, onCreated }) {
 
           {err && <div className="alert alert--error mt-4">{err}</div>}
       </Section>
+
+      <NextSteps revoke />
     </RequestViewShell>
   )
 }
@@ -899,7 +985,7 @@ function treeRow(selected, isUnit) {
     display: 'flex', alignItems: 'center', gap: 6, minHeight: 36, paddingRight: 10,
     borderRadius: 6, cursor: 'pointer', fontSize: 14, boxSizing: 'border-box',
     background: selected ? 'var(--color-navy)' : 'transparent',
-    color: selected ? '#fff' : (isUnit ? 'var(--color-navy)' : 'var(--color-text)'),
+    color: selected ? '#fff' : (isUnit ? 'var(--color-heading)' : 'var(--color-text)'),
     fontWeight: selected || isUnit ? 700 : 400,
   }
 }

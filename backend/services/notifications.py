@@ -18,8 +18,9 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # Wspólne makra dostępne (prawie) wszędzie — do pokazania w UI.
+# {request_url} — link prosto do wniosku (v3.1); {app_url} — strona główna.
 _COMMON = ["{request_id}", "{worker_name}", "{dept_name}", "{unit_name}",
-           "{app_url}", "{date}", "{datetime}"]
+           "{request_url}", "{app_url}", "{date}", "{datetime}"]
 
 
 # Rejestr zdarzeń: etykieta, opis, makra (do podpowiedzi w UI) oraz domyślny
@@ -37,7 +38,7 @@ EVENTS: dict[str, dict] = {
             "Pracownik:   {worker_name}\n"
             "Wydział:     {dept_name}\n"
             "Złożył(a):   {created_by}\n\n"
-            "Zaloguj się do SZUP ({app_url}), aby wybrać uprawnienia.\n\n"
+            "Wybierz uprawnienia: {request_url}\n\n"
             "-- SZUP {datetime}"
         ),
     },
@@ -52,7 +53,7 @@ EVENTS: dict[str, dict] = {
             "Pracownik:   {worker_name}\n"
             "Wydział:     {dept_name}\n"
             "Złożył(a):   {created_by}\n\n"
-            "Zaloguj się do SZUP ({app_url}), aby zatwierdzić lub odrzucić wniosek.\n\n"
+            "Zatwierdź lub odrzuć wniosek: {request_url}\n\n"
             "-- SZUP {datetime}"
         ),
     },
@@ -67,7 +68,7 @@ EVENTS: dict[str, dict] = {
             "Pracownik:   {worker_name}\n"
             "Wydział:     {dept_name}\n"
             "Wybrał(a):   {selector_name}\n\n"
-            "Zaloguj się do SZUP ({app_url}), aby zatwierdzić lub odrzucić wniosek.\n\n"
+            "Zatwierdź lub odrzuć wniosek: {request_url}\n\n"
             "-- SZUP {datetime}"
         ),
     },
@@ -82,7 +83,7 @@ EVENTS: dict[str, dict] = {
             "Pracownik:    {worker_name}\n"
             "Wydział:      {dept_name}\n"
             "Zatwierdził:  {manager_name}\n\n"
-            "Zaloguj się do SZUP ({app_url}), aby zrealizować wniosek.\n\n"
+            "Zrealizuj wniosek: {request_url}\n\n"
             "-- SZUP {datetime}"
         ),
     },
@@ -95,7 +96,7 @@ EVENTS: dict[str, dict] = {
             "{manager_name} wystąpił z wnioskiem o {what} dla {worker_name}.\n\n"
             "{applicant_line}"
             "Nr wniosku: #{request_id}\n"
-            "{app_url}\n"
+            "{request_url}\n"
         ),
     },
     "request_completed": {
@@ -108,6 +109,7 @@ EVENTS: dict[str, dict] = {
             "Nr wniosku:  #{request_id}\n"
             "Pracownik:   {worker_name}\n"
             "{denied_block}\n"
+            "Szczegóły: {request_url}\n\n"
             "-- SZUP {datetime}"
         ),
     },
@@ -121,6 +123,7 @@ EVENTS: dict[str, dict] = {
             "Nr wniosku:  #{request_id}\n"
             "Pracownik:   {worker_name}\n"
             "Powód:       {comment}\n\n"
+            "Szczegóły: {request_url}\n\n"
             "-- SZUP {datetime}"
         ),
     },
@@ -137,7 +140,7 @@ EVENTS: dict[str, dict] = {
             "Etap:          {stage_label}\n\n"
             "Co należy zrobić:\n"
             "  {action_hint}\n\n"
-            "Zaloguj się do SZUP ({app_url}) i otwórz wniosek #{request_id}.\n\n"
+            "Otwórz wniosek #{request_id}: {request_url}\n\n"
             "-- SZUP {datetime}"
         ),
     },
@@ -173,6 +176,8 @@ def _base_context() -> dict:
         app_url = ""
     return {
         "app_url": app_url,
+        # Domyślnie strona główna — konkretny link do wniosku podają wywołania.
+        "request_url": app_url,
         "date": now.strftime("%Y-%m-%d"),
         "datetime": now.strftime("%Y-%m-%d %H:%M"),
     }

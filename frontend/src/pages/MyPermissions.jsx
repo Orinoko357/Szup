@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ShieldCheck, RefreshCw } from 'lucide-react'
+import { ShieldCheck, RefreshCw, UserCheck, Mail } from 'lucide-react'
 import { getMyPermissions } from '../api'
 import { fmtDate } from '../serverTime'
 import MyNameChanges from '../components/MyNameChanges'
@@ -24,6 +24,8 @@ export default function MyPermissions() {
 
   const perms = data?.permissions || []
   const reqs  = data?.requests    || []
+  // v3.1 — „Twój kierownik” (pole `manager` z backendu; brak → nie pokazujemy).
+  const manager = data?.manager || null
 
   // Grupowanie per system
   const bySystem = {}
@@ -50,6 +52,31 @@ export default function MyPermissions() {
 
       {err && <div className="alert alert--error mb-4">{err}</div>}
 
+      {manager && (
+        <section aria-label="Twój kierownik" className="card" style={{
+          display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 18,
+        }}>
+          <span aria-hidden="true" style={{ width: 40, height: 40, flexShrink: 0, borderRadius: 8,
+                display: 'grid', placeItems: 'center', background: 'var(--bg-secondary)', color: 'var(--color-heading)' }}>
+            <UserCheck size={18} />
+          </span>
+          <div style={{ flex: '1 1 280px', fontSize: 14, lineHeight: 1.5 }}>
+            <div>
+              Twój kierownik: <strong style={{ color: 'var(--color-heading)' }}>{manager.name}</strong>
+              {manager.department && <span style={{ color: 'var(--color-text-muted)' }}> ({manager.department})</span>}
+            </div>
+            <div style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>
+              To on składa wnioski o nowe uprawnienia lub ich zmianę — zgłoś mu, czego potrzebujesz.
+            </div>
+          </div>
+          {manager.email && (
+            <a className="btn btn--ghost" href={`mailto:${manager.email}`} style={{ minHeight: 44 }}>
+              <Mail size={15} aria-hidden="true" /> Napisz e-mail
+            </a>
+          )}
+        </section>
+      )}
+
       <MyNameChanges />
 
       <section aria-label="Uprawnienia" className="card" style={{ marginBottom: 18, padding: 0, overflow: 'hidden' }}>
@@ -58,7 +85,10 @@ export default function MyPermissions() {
         ) : perms.length === 0 ? (
           <div style={{ color: 'var(--color-text-muted)', padding: '16px 18px' }}>
             <ShieldCheck size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-            Nie masz żadnych uprawnień nadanych wnioskiem w tym systemie.
+            Nie masz jeszcze uprawnień nadanych wnioskiem.
+            <div style={{ marginTop: 6, fontSize: 13 }}>
+              Potrzebujesz dostępu do systemu? Poproś swojego kierownika — to on składa wniosek w SZUP.
+            </div>
           </div>
         ) : (
           <div>

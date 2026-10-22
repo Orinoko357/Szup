@@ -250,6 +250,8 @@ def _serialize_request(r: AccessRequest, items: list, session: Session | None = 
     assigned_to_name = None
     requested_by_name = None
     current_node_id = None
+    step_since = None      # kiedy wniosek wszedł w bieżący krok (ISO) — tylko aktywny obieg
+    waiting_for = None     # kto ma teraz działać (opis) — tylko aktywny obieg
     # Dane z konta pracownika (gdy wniosek jest dowiązany) — do karty „Pracownik”:
     # login oraz stanowisko z AD jako fallback, gdy wniosek nie ma własnego.
     worker_username = None
@@ -298,6 +300,22 @@ def _serialize_request(r: AccessRequest, items: list, session: Session | None = 
             from models import WorkflowInstanceStatus
             if inst.status == WorkflowInstanceStatus.active:
                 current_node_id = inst.current_node_id
+                # v3.1 — „Czeka na: kto, od kiedy” (od wejścia w bieżący krok).
+                from services.workflow import (
+                    find_node, waiting_for_label, current_step_since,
+                )
+                try:
+                    cur_node = find_node(json.loads(inst.template_snapshot), inst.current_node_id)
+                except Exception:
+                    cur_node = None
+                try:
+                    waiting_for = waiting_for_label(
+                        session, cur_node, r,
+                        session.get(Department, r.department_id) if r.department_id else None)
+                    since = current_step_since(session, inst)
+                    step_since = since.isoformat() if since else None
+                except Exception:   # informacja pomocnicza — nie może wywrócić listy
+                    waiting_for = step_since = None
     return {
         "id": r.id,
         "worker_name": r.worker_name,
@@ -321,6 +339,8 @@ def _serialize_request(r: AccessRequest, items: list, session: Session | None = 
         # kto WNIOSKUJE o uprawnienia (aktor kroku „select"; fallback: twórca)
         "requested_by_name": requested_by_name or r.created_by_name,
         "current_node_id": current_node_id,
+        "step_since": step_since,
+        "waiting_for": waiting_for,
         "approved_by_id": r.approved_by_id,
         "completed_by_id": r.completed_by_id,
         "selector_by_id": r.selector_by_id,
@@ -617,7 +637,7 @@ def workflow_dashboard(
     czekających na jego działanie. Zastępuje dawny /compliance/my w zakresie
     obiegu (moduły ISO/RODO usunięte)."""
     from models import WorkflowInstance, WorkflowInstanceStatus
-    from services.workflow import can_act, find_node
+    from services.workflow import can_act, find_node, waiting_for_label, current_step_since
     import json as _json
 
     def _entry(r: AccessRequest) -> Optional[dict]:
@@ -638,6 +658,7 @@ def workflow_dashboard(
         allowed, _reason = can_act(node, r, dept, user, session)
         if not allowed:
             return None
+        since = current_step_since(session, inst)
         return {
             "request_id": r.id,
             "worker_name": r.worker_name,
@@ -647,6 +668,9 @@ def workflow_dashboard(
             "node_label": node.get("label") or node.get("type"),
             "node_type": node.get("type"),
             "created_at": r.created_at,
+            # v3.1 — od kiedy czeka na bieżącym kroku i na kogo.
+            "step_since": since,
+            "waiting_for": waiting_for_label(session, node, r, dept),
         }
 
     pending: list[dict] = []
@@ -678,6 +702,9 @@ def workflow_dashboard(
             if e:
                 pending.append(e); seen_ids.add(r.id)
 
+    # Najdłużej czekające na bieżącym kroku najpierw — sortujemy PRZED obcięciem
+    # listy, żeby najstarsze sprawy nie wypadały z pulpitu.
+    pending.sort(key=lambda p: p["step_since"] or p["created_at"])
     pending_prepare = sum(1 for p in pending if p.get("node_type") == "select_permissions")
     pending_approve = sum(1 for p in pending if p.get("node_type") in ("manager_approve", "higher_manager_approve"))
     pending_execute = sum(1 for p in pending if p.get("node_type") == "it_execute")
@@ -698,7 +725,7 @@ def workflow_dashboard(
         "pending_approve_count":   pending_approve,
         "pending_execute_count":   pending_execute,
         "pending_names_count":     pending_names,
-        "pending_approvals_list":  pending[:10],
+        "pending_approvals_list":  pending[:50],
         # Flagi widoczności kafelków KPI — kafelek pokazujemy tylko roli,
         # której kolejka faktycznie dotyczy:
         #  - przypisanie uprawnień: każdy kierownik (zarządza jakąś komórką),

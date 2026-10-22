@@ -12,6 +12,28 @@
 import { useEffect, useState } from 'react'
 import { Check } from 'lucide-react'
 import { getRequestWorkflow } from '../api'
+import { getUserRoles } from '../roles'
+import { serverTs } from '../serverTime'
+import { daysSince, waitText } from '../labels'
+
+/** v3.1 — perspektywa dla osób z kilkoma rolami: „jako kierownik” / „jako IT”…
+ *  Zwraca null, gdy użytkownik pełni tylko jedną funkcję operacyjną. */
+export function perspectiveLabel(nodeType) {
+  const roles = getUserRoles()
+  const ops = ['manager', 'it_staff', 'hr'].filter(r => roles.includes(r))
+  if (ops.length < 2 || !nodeType) return null
+  if (nodeType === 'it_execute') return 'jako IT'
+  if (nodeType === 'higher_manager_approve') return 'jako kierownik nadrzędny'
+  if (nodeType === 'select_permissions' || nodeType === 'manager_approve') return 'jako kierownik'
+  return null
+}
+
+/** v3.1 — „Czeka na: X · od N dni” (pola z backendu: waiting_for, step_since). */
+export function waitingText(r) {
+  if (!r || !r.waiting_for) return null
+  const d = daysSince(serverTs(r.step_since))
+  return `Czeka na: ${r.waiting_for}${d != null ? ` · od ${waitText(d)}` : ''}`
+}
 
 // Etykiety akcji obiegu w historii.
 const ACTION_VERB = {
@@ -301,11 +323,18 @@ export default function RequestViewShell({
   icon: Icon, kind, kindLabel, statusText, title, subtitle,
   backLabel = '← Wróć', onBack, steps = [],
   summary = [], history = [], historyRequestId, historyCreatedBy, footerLeft, footerActions, children,
+  waiting, perspective,
 }) {
   return (
     <div>
       {/* Przyciski w stopce karty wg projektu: wysokość 44 px, tekst 14 px. */}
-      <style>{'.rv-footer .btn{min-height:44px;font-size:14px;padding:0 16px;border-radius:8px}'}</style>
+      {/* Stopka przyklejona do dołu ekranu (zawsze widoczne akcje, także na telefonie). */}
+      <style>{'.rv-footer .btn{min-height:44px;font-size:14px;padding:0 16px;border-radius:8px}'
+        + '.rv-footer{position:sticky;bottom:0;z-index:5;background:var(--color-card);'
+        + 'margin-left:-22px;margin-right:-22px;padding-left:22px;padding-right:22px;padding-bottom:14px;'
+        + 'box-shadow:0 -6px 14px -10px rgba(13,20,36,.25)}'
+        + '@media (max-width:600px){.rv-footer>div:last-child{width:100%}.rv-footer>div:last-child .btn{flex:1 1 auto}'
+        + '.rv-head-back{width:100%}}'}</style>
       {/* Nagłówek */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
         {Icon && (
@@ -318,12 +347,19 @@ export default function RequestViewShell({
         <div style={{ flex: 1, minWidth: 240 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             {kindLabel && <KindBadge kind={kind} label={kindLabel} />}
+            {perspective && (
+              <span style={{ padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700,
+                             background: 'var(--color-info-bg)', color: 'var(--color-info-text)' }}>{perspective}</span>
+            )}
             {statusText && <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>{statusText}</span>}
           </div>
           <h1 style={{ margin: '2px 0 0', fontSize: 24, fontWeight: 800, color: 'var(--color-heading)' }}>{title}</h1>
           {subtitle && <p style={{ margin: '2px 0 0', fontSize: 14, color: 'var(--color-text-muted)' }}>{subtitle}</p>}
+          {waiting && (
+            <p style={{ margin: '6px 0 0', fontSize: 13, fontWeight: 600, color: 'var(--color-warning-text)' }}>{waiting}</p>
+          )}
         </div>
-        <button type="button" className="btn btn--ghost" style={{ minHeight: 44 }} onClick={onBack}>{backLabel}</button>
+        <button type="button" className="btn btn--ghost rv-head-back" style={{ minHeight: 44 }} onClick={onBack}>{backLabel}</button>
       </div>
 
       <RequestStepper steps={steps} />

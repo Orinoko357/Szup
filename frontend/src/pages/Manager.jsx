@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { RefreshCw, Check, X, ListChecks, Search } from 'lucide-react'
 import { listRequests, workflowAction, listSystems, listPermissions, userPermissions, denyRequestItem } from '../api'
-import { fmtDate } from '../serverTime'
-import WorkflowRibbon from '../components/WorkflowRibbon'
-import RequestViewShell, { buildWorkflowSteps, Section, WorkerCard, deptFull, KindBadge } from '../components/RequestView'
+import { fmtDate, serverTs } from '../serverTime'
+import RequestViewShell, {
+  buildWorkflowSteps, Section, WorkerCard, deptFull, KindBadge, perspectiveLabel, waitingText,
+} from '../components/RequestView'
+import { statusLabel, statusBadge, nodeLabel, kindLabel, daysSince, waitText } from '../labels'
+import { toast, confirmDialog } from '../components/ui/feedback'
+import { ReviewDialog, describeKeys } from '../components/ChangeSummary'
+import CopyFromColleague, { buildCopiedSelection } from '../components/CopyFromColleague'
 import DeclarationModal from '../components/DeclarationModal'
 import PermissionChanges, {
   permChangeState, changeStyle, changeTextStyle, ChangeBadge,
@@ -15,28 +20,9 @@ import PermInput, {
   isScopeGated, missingScopeSystems,
 } from '../components/ItemFields'
 
-const STATUS_LABELS = {
-  pending_selection: 'Wybór uprawnień',
-  pending_manager: 'Oczekuje',
-  pending_it: 'Realizacja IT',
-  completed: 'Zrealizowany',
-  rejected: 'Odrzucony',
-}
-const STATUS_BADGE = {
-  pending_selection: 'badge--warning',
-  pending_manager: 'badge--warning',
-  pending_it: 'badge--info',
-  completed: 'badge--success',
-  rejected: 'badge--error',
-}
-
 const MANAGER_NODES = ['select_permissions', 'manager_approve', 'higher_manager_approve']
-const NODE_LABELS = {
-  select_permissions: 'Wybór uprawnień',
-  manager_approve: 'Akceptacja kierownika',
-  higher_manager_approve: 'Akceptacja wyższego rzędu',
-  it_execute: 'Realizacja IT',
-}
+// Odznaka rodzaju wniosku (zatrudnienie / odejście / zmiana) — wspólny słownik.
+const kindPill = (k) => <KindBadge kind={['revoke', 'change'].includes(k) ? k : 'grant'} label={kindLabel(k)} />
 
 // Postęp realizacji pozycji NADANIA — do pokazania w „Moich wnioskach".
 function grantProgressOf(r) {
@@ -46,9 +32,10 @@ function grantProgressOf(r) {
   return { total: g.length, done, denied }
 }
 
-// embedded — osadzony w stronie „Wnioski” (bez własnego nagłówka i zakładek;
-// zakładkę wybiera `view`). openId — od razu otwórz wskazany wniosek (z pulpitu).
-export default function Manager({ embedded = false, view, openId, onViewChange, onChanged }) {
+// Osadzony w stronie „Wnioski” (bez własnego nagłówka i zakładek; zakładkę
+// wybiera `view`). openId — od razu otwórz wskazany wniosek (z pulpitu);
+// onOpenConsumed — informuje stronę, że parametr został już użyty.
+export default function Manager({ view, openId, onOpenConsumed, onViewChange, onChanged }) {
   const [tab, setTab]           = useState(view || 'handle')   // handle | mine
   useEffect(() => { if (view) setTab(view) }, [view])
   const [managerReqs, setManagerReqs] = useState([])   // wnioski z moich komórek (scope=manager)
@@ -76,6 +63,8 @@ export default function Manager({ embedded = false, view, openId, onViewChange, 
         openedRef.current = true
         const hit = all.find(x => x.id === Number(openId))
         if (hit) setOpenReq(hit)
+        else toast(`Wniosek #${openId} nie jest dostępny w Twoim zakresie albo został już obsłużony.`, { tone: 'info' })
+        onOpenConsumed?.()
       }
     } catch (ex) {
       setErr(ex.response?.data?.detail || 'Błąd ładowania')
@@ -92,15 +81,6 @@ export default function Manager({ embedded = false, view, openId, onViewChange, 
   const toHandle = managerReqs.filter(
     x => x.can_act && MANAGER_NODES.includes(x.current_node_type))
 
-  const TABS = [
-    ['handle', 'Wnioski do obsługi', toHandle.length],
-    ['mine',   'Moje wnioski',       myReqs.length],
-  ]
-  const SUB = {
-    handle: 'Do zrobienia: wybór uprawnień dla pracowników i akceptacje (w tym wyższego rzędu)',
-    mine:   'Wnioski, które złożyłeś(aś) — bieżący status i etap obiegu',
-  }
-
   // Otwarty wniosek = pełnoekranowy widok (zamiast listy), spójnie z Kartoteką.
   if (openReq) {
     return <RequestModal request={openReq} onClose={() => setOpenReq(null)}
@@ -110,34 +90,11 @@ export default function Manager({ embedded = false, view, openId, onViewChange, 
 
   return (
     <div>
-      {embedded ? (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-          <button className="btn btn--ghost btn--sm" onClick={() => load()} disabled={loading}>
-            <RefreshCw size={14} /> Odśwież
-          </button>
-        </div>
-      ) : (
-      <div className="page-header">
-        <div>
-          <div className="page-header__title">Wnioski</div>
-          <div className="page-header__sub">{SUB[tab]}</div>
-        </div>
-        <button className="btn btn--ghost btn--sm" onClick={() => load()} disabled={loading}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        <button className="btn btn--ghost btn--sm" onClick={() => { load(); onChanged?.() }} disabled={loading}>
           <RefreshCw size={14} /> Odśwież
         </button>
       </div>
-      )}
-
-      {!embedded && <div className="tabs" style={{ marginTop: 0 }}>
-        {TABS.map(([v, label, count]) => (
-          <button key={v} className={`tab-btn${tab === v ? ' active' : ''}`} onClick={() => setTab(v)}>
-            {label}
-            {count > 0 && (
-              <span className="tab-count">{count}</span>
-            )}
-          </button>
-        ))}
-      </div>}
 
       {err && <div className="alert alert--error mb-4">{err}</div>}
 
@@ -157,8 +114,12 @@ export default function Manager({ embedded = false, view, openId, onViewChange, 
 // --- Zakładka „Wnioski do obsługi" -----------------------------------------
 function HandleTable({ rows, onOpen }) {
   if (rows.length === 0) {
-    return <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>
-      Brak wniosków do obsługi — wszystko ogarnięte.
+    return <div style={{ padding: 18 }}>
+      <div style={{ fontWeight: 700 }}>Brak wniosków do obsługi — wszystko załatwione.</div>
+      <div style={{ fontSize: 13, color: 'var(--color-text-muted)', marginTop: 4 }}>
+        Nowy wniosek dla pracownika złożysz w „Moich pracownikach”. Jeśli spodziewasz się wniosku,
+        a go tu nie ma — sprawdź z administratorem, czy jesteś przypisany(a) jako kierownik komórki.
+      </div>
     </div>
   }
   return (
@@ -167,7 +128,7 @@ function HandleTable({ rows, onOpen }) {
       <thead>
         <tr>
           <th>#</th><th>Pracownik</th><th>Stanowisko</th><th>Uprawnień</th>
-          <th>Do zrobienia</th><th>Data złożenia</th><th>Złożył(a)</th><th></th>
+          <th>Do zrobienia</th><th>Czeka</th><th>Złożył(a)</th><th></th>
         </tr>
       </thead>
       <tbody>
@@ -176,17 +137,26 @@ function HandleTable({ rows, onOpen }) {
             <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
             <td>
               <div style={{ fontWeight: 700 }}>{r.worker_name}</div>
-              <KindBadge kind={r.kind === 'revoke' ? 'revoke' : 'grant'}
-                         label={r.kind === 'revoke' ? 'Odejście' : 'Zatrudnienie'} />
+              {kindPill(r.kind)}
             </td>
             <td style={{ color: 'var(--color-text-muted)' }}>{r.worker_position || '—'}</td>
             <td>{r.items?.length || 0}</td>
             <td>
               <span className="badge badge--warning" style={{ fontSize: 12 }}>
-                {NODE_LABELS[r.current_node_type] || STATUS_LABELS[r.status] || r.status}
+                {nodeLabel(r.current_node_type, statusLabel(r.status))}
               </span>
             </td>
-            <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{fmtDate(r.created_at)}</td>
+            <td style={{ fontSize: 12 }}>
+              {(() => {
+                // Od kiedy wniosek czeka na tym kroku (step_since) — gdy brak, od złożenia.
+                const d = daysSince(serverTs(r.step_since || r.created_at))
+                return <span style={{ fontWeight: d >= 7 ? 700 : 400,
+                                      color: d >= 7 ? 'var(--color-error-text)' : 'var(--color-text-muted)' }}>
+                  {waitText(d)}
+                </span>
+              })()}
+              <div style={{ color: 'var(--color-text-muted)' }}>złożono {fmtDate(r.created_at)}</div>
+            </td>
             <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{r.requested_by_name || r.created_by_name}</td>
             <td>
               {r.status === 'pending_selection' ? (
@@ -210,9 +180,11 @@ function HandleTable({ rows, onOpen }) {
 // --- Zakładka „Moje wnioski" (złożone przeze mnie) -------------------------
 function MineTable({ rows, onOpen }) {
   if (rows.length === 0) {
-    return <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>
-      Nie złożyłeś(aś) jeszcze żadnego wniosku. Wnioski dla pracowników składasz
-      w zakładce „Moi pracownicy".
+    return <div style={{ padding: 18 }}>
+      <div style={{ fontWeight: 700 }}>Nie złożyłeś(aś) jeszcze żadnego wniosku.</div>
+      <div style={{ fontSize: 13, color: 'var(--color-text-muted)', marginTop: 4 }}>
+        Wniosek dla pracownika złożysz w „Moich pracownikach” — przycisk „Nowy wniosek” przy jego nazwisku.
+      </div>
     </div>
   }
   return (
@@ -234,23 +206,22 @@ function MineTable({ rows, onOpen }) {
               <td>
                 <div style={{ fontWeight: 700 }}>{r.worker_name}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
-                  <KindBadge kind={r.kind === 'revoke' ? 'revoke' : 'grant'}
-                             label={r.kind === 'revoke' ? 'Odejście' : 'Zatrudnienie'} />
+                  {kindPill(r.kind)}
                   <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
                     {r.items?.length || 0} uprawnień
                   </span>
                 </div>
               </td>
               <td>
-                <span className={`badge ${STATUS_BADGE[r.status] || 'badge--neutral'}`}>
-                  {STATUS_LABELS[r.status] || r.status}
+                <span className={`badge ${statusBadge(r.status)}`}>
+                  {statusLabel(r.status)}
                 </span>
               </td>
               <td style={{ fontSize: 12 }}>
                 <span style={{ color: 'var(--color-text-muted)' }}>
-                  {NODE_LABELS[r.current_node_type]
-                    || (r.status === 'completed' ? 'Zakończony'
-                        : r.status === 'rejected' ? 'Odrzucony' : '—')}
+                  {r.status === 'completed' ? 'Zakończony'
+                    : r.status === 'rejected' ? 'Odrzucony'
+                    : nodeLabel(r.current_node_type, '—')}
                 </span>
                 {inIt && p.total > 0 && (
                   <span style={{ marginLeft: 8, display: 'inline-flex', gap: 8 }}>
@@ -259,6 +230,9 @@ function MineTable({ rows, onOpen }) {
                       <span style={{ color: 'var(--color-error-text)' }}>odmowy: {p.denied}</span>
                     )}
                   </span>
+                )}
+                {waitingText(r) && (
+                  <div style={{ color: 'var(--color-warning-text)', marginTop: 2 }}>{waitingText(r)}</div>
                 )}
               </td>
               <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{fmtDate(r.created_at)}</td>
@@ -283,8 +257,10 @@ function MineTable({ rows, onOpen }) {
 // ---------------------------------------------------------------------------
 function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   const isRevoke   = r.kind === 'revoke'
-  const isSelect   = r.status === 'pending_selection'
-  const isDecision = r.status === 'pending_manager'
+  // Akcje tylko, gdy backend potwierdza, że TEN użytkownik może działać na
+  // bieżącym kroku (can_act) — inaczej podgląd (bez przycisków kończących się 403).
+  const isSelect   = !!r.can_act && r.status === 'pending_selection'
+  const isDecision = !!r.can_act && r.status === 'pending_manager'
   // Dwie ścieżki zależne od flagi komórki „wymaga akceptacji wyższego rzędu":
   //  - 2-stopniowa: kierownik → kierownik nadrzędny → IT
   //  - 1-stopniowa: kierownik → IT (bez akceptacji wyższego rzędu)
@@ -575,6 +551,13 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     if (declaration) body.declaration = declaration
     try {
       await workflowAction(r.id, body)
+      toast(action === 'reject'
+        ? `Odrzucono wniosek #${r.id}.`
+        : isSelect
+          ? (twoStage ? `Wybór wysłany do akceptacji kierownika wyższego rzędu (#${r.id}).`
+                      : `Wybór zatwierdzony — wniosek #${r.id} trafił do realizacji przez IT.`)
+          : `Zatwierdzono wniosek #${r.id}.`)
+      setReviewOpen(false)
       onDone()
     } catch (ex) {
       const st = ex.response?.status
@@ -583,10 +566,12 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
         // Zbierz oświadczenie i ponów TĘ akcję.
         setDeclText(det.declaration_text || '')
         setDeclPending(action)
+        setReviewOpen(false)
         setBusy(false)
         return
       }
       setErr((typeof det === 'string' ? det : det?.message) || 'Błąd operacji')
+      setReviewOpen(false)
       setBusy(false)
       // 409 = krok wykonała już inna osoba (np. przełożony) — odśwież dane
       // wniosku, żeby widok pokazał jego aktualny etap.
@@ -594,12 +579,22 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     }
   }
 
+  // v3.1 — wysłanie wyboru idzie przez krok PODSUMOWANIA (ReviewDialog).
+  const [reviewOpen, setReviewOpen] = useState(false)
+
   async function submit(action) {
+    if (action === 'reject') {
+      const ok = await confirmDialog({
+        title: `Odrzucić wniosek #${r.id}?`,
+        message: 'Wniosek zostanie zamknięty bez realizacji. Powód wpisz w polu „Uwagi” — trafi do historii.',
+        confirmLabel: 'Odrzuć wniosek', danger: true,
+      })
+      if (!ok) return
+      setBusy(true); setErr(null)
+      await sendAction('reject')
+      return
+    }
     if (isSelect && action === 'approve' && !isRevoke) {
-      // Nadanie uprawnień administracyjnych wymaga twardego potwierdzenia.
-      // Sprawdzamy PRZED `setBusy`, bo `prompt` blokuje interfejs.
-      const admins = adminGrantNames([...toGrant, ...scopeChanged], systems, permsBySys)
-      if (!confirmAdminRights(admins)) { setErr(ADMIN_CONFIRM_ABORTED); return }
       const noScope = missingScopeSystems(systems, openSys, picked, permsBySys)
       if (noScope.length) {
         setErr('Zaznaczono program bez wybranego zakresu uprawnień: '
@@ -609,9 +604,38 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       const miss = missingRequired()
       if (miss.length) { setErr('Uzupełnij pola obowiązkowe: ' + miss.join('; ')); return }
     }
+    if (isSelect && action === 'approve') { setErr(null); setReviewOpen(true); return }
     setBusy(true); setErr(null)
     await sendAction(action)
   }
+
+  // Ostateczne wysłanie z okna podsumowania (po potwierdzeniu uprawnień admina).
+  async function confirmFromReview() {
+    if (!isRevoke) {
+      // Nadanie uprawnień administracyjnych wymaga twardego potwierdzenia.
+      const admins = adminGrantNames([...toGrant, ...scopeChanged], systems, permsBySys)
+      if (!(await confirmAdminRights(admins))) { setErr(ADMIN_CONFIRM_ABORTED); setReviewOpen(false); return }
+    }
+    setBusy(true); setErr(null)
+    await sendAction('approve')
+  }
+
+  // Kopiowanie uprawnień od współpracownika → nowy stan docelowy.
+  function copyFrom(perms) {
+    const res = buildCopiedSelection(perms, systems, permsBySys)
+    setPicked(res.keys)
+    setFieldValues(prev => ({ ...prev, ...res.values }))
+    setPermFilter('changes')
+    return { count: res.keys.size, skippedAdmin: res.skippedAdmin, skippedUnavailable: res.skippedUnavailable }
+  }
+
+  // Wiersze podsumowania.
+  const reviewGrants = isRevoke ? [] : describeKeys([...toGrant, ...scopeChanged], systems, permsBySys, fieldValues)
+  const reviewRevokes = isRevoke
+    ? revokeList.filter(p => picked.has(`${p.system_id}:${p.permission_id}`)).map(p => ({
+        key: `${p.system_id}:${p.permission_id}`, system: p.system_name, perm: p.permission_name, values: [],
+      }))
+    : describeKeys(toRevoke, systems, permsBySys)
 
   const title = isSelect
     ? (isRevoke ? 'Odebranie uprawnień' : 'Wybór uprawnień')
@@ -639,12 +663,20 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   return (
     <>
     <RequestViewShell
-      icon={ListChecks} kind={r.kind} kindLabel={isRevoke ? 'Odejście' : 'Zatrudnienie'}
+      icon={ListChecks} kind={['revoke', 'change'].includes(r.kind) ? r.kind : 'grant'} kindLabel={kindLabel(r.kind)}
       statusText={`Wniosek #${r.id}${(isSelect || isDecision) ? ' · czeka na Ciebie' : ''}`}
+      perspective={(isSelect || isDecision) ? perspectiveLabel(r.current_node_type) : null}
+      waiting={!(isSelect || isDecision) ? waitingText(r) : null}
       title={title} subtitle={_subtitle}
       backLabel="← Wróć do listy" onBack={onClose}
       steps={_steps} summary={_summary} historyRequestId={r.id}
       historyCreatedBy={r.created_by_name}
+      footerLeft={isSelect && !loading
+        ? (isRevoke
+            ? <>Do odebrania: <strong>{picked.size}</strong></>
+            : <><strong style={{ color: 'var(--color-success-text)' }}>+{toGrant.length + scopeChanged.length}</strong> nadania
+                {' · '}<strong style={{ color: 'var(--color-error-text)' }}>−{toRevoke.length}</strong> odebrania</>)
+        : null}
       footerActions={<>
         <button className="btn btn--ghost" onClick={onClose} disabled={busy}>
           {(isSelect || isDecision) ? 'Anuluj' : 'Zamknij'}
@@ -656,14 +688,10 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
         )}
         {isSelect && (
           <button className="btn btn--success" onClick={() => submit('approve')}
-                  disabled={busy || (isRevoke
+                  disabled={busy || loading || (isRevoke
                     ? picked.size === 0
-                    : (toGrant.length === 0 && toRevoke.length === 0))}>
-            <Check size={14} />
-            {(() => {
-              const cnt = isRevoke ? `${picked.size}` : `+${toGrant.length} / −${toRevoke.length}`
-              return twoStage ? ` Wyślij do akceptacji (${cnt})` : ` Zatwierdź i przekaż do realizacji (${cnt})`
-            })()}
+                    : (toGrant.length === 0 && toRevoke.length === 0 && scopeChanged.length === 0))}>
+            <Check size={14} /> Sprawdź i wyślij
           </button>
         )}
         {isDecision && (
@@ -744,7 +772,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                                 padding: '0 14px', borderRadius: 6, font: 'inherit',
                                 fontWeight: permFilter === t.id ? 700 : 600,
                                 background: permFilter === t.id ? 'var(--color-card)' : 'transparent',
-                                color: permFilter === t.id ? 'var(--color-navy)' : 'var(--color-text-muted)',
+                                color: permFilter === t.id ? 'var(--color-heading)' : 'var(--color-text-muted)',
                               }}>
                         {t.label}
                       </button>
@@ -759,6 +787,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                            placeholder="Szukaj systemu lub zakresu…"
                            onChange={e => setSysQuery(e.target.value)} />
                   </div>
+                  <CopyFromColleague excludeUserId={r.worker_user_id} onCopy={copyFrom} disabled={busy} />
                 </div>
               )}
 
@@ -975,6 +1004,22 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
 
           {err && <div className="alert alert--error">{err}</div>}
     </RequestViewShell>
+
+      <ReviewDialog
+        open={reviewOpen}
+        workerName={r.worker_name}
+        grants={reviewGrants}
+        revokes={reviewRevokes}
+        target={isRevoke
+          ? 'Po wysłaniu wniosek trafi do realizacji (odebranie uprawnień).'
+          : twoStage
+            ? 'Po wysłaniu wniosek trafi do akceptacji kierownika wyższego rzędu, potem do IT.'
+            : 'Po wysłaniu wniosek trafi bezpośrednio do realizacji przez IT.'}
+        confirmLabel={twoStage && !isRevoke ? 'Wyślij do akceptacji' : 'Zatwierdź i przekaż do realizacji'}
+        busy={busy}
+        onBack={() => setReviewOpen(false)}
+        onConfirm={confirmFromReview}
+      />
 
       {declPending && (
         <DeclarationModal

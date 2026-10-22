@@ -9,6 +9,18 @@ import {
 } from '../api'
 import { LdapUsersImportModal } from './Units'
 import { serverTs, serverNow, fmtDate } from '../serverTime'
+import { toast, confirmDialog, promptDialog } from '../components/ui/feedback'
+import { ROLE_LABEL } from '../labels'
+
+// Potwierdzenie w oknie aplikacji (zamiast systemowego confirm). Operacje
+// usuwające / odbierające / nieodwracalne oznaczamy na czerwono.
+const ask = (message) => {
+  const danger = /usun|odebra|wygas|ostrze|nieodwracal/i.test(message)
+  return confirmDialog({
+    title: danger ? 'Potwierdź operację' : 'Potwierdź',
+    message, danger, confirmLabel: danger ? 'Tak, wykonaj' : 'Potwierdź',
+  })
+}
 
 // Etykieta komórki: „Nazwa · Jednostka" jeśli znamy jednostkę.
 function deptLabel(d) {
@@ -188,13 +200,15 @@ function DeptCombo({ depts = [], units = [], value, onChange, className = 'form-
   )
 }
 
+// Etykiety ról ze wspólnego słownika (labels.js) — te same nazwy co w belce.
+const roleLbl = (r) => { const t = ROLE_LABEL[r] || r; return t.charAt(0).toUpperCase() + t.slice(1) }
 const ROLES = [
-  { value: 'superadmin', label: 'Superadmin',    badge: 'badge--error',   superadminOnly: true },
-  { value: 'admin',      label: 'Admin',         badge: 'badge--warning' },
-  { value: 'hr',         label: 'HR',            badge: 'badge--info'    },
-  { value: 'manager',    label: 'Kierownik',     badge: 'badge--info'    },
-  { value: 'it_staff',   label: 'Pracownik IT',  badge: 'badge--success' },
-  { value: 'viewer',     label: 'Podgląd',       badge: 'badge--neutral' },
+  { value: 'superadmin', label: roleLbl('superadmin'), badge: 'badge--error',   superadminOnly: true },
+  { value: 'admin',      label: roleLbl('admin'),      badge: 'badge--warning' },
+  { value: 'hr',         label: roleLbl('hr'),         badge: 'badge--info'    },
+  { value: 'manager',    label: roleLbl('manager'),    badge: 'badge--info'    },
+  { value: 'it_staff',   label: roleLbl('it_staff'),   badge: 'badge--success' },
+  { value: 'viewer',     label: roleLbl('viewer'),     badge: 'badge--neutral' },
 ]
 
 const ROLE_META = Object.fromEntries(ROLES.map(r => [r.value, r]))
@@ -237,7 +251,7 @@ export default function Users() {
   // Przypisanie kierowników komórek wg stanowiska z AD (kierownik/dyrektor/naczelnik).
   // Stanowiska pobierają się przy imporcie użytkowników z AD.
   async function runAutoManagers() {
-    if (!confirm('Przypisać kierowników komórek na podstawie stanowiska z AD '
+    if (!await ask('Przypisać kierowników komórek na podstawie stanowiska z AD '
       + '(„kierownik", „dyrektor", „naczelnik")?\n\n'
       + 'Uzupełnione zostaną tylko komórki BEZ kierownika; przy kilku kandydatach '
       + 'komórka zostaje do ręcznej decyzji. Najpierw zaimportuj użytkowników z AD '
@@ -246,14 +260,14 @@ export default function Users() {
     try {
       const r = await autoAssignManagers({})
       const d = r.data
-      alert(`Przypisano: ${d.assigned}\n`
+      toast(`Przypisano: ${d.assigned}\n`
         + `Pominięto (mają już kierownika): ${d.skipped_has_manager}\n`
         + `Niejednoznaczne (kilku kandydatów): ${d.ambiguous}\n`
         + `Bez kandydata: ${d.no_candidate}`
-        + (d.details.length ? `\n\n${d.details.join('\n')}` : ''))
+        + (d.details.length ? `\n\n${d.details.join('\n')}` : ''), { tone: 'info', timeout: 12000 })
       load()
     } catch (ex) {
-      alert(ex.response?.data?.detail || 'Nie udało się przypisać kierowników')
+      toast(ex.response?.data?.detail || 'Nie udało się przypisać kierowników', { tone: 'error' })
     } finally { setAutoBusy(false) }
   }
 
@@ -421,7 +435,9 @@ export default function Users() {
       ) : visibleUsers.length === 0 ? (
         <div className="card">
           <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>
-            {users.length === 0 ? 'Brak użytkowników' : 'Brak użytkowników przypisanych do tej jednostki.'}
+            {users.length === 0
+              ? 'Brak użytkowników. Zaimportuj konta z AD przyciskiem „Importuj z AD” albo dodaj konto przyciskiem „Nowy użytkownik”.'
+              : 'Brak użytkowników przypisanych do tej jednostki.'}
           </div>
         </div>
       ) : (
@@ -530,9 +546,9 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
       const r = await updateUser(u.id, { department_id: deptId ? Number(deptId) : null })
       // Backend może zwrócić informację (np. komórka ma już kierownika) —
       // zapis się udał, ale admin musi o tym wiedzieć.
-      if (r.data?.warning) alert(r.data.warning)
+      if (r.data?.warning) toast(r.data.warning, { tone: 'warning' })
       setEditDept(false); onChanged()
-    } catch (ex) { alert(ex.response?.data?.detail || 'Błąd przypisania komórki') }
+    } catch (ex) { toast(ex.response?.data?.detail || 'Błąd przypisania komórki', { tone: 'error' }) }
   }
 
   function toggleRole(rv) {
@@ -542,38 +558,40 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
   }
 
   async function saveRoles() {
-    if (!selectedRoles.length) { alert('Wybierz co najmniej jedną rolę'); return }
+    if (!selectedRoles.length) { toast('Wybierz co najmniej jedną rolę', { tone: 'warning' }); return }
     try {
       const r = await updateUser(u.id, { roles: selectedRoles })
-      if (r.data?.warning) alert(r.data.warning)
+      if (r.data?.warning) toast(r.data.warning, { tone: 'warning' })
       setEditRoles(false); onChanged()
     }
-    catch (ex) { alert(ex.response?.data?.detail || 'Błąd zmiany roli') }
+    catch (ex) { toast(ex.response?.data?.detail || 'Błąd zmiany roli', { tone: 'error' }) }
   }
 
   async function toggleActive() {
     try { await updateUser(u.id, { is_active: !u.is_active }); onChanged() }
-    catch (ex) { alert(ex.response?.data?.detail || 'Błąd') }
+    catch (ex) { toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' }) }
   }
 
   async function handleReset() {
-    const pw = prompt(
-      `Nowe hasło dla ${u.username}.\nMin. 12 znaków, 3 z 4 klas (małe/WIELKIE/cyfry/specjalne).\nUżytkownik będzie musiał je zmienić.`
-    )
+    const pw = await promptDialog({
+      title: `Reset hasła — ${u.username}`,
+      message: 'Min. 12 znaków, 3 z 4 klas (małe/WIELKIE/cyfry/specjalne).\nUżytkownik będzie musiał je zmienić przy następnym logowaniu.',
+      label: 'Nowe hasło', type: 'password', confirmLabel: 'Ustaw hasło',
+    })
     if (!pw) return
-    try { await resetUserPassword(u.id, pw); onChanged() }
-    catch (ex) { alert(ex.response?.data?.detail || 'Błąd resetowania hasła') }
+    try { await resetUserPassword(u.id, pw); onChanged(); toast(`Hasło użytkownika ${u.username} zostało zresetowane`) }
+    catch (ex) { toast(ex.response?.data?.detail || 'Błąd resetowania hasła', { tone: 'error' }) }
   }
 
   async function handleUnlock() {
     try { await unlockUser(u.id); onChanged() }
-    catch (ex) { alert(ex.response?.data?.detail || 'Błąd') }
+    catch (ex) { toast(ex.response?.data?.detail || 'Błąd', { tone: 'error' }) }
   }
 
   async function handleDelete() {
-    if (!confirm(`Usunąć konto "${u.username}"?`)) return
-    try { await deleteUser(u.id); onChanged() }
-    catch (ex) { alert(ex.response?.data?.detail || 'Błąd usuwania') }
+    if (!await ask(`Usunąć konto "${u.username}"?`)) return
+    try { await deleteUser(u.id); onChanged(); toast(`Usunięto konto „${u.username}”`) }
+    catch (ex) { toast(ex.response?.data?.detail || 'Błąd usuwania', { tone: 'error' }) }
   }
 
   return (
@@ -806,7 +824,7 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
         department_id: form.department_id ? Number(form.department_id) : null,
         unit_ids: isHr ? unitIds : [],
       })
-      if (r.data?.warning) alert(r.data.warning)
+      if (r.data?.warning) toast(r.data.warning, { tone: 'warning' })
       onAdded()
     } catch (ex) {
       setErr(extractErr(ex))
