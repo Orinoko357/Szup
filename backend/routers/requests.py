@@ -34,6 +34,11 @@ _log = logging.getLogger("szup.requests")
 # Helpers — role i widoczność
 # ---------------------------------------------------------------------------
 
+# Komunikat, gdy krok wykonała już inna osoba (np. przełożony) — 409.
+STEP_ALREADY_DONE_MSG = ("Ten krok został już wykonany przez inną osobę (np. przełożonego) "
+                         "albo wniosek jest zakończony. Odśwież wniosek.")
+
+
 def _managed_dept_ids(session: Session, user: User) -> tuple[list[int], list[int]]:
     """Zakres wniosków kierownika: managed_dept_ids + komórki, w których jest
     PRZEŁOŻONYM (poddrzewo swoich komórek i komórki jednostki, którą kieruje) —
@@ -1295,9 +1300,12 @@ def workflow_action(
     # H4 — optymistyczna kontrola współbieżności. Jeśli klient przesłał węzeł,
     # na którym myśli że działa, a obieg zdążył przejść dalej (inny użytkownik
     # kliknął pierwszy) → odrzuć zamiast wykonać akcję na cudzym węźle.
+    # Typowo: przełożony dokończył krok, zanim kierownik niżej wysłał swój wybór.
+    from models import WorkflowInstanceStatus
+    if inst.status != WorkflowInstanceStatus.active:
+        raise HTTPException(status.HTTP_409_CONFLICT, STEP_ALREADY_DONE_MSG)
     if data.expected_node_id and inst.current_node_id != data.expected_node_id:
-        raise HTTPException(status.HTTP_409_CONFLICT,
-            "Obieg zmienił stan (ktoś wykonał akcję w międzyczasie). Odśwież wniosek.")
+        raise HTTPException(status.HTTP_409_CONFLICT, STEP_ALREADY_DONE_MSG)
 
     # Payload zależy od akcji.
     payload = None
@@ -1500,6 +1508,9 @@ def set_item_denial(
     ).first()
     if not inst or not inst.current_node_id:
         raise HTTPException(400, "Wniosek nie ma aktywnego obiegu.")
+    from models import WorkflowInstanceStatus
+    if inst.status != WorkflowInstanceStatus.active:
+        raise HTTPException(status.HTTP_409_CONFLICT, STEP_ALREADY_DONE_MSG)
 
     node = find_node(json.loads(inst.template_snapshot), inst.current_node_id)
     ntype = (node or {}).get("type")
@@ -1590,6 +1601,9 @@ def set_item_fulfilled(
     ).first()
     if not inst or not inst.current_node_id:
         raise HTTPException(400, "Wniosek nie ma aktywnego obiegu.")
+    from models import WorkflowInstanceStatus
+    if inst.status != WorkflowInstanceStatus.active:
+        raise HTTPException(status.HTTP_409_CONFLICT, STEP_ALREADY_DONE_MSG)
 
     node = find_node(json.loads(inst.template_snapshot), inst.current_node_id)
     ntype = (node or {}).get("type")

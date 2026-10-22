@@ -551,9 +551,13 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
            ...scopeChanged.map(k => mkItem(k, 'grant')),
            ...toRevoke.map(k => mkItem(k, 'revoke'))]
       const wfAction = action === 'approve' ? 'select' : 'reject'
-      return { action: wfAction, comment, items }
+      // expected_node_id — jeśli przełożony wykonał już ten krok, backend zwróci
+      // 409 zamiast zastosować ten wybór do kolejnego etapu obiegu.
+      return { action: wfAction, comment, items,
+               ...(r.current_node_id ? { expected_node_id: r.current_node_id } : {}) }
     }
     const body = { action, comment }
+    if (r.current_node_id) body.expected_node_id = r.current_node_id
     // Odmowy pozycji dołączamy tylko przy zatwierdzaniu (kierownik nadrzędny).
     if (action === 'approve') {
       const ds = Object.entries(denials).map(([item_id, c]) => ({
@@ -584,6 +588,9 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       }
       setErr((typeof det === 'string' ? det : det?.message) || 'Błąd operacji')
       setBusy(false)
+      // 409 = krok wykonała już inna osoba (np. przełożony) — odśwież dane
+      // wniosku, żeby widok pokazał jego aktualny etap.
+      if (st === 409) onRefresh?.()
     }
   }
 
