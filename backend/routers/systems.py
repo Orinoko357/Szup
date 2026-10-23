@@ -21,7 +21,7 @@ import json
 from typing import Optional
 
 from fastapi import (
-    APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status,
+    APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status,
 )
 from pydantic import BaseModel
 from sqlalchemy import case
@@ -945,6 +945,28 @@ def delete_permission(
 # ponownego parsowania — commit nie może zapisać czegoś innego, niż widać.
 
 MAX_IMPORT_BYTES = 2 * 1024 * 1024
+# Zapas na nagłówki multipart i pola formularza (wklejone dane, mapowanie kolumn).
+_MAX_IMPORT_REQUEST_BYTES = MAX_IMPORT_BYTES + 512 * 1024
+_TOO_LARGE_MSG = f"Plik jest większy niż {MAX_IMPORT_BYTES // (1024 * 1024)} MB."
+
+
+async def _read_upload_limited(file: UploadFile) -> bytes:
+    """Wczytaj plik z limitem rozmiaru — porcjami, bez trzymania w pamięci
+    więcej niż MAX_IMPORT_BYTES (+1 porcja). Rozmiar znany z parsera
+    (`UploadFile.size`) sprawdzamy, zanim cokolwiek przeczytamy."""
+    if file.size is not None and file.size > MAX_IMPORT_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, _TOO_LARGE_MSG)
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(64 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_IMPORT_BYTES:
+            raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, _TOO_LARGE_MSG)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 class ImportColumn(BaseModel):
@@ -1035,6 +1057,7 @@ def _match_key(code: Optional[str], name: str) -> str:
 @router.post("/{system_id}/permissions/import/preview", response_model=ImportPreviewOut)
 async def preview_permission_import(
     system_id: int,
+    request: Request,
     file: Optional[UploadFile] = File(None),
     pasted: Optional[str] = Form(None),
     group_name: Optional[str] = Form(None),
@@ -1044,16 +1067,23 @@ async def preview_permission_import(
 ):
     from services import perm_import
 
+    # Zadeklarowany rozmiar żądania ponad limit — odrzucamy bez czytania pliku.
+    # (Body i tak sparsował już serwer; twardy limit przed aplikacją daje
+    # LimitRequestBody w deploy/szup-apache.conf.)
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared = 0
+    if declared > _MAX_IMPORT_REQUEST_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, _TOO_LARGE_MSG)
+
     _importable_system(session, system_id)
 
     raw = None
     filename = None
     if file is not None:
-        raw = await file.read()
+        raw = await _read_upload_limited(file)
         filename = file.filename
-        if len(raw) > MAX_IMPORT_BYTES:
-            raise HTTPException(
-                400, f"Plik jest większy niż {MAX_IMPORT_BYTES // (1024 * 1024)} MB.")
     if not raw and not (pasted or "").strip():
         raise HTTPException(400, "Wskaż plik albo wklej dane.")
 

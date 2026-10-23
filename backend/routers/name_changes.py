@@ -4,10 +4,15 @@ Wnioski o zmianę nazwiska — lekki, samodzielny obieg (pracownik → IT).
 W odróżnieniu od wniosków o uprawnienia: pracownik zgłasza SAM DLA SIEBIE,
 bez akceptacji kierownika i bez pozycji uprawnień. Trafia wprost do IT, które
 realizuje: zmienia `full_name`, a login (`username`) może — ale nie musi —
-zmienić. Zmiana loginu wymusza ponowne logowanie (JWT identyfikuje po loginie).
+zmienić. Zmiana loginu unieważnia dotychczasowe sesje (`tokens_valid_from`)
+i wymusza ponowne logowanie.
+
+Rozdział obowiązków: nikt nie rozpatruje własnego wniosku, a login konta
+z rolą admin / superadmin zmienia wyłącznie superadmin.
 """
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 from typing import Optional
@@ -17,11 +22,12 @@ from pydantic import BaseModel
 from sqlmodel import Session, col, select
 
 from database import get_session
-from models import NameChangeRequest, User
-from services.auth_service import get_current_user
+from models import AuthType, NameChangeRequest, SecuritySeverity, User, has_role
+from services.auth_service import get_current_user, invalidate_tokens_now
 from services.permissions import require_it_staff
 
 router = APIRouter()
+_log = logging.getLogger("szup.name_changes")
 
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,64}$")
 
@@ -106,7 +112,8 @@ def create_name_change(
               from_name=current_user.full_name or current_user.username,
               from_email=current_user.email)
     except Exception:
-        pass
+        _log.exception("Nie udało się zlecić powiadomienia helpdesku o wniosku "
+                       "o zmianę nazwiska (user_id=%s)", current_user.id)
     session.commit(); session.refresh(r)
 
     # Ślad audytowy (best-effort).
@@ -119,7 +126,7 @@ def create_name_change(
                      ip=meta["ip"], user_agent=meta["user_agent"],
                      details={"requested_full_name": new_name})
     except Exception:
-        pass
+        _log.exception("Nie udało się zapisać audytu name_change.requested (wniosek %s)", r.id)
 
     return _serialize(session, r)
 
@@ -154,6 +161,41 @@ def list_name_changes(
     return [_serialize(session, r) for r in session.exec(stmt).all()]
 
 
+def _login_taken(session: Session, login: str, user_id: int) -> bool:
+    """Czy login jest zajęty przez INNE konto — bez względu na wielkość liter
+    i realm (tak samo, jak szuka konta logowanie AD/SSO: `find_user_by_login`).
+    Inaczej „NACZWF” obok „naczWF” dałoby dwa konta pod jednym loginem AD."""
+    from sqlalchemy import func
+    from services.ldap_service import normalize_login
+    norm = normalize_login(login)
+    return session.exec(
+        select(User.id).where(func.lower(User.username) == norm)
+        .where(User.id != user_id)).first() is not None
+
+
+def _notify_worker(session: Session, user: User, r: NameChangeRequest) -> None:
+    """E-mail do pracownika o rozpatrzeniu wniosku (po commicie, w tle)."""
+    to = (user.email or "").strip()
+    if not to:
+        return
+    from services.after_commit import defer
+    from services.email_alerts import _send
+    if r.status == "done":
+        subject = "SZUP: zmiana nazwiska zrealizowana"
+        lines = [f"Twój wniosek o zmianę nazwiska na „{r.requested_full_name}” "
+                 "został zrealizowany."]
+        if r.username_changed:
+            lines.append(f"Zmieniono też login: {r.old_username} → {r.new_username}. "
+                         "Zaloguj się ponownie, używając nowego loginu.")
+    else:
+        subject = "SZUP: wniosek o zmianę nazwiska odrzucony"
+        lines = [f"Twój wniosek o zmianę nazwiska na „{r.requested_full_name}” "
+                 "został odrzucony."]
+    if r.it_comment:
+        lines.append(f"Uwagi IT: {r.it_comment}")
+    defer(session, _send, to_address=to, subject=subject, body="\n\n".join(lines))
+
+
 @router.post("/{req_id}/resolve")
 def resolve_name_change(
     req_id: int,
@@ -168,11 +210,15 @@ def resolve_name_change(
         raise HTTPException(404, "Wniosek nie istnieje")
     if r.status != "pending":
         raise HTTPException(400, "Ten wniosek został już rozpatrzony.")
+    if r.user_id == current_user.id:
+        raise HTTPException(403, "Nie możesz rozpatrzyć własnego wniosku — "
+                                 "zrobi to inna osoba z IT.")
 
     user = session.get(User, r.user_id)
     if not user:
         raise HTTPException(400, "Konto pracownika nie istnieje.")
 
+    login_change = None
     if data.action == "reject":
         r.status = "rejected"
     elif data.action == "apply":
@@ -184,20 +230,27 @@ def resolve_name_change(
             if not _USERNAME_RE.match(new_login):
                 raise HTTPException(
                     400, "Login może zawierać litery, cyfry oraz . _ - (3–64 znaki).")
-            taken = session.exec(
-                select(User).where(User.username == new_login)
-                .where(User.id != user.id)).first()
-            if taken:
+            if has_role(user, "admin", "superadmin") and not has_role(current_user, "superadmin"):
+                raise HTTPException(
+                    403, "Login konta z rolą administratora zmienia wyłącznie superadmin.")
+            if user.auth_type == AuthType.ldap:
+                # Konto AD: login musi być loginem domenowym w postaci, w jakiej
+                # zapisuje go logowanie AD/SSO (małe litery, bez realmu).
+                from services.ldap_service import normalize_login, is_valid_login
+                new_login = normalize_login(new_login)
+                if not is_valid_login(new_login):
+                    raise HTTPException(400, "Nieprawidłowy login konta AD.")
+            if _login_taken(session, new_login, user.id):
                 raise HTTPException(400, f'Login „{new_login}" jest już zajęty.')
-            r.old_username = user.username
-            r.new_username = new_login
-            r.username_changed = True
-            user.username = new_login
-            # JWT identyfikuje użytkownika po loginie (`sub`), więc stare tokeny
-            # przestają działać automatycznie — lookup po starym loginie zawodzi
-            # (401 → ponowne logowanie). NIE ruszamy `tokens_valid_from`: aplikacja
-            # celowo cofa `iat` o zapas na skew zegara, więc ustawienie go „na
-            # teraz" unieważniłoby też świeżo wydane tokeny po nowym loginie.
+            if new_login != user.username:
+                login_change = (user.username, new_login)
+                r.old_username = user.username
+                r.new_username = new_login
+                r.username_changed = True
+                user.username = new_login
+                # Dotychczasowe sesje tracą ważność (token wskazuje konto po `uid`,
+                # ale zawiera też stary login) — pracownik loguje się ponownie.
+                invalidate_tokens_now(user)
         session.add(user)
         r.status = "done"
     else:
@@ -206,11 +259,18 @@ def resolve_name_change(
     r.resolved_at = datetime.utcnow()
     r.resolved_by_user_id = current_user.id
     r.it_comment = (data.comment or "").strip() or None
-    session.add(r); session.commit(); session.refresh(r)
-
+    session.add(r)
     try:
-        from services.audit import record_event, request_meta
-        meta = request_meta(request)
+        _notify_worker(session, user, r)
+    except Exception:
+        _log.exception("Nie udało się zlecić powiadomienia pracownika o rozpatrzeniu "
+                       "wniosku o zmianę nazwiska %s", r.id)
+    session.commit(); session.refresh(r)
+
+    from services.audit import request_meta
+    meta = request_meta(request)
+    try:
+        from services.audit import record_event
         record_event(session, action=f"name_change.{r.status}",
                      user_id=current_user.id, username=current_user.username,
                      target_type="name_change", target_id=r.id,
@@ -220,6 +280,21 @@ def resolve_name_change(
                               "username_changed": r.username_changed,
                               "new_username": r.new_username})
     except Exception:
-        pass
+        _log.exception("Nie udało się zapisać audytu name_change.%s (wniosek %s)",
+                       r.status, r.id)
+
+    if login_change:
+        # Zmiana loginu zmienia tożsamość, pod którą konto loguje się (także
+        # przez AD/SSO) — zdarzenie wysokie, zamyka je superadmin.
+        from services.security_events import emit as emit_security_event
+        emit_security_event(
+            session, event_type="user.login_changed", source="name_changes",
+            severity=SecuritySeverity.high,
+            summary=(f"Zmieniono login konta {login_change[0]} → {login_change[1]} "
+                     f"przez {current_user.username}"),
+            details={"target_user_id": user.id, "old_username": login_change[0],
+                     "new_username": login_change[1], "name_change_id": r.id},
+            user_id=current_user.id, ip=meta["ip"],
+        )
 
     return _serialize(session, r)

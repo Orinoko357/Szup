@@ -3,6 +3,7 @@ import { Download, RefreshCw, Filter } from 'lucide-react'
 import { listAudit, auditStats, exportAuditCsv, errorMessage } from '../api'
 import { toast } from '../components/ui/feedback'
 import { fmtDateTime } from '../serverTime'
+import { LoadError } from '../components/ui/LoadState'
 
 // Pole datetime-local podaje czas LOKALNY bez strefy, a dziennik trzyma UTC —
 // zamieniamy na ISO UTC z 'Z' (np. 2026-10-22T08:00:00.000Z). Pusta lub
@@ -35,6 +36,7 @@ export default function AuditLog() {
       setStats(s.data)
     } catch (ex) {
       setErr(errorMessage(ex, 'Nie udało się odczytać dziennika zdarzeń'))
+      setRows([])   // bez starych wpisów pod nowymi filtrami
     } finally {
       setLoading(false)
     }
@@ -122,7 +124,7 @@ export default function AuditLog() {
         </div>
       </form>
 
-      {err && <div className="alert alert--error mb-4">{err}</div>}
+      {err && <LoadError message={err} onRetry={load} busy={loading} style={{ marginBottom: 16 }} />}
 
       <section aria-label="Wpisy" className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
@@ -136,7 +138,7 @@ export default function AuditLog() {
               {loading && (
                 <tr><td colSpan={7} style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</td></tr>
               )}
-              {!loading && rows.length === 0 && (
+              {!loading && !err && rows.length === 0 && (
                 <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--color-text-muted)' }}>Brak wpisów</td></tr>
               )}
               {rows.map(r => {

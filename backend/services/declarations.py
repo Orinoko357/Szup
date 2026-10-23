@@ -89,6 +89,46 @@ def build_items_snapshot(session: Session, request) -> str:
     return json.dumps(out, ensure_ascii=False)
 
 
+# Granice pól oświadczenia: nazwisko jak w kartotece, data złożenia oświadczenia
+# nie z przyszłości i nie starsza niż kilka lat (literówka w roku).
+DECLARED_NAME_MAX = 200
+DECLARED_DATE_MAX_AGE_DAYS = 3650
+
+
+def validate_declaration(declared_by_name: Optional[str],
+                         declared_date: Optional[str]) -> tuple[str, str]:
+    """Sprawdź dane oświadczenia wnioskującego. Zwraca (imię i nazwisko,
+    data RRRR-MM-DD) po oczyszczeniu albo rzuca ValueError z polskim
+    komunikatem (router zamienia go na 400).
+
+    - imię i nazwisko: niepuste, najwyżej 200 znaków, bez znaków sterujących,
+    - data: poprawna data RRRR-MM-DD, nie z przyszłości (dzień zapasu na
+      strefę czasową) i nie starsza niż 10 lat."""
+    from datetime import date, timedelta
+    name = (declared_by_name or "").strip()
+    if not name:
+        raise ValueError("Wpisz imię i nazwisko osoby składającej oświadczenie.")
+    if len(name) > DECLARED_NAME_MAX:
+        raise ValueError(f"Imię i nazwisko w oświadczeniu może mieć najwyżej "
+                         f"{DECLARED_NAME_MAX} znaków.")
+    if any(ord(c) < 32 or ord(c) == 127 for c in name):
+        raise ValueError("Imię i nazwisko w oświadczeniu zawiera niedozwolone znaki.")
+    raw = (declared_date or "").strip()
+    try:
+        when = date.fromisoformat(raw)
+        if len(raw) != 10:
+            raise ValueError
+    except ValueError:
+        raise ValueError("Data oświadczenia musi być poprawną datą w formacie RRRR-MM-DD.")
+    today = date.today()
+    # Jeden dzień zapasu na różnicę stref czasowych przeglądarki i serwera.
+    if when > today + timedelta(days=1):
+        raise ValueError("Data oświadczenia nie może być z przyszłości.")
+    if when < today - timedelta(days=DECLARED_DATE_MAX_AGE_DAYS):
+        raise ValueError("Data oświadczenia jest zbyt odległa — sprawdź rok.")
+    return name, when.isoformat()
+
+
 def create_declaration(
     session: Session,
     request,
@@ -98,7 +138,9 @@ def create_declaration(
     declaration_text: str,
     approved_at: Optional[datetime] = None,
 ) -> PermissionDeclaration:
-    """Utwórz i zapisz oświadczenie dla wniosku. Zwraca rekord (z kodem)."""
+    """Utwórz i zapisz oświadczenie dla wniosku. Zwraca rekord (z kodem).
+    Dane oświadczenia są walidowane (`validate_declaration` — ValueError)."""
+    declared_by_name, declared_date = validate_declaration(declared_by_name, declared_date)
     when = approved_at or datetime.utcnow()
     code = unique_reference_code(session, declared_by.username, when)
     dec = PermissionDeclaration(

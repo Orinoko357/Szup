@@ -9,6 +9,7 @@ import {
 import { fmtDate } from '../serverTime'
 import { toast, ask } from '../components/ui/feedback'
 import Modal from '../components/ui/Modal'
+import { ErrorAlert, LoadError } from '../components/ui/LoadState'
 
 
 
@@ -49,6 +50,7 @@ export default function Vendors() {
       setVendors(r.data)
     } catch (ex) {
       setErr(errorMessage(ex, 'Nie udało się pobrać listy dostawców'))
+      setVendors([])
     } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
@@ -68,13 +70,12 @@ export default function Vendors() {
           <button type="button" className="btn btn--ghost" onClick={load} disabled={loading}>
             <RefreshCw size={14} /> Odśwież
           </button>
-          <button type="button" className="btn btn--action" onClick={() => setShowAdd(v => !v)}>
+          <button type="button" className="btn btn--action" onClick={() => setShowAdd(v => !v)} disabled={!!err}
+                  title={err ? 'Najpierw wczytaj listę dostawców (Spróbuj ponownie) — inaczej łatwo o duplikat' : undefined}>
             <Plus size={14} /> Dodaj dostawcę
           </button>
         </div>
       </div>
-
-      {err && <div className="alert alert--error mb-4">{err}</div>}
 
       {expired.length > 0 && (
         <div role="alert" style={{
@@ -101,6 +102,8 @@ export default function Vendors() {
 
       {loading ? (
         <div className="card" style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
+      ) : err ? (
+        <LoadError card message={err} onRetry={load} />
       ) : vendors.length === 0 ? (
         <div className="card" style={{ color: 'var(--color-text-muted)', padding: 16 }}>
           <Truck size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
@@ -193,7 +196,7 @@ function VendorForm({ vendor, onCancel, onSaved }) {
                     value={f.notes} onChange={e => set('notes', e.target.value)} />
         </div>
 
-        {err && <div className="alert alert--error">{err}</div>}
+        <ErrorAlert>{err}</ErrorAlert>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button type="button" className="btn btn--ghost" onClick={onCancel}>
             Anuluj

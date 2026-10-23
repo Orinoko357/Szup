@@ -509,6 +509,17 @@ class LdapSettings(SQLModel, table=True):
     # sso_auto — front automatycznie próbuje SSO przy wejściu (bez klikania).
     sso_enabled: bool = Field(default=False)
     sso_auto: bool = Field(default=False)
+    # Szyfrowanie połączenia (LDAPS albo STARTTLS) i weryfikacja certyfikatu
+    # serwera. tls_verify=False wyłącza weryfikację (tylko awaryjnie — hasła
+    # mógłby przechwycić podstawiony serwer). ca_cert_file — ścieżka do pliku
+    # PEM z certyfikatem CA domeny; puste = systemowy magazyn zaufanych CA.
+    tls_verify: bool = Field(default=True)
+    ca_cert_file: Optional[str] = None
+    use_starttls: bool = Field(default=False)
+    # Jawna zgoda na LDAP bez szyfrowania (niezalecane). Nowe instalacje: False.
+    # Migracja ustawia True dla istniejących instalacji bez SSL, żeby wdrożenie
+    # nie odcięło logowania AD — lista kontrolna ostrzega do czasu włączenia TLS.
+    allow_insecure: bool = Field(default=False)
 
 
 # ---------------------------------------------------------------------------

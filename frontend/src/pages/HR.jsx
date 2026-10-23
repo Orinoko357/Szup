@@ -6,6 +6,7 @@ import { statusLabel, statusBadge, kindLabel, daysSince, waitText } from '../lab
 import { toast, confirmDialog } from '../components/ui/feedback'
 import useDialog from '../components/ui/useDialog'
 import Segmented from '../components/ui/Segmented'
+import { ErrorAlert, LoadError } from '../components/ui/LoadState'
 import RequestViewShell, { Section, buildWorkflowSteps, KindBadge } from '../components/RequestView'
 
 
@@ -109,16 +110,17 @@ export default function HR() {
   const [view, setView]         = useState('all')    // open | done | all
   const [created, setCreated]   = useState(null)     // dane do wiadomości po zgłoszeniu
   const [q, setQ]               = useState('')
+  const [loadErr, setLoadErr]   = useState(null)
 
   async function load() {
-    setLoading(true)
+    setLoading(true); setLoadErr(null)
     try {
       // scope=mine — wyłącznie zgłoszenia tej osoby (bez tego osoba z dodatkową
       // rolą IT/admin/kierownik dostawała pod „Moje zgłoszenia” cudze wnioski).
       const r = await listRequests({ scope: 'mine' })
       setRequests(r.data)
     } catch (ex) {
-      toast(errorMessage(ex, 'Nie udało się wczytać zgłoszeń'), { tone: 'error' })
+      setLoadErr(errorMessage(ex, 'Nie udało się wczytać zgłoszeń'))
     } finally {
       setLoading(false)
     }
@@ -174,9 +176,9 @@ export default function HR() {
           </h2>
           <Segmented ariaLabel="Filtr statusu" value={view} onChange={setView}
                      options={[
-                       { value: 'open', label: 'W toku', count: counts.open },
-                       { value: 'done', label: 'Zakończone', count: counts.done },
-                       { value: 'all',  label: 'Wszystkie', count: counts.all },
+                       { value: 'open', label: 'W toku', count: loadErr ? null : counts.open },
+                       { value: 'done', label: 'Zakończone', count: loadErr ? null : counts.done },
+                       { value: 'all',  label: 'Wszystkie', count: loadErr ? null : counts.all },
                      ]} />
           <label style={{ position: 'relative', display: 'block', flex: '0 1 280px' }}>
             <span className="sr-only" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
@@ -189,6 +191,8 @@ export default function HR() {
         </div>
         {loading ? (
           <div style={{ padding: '20px 18px', color: 'var(--color-text-muted)' }}>Ładowanie…</div>
+        ) : loadErr ? (
+          <LoadError message={loadErr} onRetry={load} />
         ) : shown.length === 0 ? (
           <div style={{ padding: '20px 18px', fontSize: 14, color: 'var(--color-text-muted)' }}>Brak zgłoszeń</div>
         ) : (
@@ -296,7 +300,7 @@ function RequestFormView({ onCancel, onCreated }) {
     const workerName = `${firstName.trim()} ${lastName.trim()}`.trim()
     if (!workerName) { setErr('Podaj imię i nazwisko'); return }
     if (!position.trim()) { setErr('Podaj stanowisko'); return }
-    if (!selectedDept) { setErr('Wybierz miejsce pracy'); return }
+    if (!selectedDept) { setErr('Wybierz komórkę organizacyjną'); return }
     if (!requestTypeId) { setErr(NO_TYPE_MSG); return }
 
     setBusy(true)
@@ -377,8 +381,8 @@ function RequestFormView({ onCancel, onCreated }) {
       </Section>
 
       <Section n={2} title="Miejsce pracy *">
-        <div className="form-label">Komórka organizacyjna *</div>
-        <DeptSearchSelect units={units} depts={depts} value={deptId} onChange={setDeptId} />
+        <label className="form-label" htmlFor="hr-dept">Komórka organizacyjna *</label>
+        <DeptSearchSelect units={units} depts={depts} value={deptId} onChange={setDeptId} inputId="hr-dept" />
         <div style={NOTE_BOX}>
           <Info size={16} aria-hidden="true" style={{ flexShrink: 0, marginTop: 1 }} />
           <span>
@@ -394,7 +398,7 @@ function RequestFormView({ onCancel, onCreated }) {
       <NextSteps />
 
       {typesLoaded && !requestTypeId && <div className="alert alert--error mt-4" role="alert">{NO_TYPE_MSG}</div>}
-      {err && <div className="alert alert--error mt-4">{err}</div>}
+      <ErrorAlert className="mt-4">{err}</ErrorAlert>
     </RequestViewShell>
   )
 }
@@ -721,7 +725,7 @@ function TerminationFormView({ onCancel, onCreated }) {
           </div>
 
           {typesLoaded && !requestTypeId && <div className="alert alert--error mt-4" role="alert">{NO_TYPE_MSG}</div>}
-          {err && <div className="alert alert--error mt-4">{err}</div>}
+          <ErrorAlert className="mt-4">{err}</ErrorAlert>
       </Section>
 
       <NextSteps revoke />
@@ -736,10 +740,20 @@ function TerminationFormView({ onCancel, onCreated }) {
 
 // Combobox z wyszukiwaniem komórki organizacyjnej: wpisz fragment → lista
 // pasujących komórek z pełną ścieżką „Jednostka › … › Komórka" → wybierz.
-function DeptSearchSelect({ units, depts, value, onChange }) {
-  const [open, setOpen]   = useState(false)
-  const [query, setQuery] = useState('')
-  const wrapRef = useRef(null)
+// Wzorzec ARIA 1.2 „combobox” (WCAG 2.1.1): ↑/↓ przesuwa aktywną opcję
+// (aria-activedescendant — fokus zostaje w polu), Enter wybiera, Esc zamyka;
+// mysz działa jak dotąd. Po wyborze fokus przechodzi na „Zmień”, po „Zmień”
+// wraca do pola.
+function DeptSearchSelect({ units, depts, value, onChange, inputId = 'dept-search' }) {
+  const [open, setOpen]     = useState(false)
+  const [query, setQuery]   = useState('')
+  const [active, setActive] = useState(-1)      // indeks aktywnej opcji (−1 = brak)
+  const wrapRef   = useRef(null)
+  const inputRef  = useRef(null)
+  const changeRef = useRef(null)
+  const focusNext = useRef(null)                 // 'input' | 'change' — po następnym renderze
+  const listId = `${inputId}-list`
+  const optId  = (d) => `${inputId}-opt-${d.id}`
 
   const byId = useMemo(() => new Map(depts.map(d => [d.id, d])), [depts])
   const unitById = useMemo(() => new Map(units.map(u => [u.id, u])), [units])
@@ -760,12 +774,57 @@ function DeptSearchSelect({ units, depts, value, onChange }) {
       .sort((a, b) => a.path.localeCompare(b.path, 'pl'))
       .slice(0, 60)
   ), [depts, q, units])
+  const activeMatch = open && active >= 0 ? matches[active] : null
 
   useEffect(() => {
     function onDoc(e) { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false) }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
   }, [])
+
+  // Przeniesienie fokusu po zmianie widoku (pole ↔ chip z „Zmień”).
+  useEffect(() => {
+    if (focusNext.current === 'change') changeRef.current?.focus()
+    else if (focusNext.current === 'input') inputRef.current?.focus()
+    focusNext.current = null
+  })
+  // Aktywna opcja zawsze widoczna w przewijanej liście.
+  useEffect(() => {
+    if (activeMatch) document.getElementById(optId(activeMatch.d))?.scrollIntoView?.({ block: 'nearest' })
+  }, [activeMatch])
+
+  function choose(d) {
+    onChange(d.id); setOpen(false); setQuery(''); setActive(-1)
+    focusNext.current = 'change'
+  }
+  function close() {
+    setOpen(false); setActive(-1)
+    if (selected) focusNext.current = 'change'
+  }
+
+  function onKeyDown(e) {
+    const n = matches.length
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (!open) { setOpen(true); setActive(n ? 0 : -1); return }
+      setActive(a => (n ? Math.min(n - 1, a + 1) : -1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (!open) { setOpen(true); setActive(n ? n - 1 : -1); return }
+      setActive(a => (n ? Math.max(0, a - 1) : -1))
+    } else if (e.key === 'Enter') {
+      if (!open || n === 0) return
+      // Lista otwarta — Enter nie wysyła formularza, tylko wybiera opcję
+      // (aktywną albo jedyną pasującą).
+      e.preventDefault()
+      const hit = activeMatch || (n === 1 ? matches[0] : null)
+      if (hit) choose(hit.d)
+    } else if (e.key === 'Escape') {
+      if (open) { e.preventDefault(); e.stopPropagation(); close() }
+    } else if (e.key === 'Tab') {
+      setOpen(false); setActive(-1)
+    }
+  }
 
   // Wybrana komórka (i nie edytujemy) → zielony chip z „Zmień".
   if (selected && !open) {
@@ -775,49 +834,67 @@ function DeptSearchSelect({ units, depts, value, onChange }) {
         minHeight: 44, padding: '4px 6px 4px 12px', borderRadius: 8, boxSizing: 'border-box',
         background: 'var(--color-success-bg)', border: '1px solid var(--color-success)', fontSize: 14,
       }}>
-        <Check size={14} style={{ color: 'var(--color-success)' }} />
+        <Check size={14} style={{ color: 'var(--color-success)' }} aria-hidden="true" />
         <span>{pathStr(selected)}</span>
-        <button type="button" className="btn btn--ghost btn--sm" style={{ marginLeft: 'auto' }}
-                onClick={() => { setOpen(true); setQuery('') }}>Zmień</button>
+        <button type="button" ref={changeRef} className="btn btn--ghost btn--sm" style={{ marginLeft: 'auto' }}
+                aria-label={`Zmień komórkę organizacyjną (wybrana: ${pathStr(selected)})`}
+                onClick={() => { setOpen(true); setQuery(''); setActive(-1); focusNext.current = 'input' }}>Zmień</button>
       </div>
     )
   }
 
   return (
-    <div ref={wrapRef}>
+    <div ref={wrapRef}
+         onBlur={e => {
+           // Fokus wyszedł poza pole i listę (Tab, klik gdzie indziej) — zamknij.
+           if (!wrapRef.current?.contains(e.relatedTarget)) { setOpen(false); setActive(-1) }
+         }}>
       <div style={{ position: 'relative' }}>
         <Search size={15} aria-hidden="true" style={{
           position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
           color: 'var(--color-text-muted)', pointerEvents: 'none',
         }} />
-        <input type="search" className="form-control" value={query} aria-label="Komórka organizacyjna"
+        <input id={inputId} ref={inputRef} type="text" className="form-control" value={query}
+               role="combobox" aria-expanded={open} aria-controls={listId} aria-autocomplete="list"
+               aria-activedescendant={activeMatch ? optId(activeMatch.d) : undefined}
+               aria-required="true" autoComplete="off"
                style={{ ...FIELD_INPUT, paddingLeft: 36,
                         ...(open ? { border: '2px solid var(--color-selected)' } : {}) }}
                placeholder="Wpisz fragment nazwy komórki lub jednostki…"
-               onFocus={() => setOpen(true)} onChange={e => { setQuery(e.target.value); setOpen(true) }} />
+               onFocus={() => setOpen(true)} onKeyDown={onKeyDown}
+               onChange={e => { setQuery(e.target.value); setOpen(true); setActive(-1) }} />
       </div>
-      {open && (
-        <div role="listbox" aria-label="Pasujące komórki" style={{
-          marginTop: 6, padding: 4,
-          border: '1px solid var(--color-input-border)', borderRadius: 8, background: 'var(--color-card)',
-          maxHeight: 280, overflowY: 'auto', boxShadow: '0 6px 18px rgba(27, 42, 74, .08)',
-        }}>
-          {matches.length === 0 ? (
+      {/* Liczba wyników dla czytnika ekranu (lista nie zabiera fokusu z pola). */}
+      <div className="sr-only" aria-live="polite">
+        {open ? (matches.length ? `Pasujące komórki: ${matches.length}. Strzałki w dół i w górę wybierają, Enter zatwierdza.`
+                                : 'Brak pasujących komórek.') : ''}
+      </div>
+      {/* Lista zawsze w DOM (aria-controls wskazuje istniejący element), ukryta gdy zamknięta.
+          mousedown bez domyślnej akcji — klik w opcję nie zabiera fokusu z pola. */}
+      <div role="listbox" id={listId} aria-label="Pasujące komórki" hidden={!open}
+           onMouseDown={e => e.preventDefault()}
+           style={{
+             marginTop: 6, padding: 4,
+             border: '1px solid var(--color-input-border)', borderRadius: 8, background: 'var(--color-card)',
+             maxHeight: 280, overflowY: 'auto', boxShadow: '0 6px 18px rgba(27, 42, 74, .08)',
+           }}>
+          {open && (matches.length === 0 ? (
             <div style={{ padding: 12, fontSize: 13, color: 'var(--color-text-muted)' }}>
               Brak komórek pasujących do „{query}".
             </div>
-          ) : matches.map(({ d, path }) => {
+          ) : matches.map(({ d, path }, i) => {
             const isSel = d.id === value
+            const isActive = i === active
             return (
-              <div key={d.id} role="option" aria-selected={isSel}
-                   onClick={() => { onChange(d.id); setOpen(false); setQuery('') }}
+              <div key={d.id} id={optId(d)} role="option" aria-selected={isSel}
+                   onClick={() => choose(d)}
+                   onMouseEnter={() => setActive(i)}
                    style={{
                      display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
                      minHeight: 44, padding: '0 12px', fontSize: 14, borderRadius: 6,
-                     background: isSel ? 'var(--bg-secondary)' : 'transparent',
-                   }}
-                   onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = 'var(--bg-secondary)' }}
-                   onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = 'transparent' }}>
+                     background: (isSel || isActive) ? 'var(--bg-secondary)' : 'transparent',
+                     outline: isActive ? '2px solid var(--color-focus-ring)' : 'none', outlineOffset: -2,
+                   }}>
                 {/* wg projektu: „KOD · pełna nazwa” + ścieżka (mono) po prawej */}
                 <span style={{ flex: 1, minWidth: 0 }}>
                   <strong style={{ color: 'var(--color-heading)' }}>{d.name}</strong>
@@ -829,12 +906,11 @@ function DeptSearchSelect({ units, depts, value, onChange }) {
                 }}>
                   {path}
                 </span>
-                {isSel && <Check size={14} style={{ color: 'var(--color-heading)', flexShrink: 0 }} />}
+                {isSel && <Check size={14} aria-hidden="true" style={{ color: 'var(--color-heading)', flexShrink: 0 }} />}
               </div>
             )
-          })}
-        </div>
-      )}
+          }))}
+      </div>
     </div>
   )
 }

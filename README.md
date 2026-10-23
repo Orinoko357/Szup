@@ -122,8 +122,25 @@ kopia przerywa wdrożenie; tak samo brak bazy przy istniejącej instalacji (zła
 tylko zależności z `requirements.txt`, a do `/opt/szup/backend` nie są
 kopiowane `tests/`, `.venv/` ani `__pycache__/`; `data/`, `.env*`, `*.db*`
 i `*.key` są przy synchronizacji wykluczone i chronione (ani nadpisane
-z checkoutu, ani usunięte). Po restarcie skrypt sprawdza `GET /api/health`
-i kończy się błędem, gdy usługa nie odpowiada (bez `curl` — tylko ostrzega).
+z checkoutu, ani usunięte). Kod na serwerze należy do `root` (prawa 755/644),
+a katalogi danych i logów są dostępne tylko dla `root`. `pip install -r`
+podnosi pakiety, które nie spełniają dolnych granic z `requirements.txt`
+(poprawki bezpieczeństwa). Po restarcie skrypt sprawdza `GET /api/health`
+i kończy się błędem (ze ścieżką kopii bazy), gdy usługa nie odpowiada (bez
+`curl` — tylko ostrzega).
+
+**Aktualizacja do 3.8 — uwagi dla administratora:**
+- wszyscy użytkownicy logują się ponownie (tokeny sprzed 3.8 nie mają ID konta
+  i są odrzucane);
+- skopiuj `deploy/szup.service` do `/etc/systemd/system/` i wykonaj
+  `systemctl daemon-reload` (nowe `UMask=0077`; `deploy.sh` ostrzega, gdy go
+  brak), a `deploy/szup-apache.conf` — do konfiguracji Apache (limit rozmiaru
+  żądań `LimitRequestBody`);
+- logowanie AD wymaga szyfrowania: LDAPS (port 636) albo STARTTLS, z weryfikacją
+  certyfikatu. Gdy certyfikat kontrolera domeny wystawia wewnętrzne CA, zapisz
+  certyfikat CA (PEM) na serwerze, np. `/etc/ssl/certs/ca-domena.pem`, i wskaż
+  go w Ustawieniach → AD/LDAP („Plik CA”). Stan sprawdza lista kontrolna
+  konfiguracji (`/settings/health`).
 
 Nowe tabele tworzą się przy starcie (`create_all`); nowe kolumny dokładane są
 idempotentnie w `database.py` (migracje ręczne, bez Alembica). Po wdrożeniu z
@@ -174,7 +191,8 @@ panele operacyjne nie są dostępne dla samego admina.
 
 - **Audyt append‑only** (`auditlog`, triggery `BEFORE UPDATE/DELETE`), retencja ≥ 24 mies.
 - **Logowanie**: rate‑limit (10/60 s/IP), lockout (5 prób → 15 min), polityka haseł,
-  rewokacja JWT (jti + `tokens_valid_from`), wymuszona zmiana hasła.
+  sesja JWT wskazująca konto po ID, rewokacja JWT (jti + `tokens_valid_from`),
+  wymuszona zmiana hasła; AD/LDAP tylko przez LDAPS/STARTTLS z weryfikacją certyfikatu.
 - **Sekrety** szyfrowane Fernet (rotacja MultiFernet); nigdy nie zwracane przez API.
 - **Nagłówki** CSP, HSTS, X‑Frame‑Options; `X‑Request‑ID` w odpowiedziach.
 - Kopie zapasowe bazy **razem z kluczami** (obieg, Fernet, JWT; archiwum kluczy przechowywane osobno i zaszyfrowane) — patrz `docs/security/backup_and_dr.md`.

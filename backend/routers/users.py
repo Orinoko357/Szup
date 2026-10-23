@@ -2,12 +2,14 @@
 Router: Zarządzanie użytkownikami.
 
 Superadmin (break-glass): pełny dostęp, może nadawać/odbierać dowolną rolę.
-Admin: może zakładać konta i zarządzać użytkownikami z wyjątkiem kont superadmin;
-       nadaje wyłącznie role operacyjne (kierownik, IT, kadry, podgląd) —
-       ról admin/superadmin nie nadaje ani nie odbiera.
+Admin: może zakładać konta i zarządzać użytkownikami z wyjątkiem kont z rolą
+       admin lub superadmin (edycja, reset hasła, odblokowanie, dezaktywacja,
+       usunięcie — tylko superadmin); nadaje wyłącznie role operacyjne
+       (kierownik, IT, kadry, podgląd) — ról admin/superadmin nie nadaje ani nie odbiera.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -29,6 +31,7 @@ from services.permissions import (
 )
 
 router = APIRouter()
+_log = logging.getLogger("szup.users")
 
 
 # Role, których nadanie poszerza dostęp do wniosków i danych pracowników —
@@ -68,8 +71,13 @@ def _roles_granted_event(session: Session, request: Optional[Request], actor: Us
     )
 
 
-def _guard_superadmin_target(current_user: User, target: User) -> None:
-    """Admin nie może modyfikować ani usuwać kont superadmin."""
+def _guard_admin_account(current_user: User, target: User) -> None:
+    """Kontem z rolą admin lub superadmin zarządza wyłącznie superadmin.
+
+    Dotyczy edycji (w tym ról i aktywności), resetu hasła, odblokowania
+    i usunięcia. Inaczej administrator mógłby zresetować hasło innego admina,
+    zalogować się jako on i np. zamknąć zdarzenie bezpieczeństwa o własnym
+    działaniu. Własne konto admin edytuje nadal w granicach `update_user`."""
     if has_role(current_user, "superadmin"):
         return
     if has_role(target, "superadmin"):
@@ -77,10 +85,15 @@ def _guard_superadmin_target(current_user: User, target: User) -> None:
             status.HTTP_403_FORBIDDEN,
             "Administrator nie może zarządzać kontem superadmina",
         )
+    if has_role(target, "admin") and target.id != current_user.id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Kontem innego administratora zarządza wyłącznie superadmin",
+        )
 
 
-def _guard_superadmin_role(current_user: User, roles: list[str],
-                           current_roles: Optional[list[str]] = None) -> None:
+def _guard_admin_role_change(current_user: User, roles: list[str],
+                             current_roles: Optional[list[str]] = None) -> None:
     """Role administracyjne (admin, superadmin) nadaje i odbiera wyłącznie superadmin.
 
     Inaczej administrator mógłby założyć konto-„marionetkę” z rolą admin
@@ -104,6 +117,27 @@ def _guard_superadmin_role(current_user: User, roles: list[str],
             status.HTTP_403_FORBIDDEN,
             "Role administracyjne (admin, superadmin) nadaje i odbiera wyłącznie superadmin",
         )
+
+
+def _admin_account_off_limits(current_user: User, target: User) -> bool:
+    """Czy `target` jest kontem, którym `current_user` nie może zarządzać
+    (wariant `_guard_admin_account` bez wyjątku — np. do pomijania w imporcie)."""
+    try:
+        _guard_admin_account(current_user, target)
+    except HTTPException:
+        return True
+    return False
+
+
+def _stage_snapshot_before_deactivation(session: Session, user_id: int) -> dict:
+    """Migawka „kto odpowiada za krok” wniosków w komórkach, na które wpływają
+    stanowiska konta (`manager_stage_snapshot`). Robiona PRZED ustawieniem
+    `is_active=False` i przekazywana do `release_manager_posts(before=...)` —
+    po dezaktywacji stan „przed” byłby już równy stanowi „po”, więc nowy
+    odpowiedzialny nie dostałby powiadomienia."""
+    from services.org_sync import _posts_subtree
+    from services.workflow import manager_stage_snapshot
+    return manager_stage_snapshot(session, _posts_subtree(session, user_id))
 
 
 class UserCreate(BaseModel):
@@ -677,17 +711,13 @@ def my_subtree(
     """
     Zwraca strukturę „w dół" wydziałów, którymi kieruje zalogowany użytkownik
     — rekurencyjnie wszystkie pod-wydziały + ich kierowników i pracowników,
-    wraz z efektywnymi uprawnieniami nadanymi na podstawie zrealizowanych
-    wniosków.
+    wraz z efektywnymi uprawnieniami (`_effective_permissions` — jak zakładka
+    „Pracownicy”).
 
     Admin/superadmin widzi pełną strukturę (wszystkie jednostki i wydziały).
     """
     from sqlmodel import col as _col
     from services.permissions import is_admin
-    from models import (
-        AccessRequest, RequestItem, RequestStatus,
-        PermissionSystem, SystemPermission,
-    )
 
     # --- 1. Zbierz wszystkie wydziały w sesji (dla rekurencji) ---
     all_depts = session.exec(select(Department)).all()
@@ -747,58 +777,12 @@ def my_subtree(
     for w in workers:
         workers_by_dept.setdefault(w.department_id, []).append(w)
 
-    # --- 5. Efektywne uprawnienia per pracownik (ze zrealizowanych wniosków) ---
-    # Zbieramy RequestItem JOIN AccessRequest gdzie worker_user_id ∈ pracownicy
-    # i status == completed.
-    worker_ids = [w.id for w in workers]
-    perms_by_user: dict[int, list[dict]] = {}
-    if worker_ids:
-        req_rows = session.exec(
-            select(AccessRequest)
-            .where(_col(AccessRequest.worker_user_id).in_(worker_ids))
-            .where(AccessRequest.status == RequestStatus.completed)
-        ).all()
-        req_by_id = {r.id: r for r in req_rows}
-        if req_rows:
-            items = session.exec(
-                select(RequestItem).where(
-                    _col(RequestItem.request_id).in_([r.id for r in req_rows])
-                )
-            ).all()
-            # Słowniki system/permission (jeden batch zapytań)
-            sys_ids = list({it.system_id for it in items})
-            perm_ids = list({it.permission_id for it in items})
-            sys_map: dict[int, PermissionSystem] = {}
-            perm_map: dict[int, SystemPermission] = {}
-            if sys_ids:
-                sys_map = {s.id: s for s in session.exec(
-                    select(PermissionSystem).where(_col(PermissionSystem.id).in_(sys_ids))
-                ).all()}
-            if perm_ids:
-                perm_map = {p.id: p for p in session.exec(
-                    select(SystemPermission).where(_col(SystemPermission.id).in_(perm_ids))
-                ).all()}
-            # Agreguj (unikając duplikatów per user+system+permission)
-            seen_key: dict[int, set[tuple[int, int]]] = {}
-            for it in items:
-                req = req_by_id.get(it.request_id)
-                if not req or req.worker_user_id is None:
-                    continue
-                uid = req.worker_user_id
-                key = (it.system_id, it.permission_id)
-                if key in seen_key.setdefault(uid, set()):
-                    continue
-                seen_key[uid].add(key)
-                s_obj = sys_map.get(it.system_id)
-                p_obj = perm_map.get(it.permission_id)
-                perms_by_user.setdefault(uid, []).append({
-                    "system_id":   it.system_id,
-                    "system_name": s_obj.name if s_obj else None,
-                    "permission_id":   it.permission_id,
-                    "permission_name": p_obj.permission_name if p_obj else None,
-                    "request_id": req.id,
-                    "granted_at": (req.completed_at or req.approved_at or req.created_at).isoformat(),
-                })
+    # --- 5. Efektywne uprawnienia per pracownik ---
+    # Ta sama funkcja co „Pracownicy” i „Moje uprawnienia”: stan odtwarzany
+    # chronologicznie (odebrane i odmówione pozycje NIE są posiadane).
+    perms_by_user: dict[int, list[dict]] = {
+        w.id: _effective_permissions(session, w.id)["permissions"] for w in workers
+    }
 
     # --- 6. Serializacja rekurencyjna ---
     def _ser_user(u: Optional[User]) -> Optional[dict]:
@@ -866,7 +850,7 @@ def create_user(
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin),
 ):
-    _guard_superadmin_role(current_user, data.roles)
+    _guard_admin_role_change(current_user, data.roles)
     from services.ldap_service import normalize_login, find_user_by_login
     if data.auth_type == AuthType.ldap:
         # Konto AD zapisujemy pod loginem znormalizowanym — tak samo jak przy
@@ -953,9 +937,9 @@ def update_user(
     user = session.get(User, user_id)
     if not user:
         raise HTTPException(404, "Użytkownik nie istnieje")
-    _guard_superadmin_target(current_user, user)
+    _guard_admin_account(current_user, user)
     if data.roles is not None:
-        _guard_superadmin_role(current_user, data.roles, parse_roles(user.roles))
+        _guard_admin_role_change(current_user, data.roles, parse_roles(user.roles))
         invalid = [r for r in data.roles if r not in VALID_ROLES]
         if invalid:
             raise HTTPException(400, f"Nieznane role: {invalid}")
@@ -989,6 +973,10 @@ def update_user(
                 raise HTTPException(status.HTTP_403_FORBIDDEN,
                     "Administrator nie może zmieniać własnych jednostek — poproś o to superadmina")
     deactivated = data.is_active is False and user.is_active
+    # Stan „kto odpowiada za krok” wniosków w toku — PRZED zmianą is_active
+    # (po niej nieaktywny kierownik już się nie liczy i nowy odpowiedzialny
+    # nie dostałby powiadomienia).
+    stage_before = _stage_snapshot_before_deactivation(session, user.id) if deactivated else None
     before = {
         "roles": sorted(parse_roles(user.roles)),
         "department_id": user.department_id,
@@ -1025,7 +1013,7 @@ def update_user(
         # Dezaktywacja zwalnia stanowiska (kierownik / zastępca / dyrektor
         # jednostki) — inaczej wnioski czekałyby na osobę, która się nie zaloguje.
         from services.org_sync import release_manager_posts
-        if release_manager_posts(session, user.id):
+        if release_manager_posts(session, user.id, before=stage_before):
             session.commit(); session.refresh(user)
     elif data.roles is not None or "department_id" in data.model_fields_set:
         from services.org_sync import sync_after_user_change, release_manager_posts
@@ -1063,7 +1051,7 @@ def reset_password(
     user = session.get(User, user_id)
     if not user:
         raise HTTPException(404, "Użytkownik nie istnieje")
-    _guard_superadmin_target(current_user, user)
+    _guard_admin_account(current_user, user)
     if user.auth_type != AuthType.local:
         raise HTTPException(400, "Nie można zresetować hasła konta LDAP")
 
@@ -1078,6 +1066,21 @@ def reset_password(
     user.tokens_valid_from = (datetime.utcnow() - timedelta(seconds=5)).replace(microsecond=0)
     session.add(user); session.commit()
     _audit_user(session, request, current_user, action="user.password_reset", target=user)
+    # Kto zna nowe hasło, może działać jako to konto — przy kontach z rolą
+    # operacyjną lub administracyjną to zdarzenie wysokie (zamyka superadmin).
+    sensitive = set(parse_roles(user.roles)) & (OPERATIONAL_ROLES | ADMIN_ROLES)
+    if sensitive:
+        from services.audit import request_meta
+        from services.security_events import emit as emit_security_event
+        emit_security_event(
+            session, event_type="user.password_reset", source="users",
+            severity=SecuritySeverity.high,
+            summary=(f"Zresetowano hasło konta {user.username} "
+                     f"({', '.join(sorted(sensitive))}) przez {current_user.username}"),
+            details={"target_user_id": user.id, "target_username": user.username,
+                     "roles": sorted(sensitive)},
+            user_id=current_user.id, ip=request_meta(request)["ip"],
+        )
     return {"ok": True, "must_change_password": True}
 
 
@@ -1090,7 +1093,7 @@ def unlock_account(
     user = session.get(User, user_id)
     if not user:
         raise HTTPException(404, "Użytkownik nie istnieje")
-    _guard_superadmin_target(current_user, user)
+    _guard_admin_account(current_user, user)
     user.failed_login_count = 0
     user.locked_until = None
     session.add(user); session.commit()
@@ -1108,7 +1111,7 @@ def delete_user(
         raise HTTPException(404, "Użytkownik nie istnieje")
     if user.id == current_user.id:
         raise HTTPException(400, "Nie możesz usunąć własnego konta")
-    _guard_superadmin_target(current_user, user)
+    _guard_admin_account(current_user, user)
     session.delete(user)
     try:
         session.commit()
@@ -1164,6 +1167,9 @@ class LdapUserImportResult(BaseModel):
     skipped: int
     conflicts: int
     details: list[str]
+    # Konta wyłączone w SZUP, a aktywne w AD — import ich NIE reaktywuje
+    # (dezaktywacja w SZUP bywa celowa, np. podejrzenie przejęcia konta).
+    reactivation_skipped: int = 0
 
 
 def _build_dn_to_dept_map(session: Session) -> dict[str, int]:
@@ -1303,9 +1309,12 @@ def ldap_users_import(
     """
     Importuje wskazanych użytkowników (po sAMAccountName) z AD do bazy.
     - Nowe konta  → auth_type=ldap, rola ['viewer'], department_id po parent-OU.
-    - LDAP konta  → aktualizacja full_name, email, is_active, department_id, ldap_dn.
+    - LDAP konta  → aktualizacja full_name, email, department_id, ldap_dn, title.
     - Konto wyłączone w AD → istniejące konto domenowe jest dezaktywowane,
       a jego stanowiska w strukturze zwolnione; nowego nie tworzymy.
+    - Konto wyłączone w SZUP, a aktywne w AD → import go NIE reaktywuje
+      (licznik `reactivation_skipped`); reaktywacja tylko ręcznie.
+    - Konta z rolą admin / superadmin aktualizuje wyłącznie superadmin.
     - Konta lokalne o tym samym loginie → pomijane (konflikt).
     - Login nieznaleziony w AD → pomijany. Świadomie NIE dezaktywujemy takiego
       konta: pusty wynik wyszukiwania bywa skutkiem złego search_base lub
@@ -1358,7 +1367,7 @@ def ldap_users_import(
             current = normalize_dn(_parent_of(current))
         return None, None
 
-    created = updated = skipped = conflicts = 0
+    created = updated = skipped = conflicts = reactivation_skipped = 0
     details: list[str] = []
     processed_names: set[str] = set()   # ochrona przed duplikatami loginu w tej serii
 
@@ -1385,10 +1394,18 @@ def ldap_users_import(
         if not u["is_enabled_in_ad"]:
             ex = find_user_by_login(session, u["username"])
             if ex and ex.auth_type == AuthType.ldap:
+                if _admin_account_off_limits(current_user, ex):
+                    skipped += 1
+                    details.append(f"⚠ {u['username']} — konto administracyjne, "
+                                   "zmienia je wyłącznie superadmin")
+                    continue
                 was_active = ex.is_active
+                # Migawka obiegu PRZED zmianą is_active (powiadomienie nowego
+                # odpowiedzialnego — patrz _stage_snapshot_before_deactivation).
+                stage_before = _stage_snapshot_before_deactivation(session, ex.id)
                 ex.is_active = False
                 session.add(ex)
-                released = release_manager_posts(session, ex.id)
+                released = release_manager_posts(session, ex.id, before=stage_before)
                 session.commit()
                 if was_active or released:
                     _audit_user(session, request, current_user,
@@ -1421,16 +1438,35 @@ def ldap_users_import(
             continue
 
         if existing:
+            if _admin_account_off_limits(current_user, existing):
+                skipped += 1
+                details.append(f"⚠ {u['username']} — konto administracyjne, "
+                               "zmienia je wyłącznie superadmin")
+                continue
+            old = {"full_name": existing.full_name, "email": existing.email,
+                   "department_id": existing.department_id, "title": existing.title or ""}
             existing.full_name    = u["full_name"] or existing.full_name
             existing.email        = u["email"] or existing.email
-            existing.is_active    = u["is_enabled_in_ad"]
             existing.department_id = dept_id or existing.department_id
             existing.ldap_dn      = ndn
             # Stanowisko: AD jest źródłem prawdy — także wyczyszczenie w AD.
             existing.title        = u.get("title") or ""
+            # is_active: import tylko DEZAKTYWUJE (gałąź wyżej). Konta wyłączonego
+            # w SZUP nie włączamy po cichu — reaktywacja wyłącznie ręczna.
             session.add(existing); session.commit()
+            new = {"full_name": existing.full_name, "email": existing.email,
+                   "department_id": existing.department_id, "title": existing.title or ""}
+            diff = {k: {"old": old[k], "new": new[k]} for k in old if old[k] != new[k]}
+            if diff:
+                _audit_user(session, request, current_user, action="user.updated_ad",
+                            target=existing, details={"changes": diff})
             updated += 1
-            details.append(f"~ {u['username']} — zaktualizowany")
+            if not existing.is_active:
+                reactivation_skipped += 1
+                details.append(f"~ {u['username']} — zaktualizowany; konto wyłączone w SZUP, "
+                               "pominięto reaktywację")
+            else:
+                details.append(f"~ {u['username']} — zaktualizowany")
         else:
             new_user = User(
                 username=u["username"],
@@ -1457,5 +1493,5 @@ def ldap_users_import(
 
     return LdapUserImportResult(
         created=created, updated=updated, skipped=skipped, conflicts=conflicts,
-        details=details,
+        details=details, reactivation_skipped=reactivation_skipped,
     )

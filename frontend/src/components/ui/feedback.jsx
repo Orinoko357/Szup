@@ -30,13 +30,20 @@ export function confirmDialog({ title = 'Potwierdź', message = '', confirmLabel
 }
 
 /** Zwraca wpisany tekst albo null (Anuluj). `requiredText` — przycisk aktywny
- *  dopiero po wpisaniu dokładnie tego tekstu (np. „POTWIERDZAM”). */
+ *  dopiero po wpisaniu dokładnie tego tekstu (np. „POTWIERDZAM”).
+ *  `required` — przycisk aktywny dopiero po wpisaniu niepustego tekstu
+ *  (np. obowiązkowy powód odrzucenia wniosku). */
 export function promptDialog({ title = 'Podaj wartość', message = '', label = '', placeholder = '',
-                               defaultValue = '', requiredText = null, type = 'text', multiline = false,
+                               defaultValue = '', requiredText = null, required = false, type = 'text',
+                               multiline = false,
                                confirmLabel = 'Zatwierdź', cancelLabel = 'Anuluj', danger = false } = {}) {
   return new Promise(resolve => {
-    if (!_open) { resolve(window.prompt(message || title, defaultValue)); return }
-    _open({ kind: 'prompt', title, message, label, placeholder, defaultValue, requiredText, type,
+    if (!_open) {
+      const v = window.prompt(message || title, defaultValue)
+      resolve(required && v != null && !v.trim() ? null : v)
+      return
+    }
+    _open({ kind: 'prompt', title, message, label, placeholder, defaultValue, requiredText, required, type,
             multiline, confirmLabel, cancelLabel, danger, resolve })
   })
 }
@@ -76,8 +83,9 @@ export function FeedbackHost() {
     dialog?.resolve(result)
     setDialog(null)
   }
-  const canConfirm = dialog?.kind !== 'prompt' || !dialog.requiredText
-    || value.trim() === dialog.requiredText
+  const canConfirm = dialog?.kind !== 'prompt'
+    || (dialog.requiredText ? value.trim() === dialog.requiredText
+                            : (!dialog.required || value.trim() !== ''))
 
   return (
     <>
@@ -131,10 +139,12 @@ export function FeedbackHost() {
                   {dialog.label && <label htmlFor="fb-input" className="form-label">{dialog.label}</label>}
                   {dialog.multiline ? (
                     <textarea id="fb-input" ref={inputRef} className="form-control" rows={3}
+                              aria-required={dialog.required || undefined}
                               placeholder={dialog.placeholder} value={value}
                               onChange={e => setValue(e.target.value)} />
                   ) : (
                     <input id="fb-input" ref={inputRef} className="form-control" type={dialog.type}
+                           aria-required={dialog.required || undefined}
                            placeholder={dialog.placeholder || dialog.requiredText || ''} value={value}
                            autoComplete="off" onChange={e => setValue(e.target.value)} />
                   )}

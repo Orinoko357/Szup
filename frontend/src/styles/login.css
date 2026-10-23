@@ -21,6 +21,8 @@
   --wl-info-bg: #E4ECFB;
   --wl-info-text: #1A46A8;
   --wl-title: #1B2A4A;
+  /* Obrys fokusu: granat w jasnym motywie (złoto miało < 3:1), złoto w ciemnym. */
+  --wl-focus: #1B2A4A;
 
   position: relative;
   min-height: 100vh;
@@ -45,6 +47,7 @@
   --wl-info-bg: #1C2B4A;
   --wl-info-text: #B9CDF5;
   --wl-title: #E4B863;
+  --wl-focus: #D9A441;
 }
 
 /* Granatowy pas u góry (jak w intranecie / dbac) — karta na niego nachodzi. */
@@ -128,7 +131,7 @@
   color: var(--wl-muted);
 }
 .wl-toggle:hover, .wl-toggle:focus-visible { color: var(--wl-text); outline: none; }
-.wl-toggle:focus-visible { border-radius: 6px; box-shadow: 0 0 0 3px var(--wl-gold); }
+.wl-toggle:focus-visible { border-radius: 6px; box-shadow: 0 0 0 3px var(--wl-focus); }
 .wl-rule { flex: 1; height: 1px; background: var(--wl-border); }
 .wl-or { font-weight: 600; }
 
@@ -194,7 +197,7 @@
   transition: background 0.2s ease;
 }
 .wl-submit:hover:not(:disabled), .wl-submit:focus-visible { background: var(--wl-navy-hover); outline: none; }
-.wl-submit:focus-visible { box-shadow: 0 0 0 3px var(--wl-card), 0 0 0 6px var(--wl-gold); }
+.wl-submit:focus-visible { box-shadow: 0 0 0 3px var(--wl-card), 0 0 0 6px var(--wl-focus); }
 .wl-submit:disabled { opacity: 0.6; cursor: wait; }
 
 /* Link drugorzędny (np. powrót do trybu testowego) */
@@ -205,7 +208,7 @@
   text-align: center;
 }
 .wl-link:hover { color: var(--wl-text); }
-.wl-link:focus-visible { color: var(--wl-text); outline: none; border-radius: 6px; box-shadow: 0 0 0 3px var(--wl-gold); }
+.wl-link:focus-visible { color: var(--wl-text); outline: none; border-radius: 6px; box-shadow: 0 0 0 3px var(--wl-focus); }
 
 /* Komunikaty */
 .wl-msg {

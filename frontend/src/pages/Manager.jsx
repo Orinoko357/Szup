@@ -11,7 +11,8 @@ import RequestViewShell, {
   useReturnFocus,
 } from '../components/RequestView'
 import { statusLabel, statusBadge, nodeLabel, kindLabel, daysSince, waitText, MANAGER_NODES } from '../labels'
-import { toast, confirmDialog } from '../components/ui/feedback'
+import { toast, confirmDialog, promptDialog } from '../components/ui/feedback'
+import { ErrorAlert, LoadError } from '../components/ui/LoadState'
 import { ReviewDialog, describeKeys, diffSelection } from '../components/ChangeSummary'
 import CopyFromColleague, { buildCopiedSelection } from '../components/CopyFromColleague'
 import DeclarationModal, { declarationRequired } from '../components/DeclarationModal'
@@ -128,11 +129,12 @@ export default function Manager({ view, openId, onOpenConsumed, onViewChange, on
         </button>
       </div>
 
-      {err && <div className="alert alert--error mb-4">{err}</div>}
-
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {loading ? (
           <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Ładowanie…</div>
+        ) : err ? (
+          // Błąd wczytania — zamiast „Brak wniosków… wszystko załatwione”.
+          <LoadError message={err} onRetry={() => { load(); onChanged?.() }} />
         ) : tab === 'handle' ? (
           <HandleTable rows={toHandle} onOpen={setOpenReq} hasPrep={underPrep.length > 0} />
         ) : (
@@ -140,7 +142,7 @@ export default function Manager({ view, openId, onOpenConsumed, onViewChange, on
         )}
       </div>
 
-      {!loading && tab === 'handle' && underPrep.length > 0 && (
+      {!loading && !err && tab === 'handle' && underPrep.length > 0 && (
         <div className="card" style={{ padding: 0, overflow: 'hidden', marginTop: 16 }}>
           <PrepTable rows={underPrep} onOpen={setOpenReq} />
         </div>
@@ -694,7 +696,9 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   }
 
   // Zbuduj payload akcji dla obiegu (bez oświadczenia — to dokłada się osobno).
-  function buildActionBody(action) {
+  // commentText — treść uwag (przy odrzuceniu: powód z okna potwierdzenia,
+  // zanim stan `comment` zdąży się zaktualizować).
+  function buildActionBody(action, commentText = comment) {
     if (isSelect) {
       const items = isRevoke
         ? [...picked].map(k => mkItem(k, 'revoke'))
@@ -704,10 +708,10 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       const wfAction = action === 'approve' ? 'select' : 'reject'
       // expected_node_id — jeśli przełożony wykonał już ten krok, backend zwróci
       // 409 zamiast zastosować ten wybór do kolejnego etapu obiegu.
-      return { action: wfAction, comment, items,
+      return { action: wfAction, comment: commentText, items,
                ...(r.current_node_id ? { expected_node_id: r.current_node_id } : {}) }
     }
-    const body = { action, comment }
+    const body = { action, comment: commentText }
     if (r.current_node_id) body.expected_node_id = r.current_node_id
     // Odmowy pozycji dołączamy tylko przy zatwierdzaniu przez kierownika nadrzędnego.
     if (action === 'approve' && isHigherApprove) {
@@ -721,8 +725,8 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
 
   // Wyślij akcję; `declaration` dokładane, gdy zebrane w modalu. Backend jest
   // twardą bramką: brak oświadczenia przy nadaniu → 428, wtedy otwieramy modal.
-  async function sendAction(action, declaration = null) {
-    const body = buildActionBody(action)
+  async function sendAction(action, declaration = null, commentText = comment) {
+    const body = buildActionBody(action, commentText)
     if (declaration) body.declaration = declaration
     // Pusty wybór na wniosku z pozycjami (np. wpisanymi przez kadry) usuwa je —
     // backend wymaga wtedy świadomego potwierdzenia (allow_empty).
@@ -888,14 +892,21 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
 
   async function submit(action) {
     if (action === 'reject') {
-      const ok = await confirmDialog({
+      // Powód odrzucenia jest obowiązkowy (backend odrzuca puste) — przycisk
+      // w oknie aktywny dopiero po wpisaniu treści; podpowiadamy wpisane uwagi.
+      const reason = await promptDialog({
         title: `Odrzucić wniosek #${r.id}?`,
-        message: 'Wniosek zostanie zamknięty bez realizacji. Powód wpisz w polu „Uwagi” — trafi do historii.',
+        message: 'Wniosek zostanie zamknięty bez realizacji. Podaj powód odrzucenia — trafi do historii wniosku.',
+        label: 'Powód odrzucenia (wymagany)', multiline: true, required: true,
+        defaultValue: comment.trim(),
         confirmLabel: 'Odrzuć wniosek', danger: true,
       })
-      if (!ok) return
+      if (reason == null) return
+      const why = reason.trim()
+      if (!why) { setErr('Podaj powód odrzucenia wniosku.'); return }
+      setComment(why)
       setBusy(true); setErr(null)
-      await sendAction('reject')
+      await sendAction('reject', null, why)
       return
     }
     if (isSelect && action === 'approve' && (loading || loadErr)) {
@@ -1365,7 +1376,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
             </Section>
           )}
 
-          {err && <div className="alert alert--error">{err}</div>}
+          <ErrorAlert>{err}</ErrorAlert>
     </RequestViewShell>
 
       <ReviewDialog

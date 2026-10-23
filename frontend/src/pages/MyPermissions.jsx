@@ -3,6 +3,7 @@ import { ShieldCheck, RefreshCw, UserCheck, Mail } from 'lucide-react'
 import { getMyPermissions, errorMessage } from '../api'
 import { fmtDate } from '../serverTime'
 import MyNameChanges from '../components/MyNameChanges'
+import { LoadError } from '../components/ui/LoadState'
 
 export default function MyPermissions() {
   const [data, setData]       = useState(null)
@@ -16,6 +17,7 @@ export default function MyPermissions() {
       setData(r.data)
     } catch (ex) {
       setErr(errorMessage(ex, 'Nie udało się pobrać listy uprawnień'))
+      setData(null)
     } finally {
       setLoading(false)
     }
@@ -50,8 +52,6 @@ export default function MyPermissions() {
         </button>
       </div>
 
-      {err && <div className="alert alert--error mb-4">{err}</div>}
-
       {manager && (
         <section aria-label="Twój kierownik" className="card" style={{
           display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 18,
@@ -82,6 +82,9 @@ export default function MyPermissions() {
       <section aria-label="Uprawnienia" className="card" style={{ marginBottom: 18, padding: 0, overflow: 'hidden' }}>
         {loading ? (
           <div style={{ color: 'var(--color-text-muted)', padding: '16px 18px' }}>Ładowanie…</div>
+        ) : err ? (
+          // Błąd wczytania — zamiast „Nie masz jeszcze uprawnień”.
+          <LoadError message={err} onRetry={load} />
         ) : perms.length === 0 ? (
           <div style={{ color: 'var(--color-text-muted)', padding: '16px 18px' }}>
             <ShieldCheck size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />

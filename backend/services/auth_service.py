@@ -3,6 +3,7 @@ JWT auth helpers, password policy, FastAPI dependency.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import secrets
@@ -31,19 +32,41 @@ PASSWORD_MAX_AGE_DAYS_USER  = 180
 
 pwd_context   = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+_log = logging.getLogger("szup.auth")
+
+
+def write_secret_file(path: Path, content: str) -> None:
+    """Zapisz plik z sekretem od razu z prawami 0600.
+
+    `os.open(..., 0o600)` nadaje prawa przy tworzeniu — bez okna, w którym plik
+    istnieje z domyślnymi prawami (0644 przy umask 022), zanim zrobimy chmod.
+    O_EXCL: nie nadpisujemy istniejącego klucza (dwa procesy startujące naraz).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(content)
 
 
 def _jwt_secret() -> str:
     if _SECRET_FILE.exists():
         return _SECRET_FILE.read_text().strip()
     secret = secrets.token_hex(32)
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    _SECRET_FILE.write_text(secret)
     try:
-        _SECRET_FILE.chmod(0o600)
-    except OSError:
-        pass
+        write_secret_file(_SECRET_FILE, secret)
+    except FileExistsError:
+        # Inny proces utworzył klucz w międzyczasie — używamy jego wersji.
+        return _SECRET_FILE.read_text().strip()
     return secret
+
+
+def invalidate_tokens_now(user) -> None:
+    """Unieważnij wszystkie wcześniej wydane tokeny konta (`tokens_valid_from`).
+
+    Pełna sekunda (bez mikrosekund): `iat` w JWT ma rozdzielczość sekundy, więc
+    token z ponownego logowania tuż po zmianie nie zostanie odrzucony jako
+    „starszy”. Commit robi wywołujący."""
+    user.tokens_valid_from = datetime.utcnow().replace(microsecond=0)
 
 
 def hash_password(password: str) -> str:
@@ -136,7 +159,9 @@ def revoke_token_jti(jti: str, user_id: Optional[int], exp_ts: int) -> None:
             ))
             s.commit()
     except Exception:
-        pass
+        # Wylogowany token pozostałby ważny do wygaśnięcia — musi to być widać w logu.
+        _log.warning("Nie udało się unieważnić tokenu (jti=%s, user_id=%s) przy wylogowaniu",
+                     jti, user_id, exc_info=True)
 
 
 def _jti_is_revoked(jti: str) -> bool:
@@ -149,6 +174,8 @@ def _jti_is_revoked(jti: str) -> bool:
         with Session(db_engine) as s:
             return s.get(RevokedToken, jti) is not None
     except Exception:
+        _log.warning("Nie udało się sprawdzić listy unieważnionych tokenów (jti=%s)",
+                     jti, exc_info=True)
         return False
 
 
@@ -178,7 +205,7 @@ def password_change_required(user) -> bool:
 
 def get_current_user(request: Request, token: str = Depends(oauth2_scheme)):
     from database import engine as db_engine
-    from sqlmodel import Session, select
+    from sqlmodel import Session
     from models import User
 
     exc = HTTPException(
@@ -189,19 +216,24 @@ def get_current_user(request: Request, token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, _jwt_secret(), algorithms=[ALGORITHM])
         username: str | None = payload.get("sub")
+        uid = payload.get("uid")
         jti: str | None = payload.get("jti")
         iat: int | None = payload.get("iat")
-        if not username:
-            raise exc
     except JWTError:
+        raise exc
+    # Sesję identyfikuje ID KONTA (`uid`), a login (`sub`) musi się z nim zgadzać.
+    # Sam login nie wystarcza: po zmianie loginu (zmiana nazwiska) albo usunięciu
+    # konta ten sam login może trafić do INNEGO konta, a stary token działałby
+    # wtedy jako ono. Tokeny bez `uid` (sprzed 3.8) są odrzucane — ponowne logowanie.
+    if not username or not isinstance(uid, int) or isinstance(uid, bool):
         raise exc
 
     if jti and _jti_is_revoked(jti):
         raise exc
 
     with Session(db_engine) as session:
-        user = session.exec(select(User).where(User.username == username)).first()
-        if not user or not user.is_active:
+        user = session.get(User, uid)
+        if not user or user.username != username or not user.is_active:
             raise exc
         if user.tokens_valid_from and iat is not None:
             if datetime.utcfromtimestamp(iat) < user.tokens_valid_from:

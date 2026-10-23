@@ -73,7 +73,9 @@ export default function Header() {
       <GlobalSearch />
       <div className="app-header__user">
         <span className="app-header__avatar" aria-hidden="true">{avatar}</span>
-        <span className="app-header__who">
+        {/* Role ucinane wielokropkiem, a poniżej 1200 px ukryte — pełna treść w podpowiedzi. */}
+        <span className="app-header__who"
+              title={roleLabels ? `${user?.username || 'Użytkownik'} · ${roleLabels}` : undefined}>
           <strong>{user?.username || 'Użytkownik'}</strong>
           {roleLabels && <span> · {roleLabels}</span>}
         </span>

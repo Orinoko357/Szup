@@ -17,6 +17,7 @@ import PermissionGroupModal from '../components/PermissionGroupModal'
 import CopyGroupModal from '../components/CopyGroupModal'
 import { groupPerms, subgroupPerms, subgroupNames } from '../components/ItemFields'
 import { toast, ask } from '../components/ui/feedback'
+import { ErrorAlert } from '../components/ui/LoadState'
 
 
 /**
@@ -975,7 +976,7 @@ function AddSystemForm({ units, vendors = [], allSystems = [], onCancel, onSaved
           </div>
         )}
 
-        {err && <div className="alert alert--error mb-4">{err}</div>}
+        <ErrorAlert className="mb-4">{err}</ErrorAlert>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button type="button" className="btn btn--ghost btn--sm" onClick={onCancel}>
             <X size={13} /> Anuluj
@@ -1403,7 +1404,7 @@ function EditSystemForm({ system: s, units, vendors = [], onCancel, onSaved }) {
       {!accessOnly && (
         <ScopeRequiredField checked={requireScope} onChecked={setRequireScope} />
       )}
-      {err && <div className="alert alert--error mb-4">{err}</div>}
+      <ErrorAlert className="mb-4">{err}</ErrorAlert>
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button type="button" className="btn btn--ghost btn--sm" onClick={onCancel}>
           <X size={13} /> Anuluj

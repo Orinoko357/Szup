@@ -143,7 +143,8 @@ def sync_after_manager_change(session: Session, old_manager_id: int | None,
 # Rola → struktura
 # ---------------------------------------------------------------------------
 
-def release_manager_posts(session: Session, user_id: int | None) -> bool:
+def release_manager_posts(session: Session, user_id: "int | User | None", *,
+                          before: dict | None = None) -> bool:
     """Wywołaj po ODEBRANIU roli `manager` — zwalnia wszystkie funkcje w strukturze.
 
     Bez tego komórka miałaby „kierownika", który nie ma już roli kierownika i nie
@@ -152,21 +153,38 @@ def release_manager_posts(session: Session, user_id: int | None) -> bool:
     Wołane także przy dezaktywacji konta (ręcznej i z importu AD). Zwalnia
     również przejęcia wniosków tej osoby, które wciąż czekają na etapie
     kierownika komórki — wracają do kierownika komórki (z powiadomieniem).
+
+    `before` — stan „kto odpowiada za krok” sprzed zmiany (`stage_snapshot_for`),
+    zrobiony przez wołającego PRZED ustawieniem `is_active=False`. Bez niego
+    migawka robiona tutaj widziałaby już nieaktywne konto (stan „przed” równy
+    stanowi „po”) i nowy odpowiedzialny nie dostałby powiadomienia.
+    `user_id` — id konta albo samo konto.
     """
+    if isinstance(user_id, User):
+        user_id = user_id.id
     if not user_id:
         return False
     changed = False
     from services.workflow import (
         release_take_overs_of, manager_stage_snapshot, resync_manager_stage,
     )
+    released: set[int] = set()
     if release_take_overs_of(session, user_id,
-                             "Przejmujący stracił stanowisko lub konto zostało wyłączone"):
+                             "Przejmujący stracił stanowisko lub konto zostało wyłączone",
+                             released_ids=released):
         changed = True
     # Komórki, w których zwolnienie stanowisk zmienia osobę odpowiedzialną za
     # wnioski w toku (poddrzewa komórek tej osoby i komórki jednostek, którymi
     # kierowała) — stan sprzed zmiany do `resync_manager_stage`.
     affected = _posts_subtree(session, user_id)
-    before = manager_stage_snapshot(session, affected)
+    if before is None:
+        before = manager_stage_snapshot(session, affected)
+    else:
+        # Wnioski, których nie objęła migawka wołającego — stan z tej chwili.
+        # Wnioski ze zwolnionym przed chwilą przejęciem zostały już ogłoszone
+        # (release_take_overs_of) — bez drugiego maila.
+        before = {**manager_stage_snapshot(session, affected),
+                  **{k: v for k, v in before.items() if k not in released}}
     for dept in session.exec(
         select(Department).where(Department.manager_user_id == user_id)
     ).all():
@@ -192,6 +210,14 @@ def release_manager_posts(session: Session, user_id: int | None) -> bool:
         resync_manager_stage(session, affected, before=before,
                              reason="Zwolnienie stanowiska w strukturze")
     return changed
+
+
+def stage_snapshot_for(session: Session, user_id: int) -> dict:
+    """Migawka „kto odpowiada za krok” wniosków w komórkach, na które wpływa
+    stanowisko `user_id` — do przekazania jako `release_manager_posts(before=)`.
+    Wołać PRZED zmianą konta (np. przed `is_active=False`)."""
+    from services.workflow import manager_stage_snapshot
+    return manager_stage_snapshot(session, _posts_subtree(session, user_id))
 
 
 def _posts_subtree(session: Session, user_id: int) -> set[int]:

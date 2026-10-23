@@ -29,7 +29,7 @@ class ResolveRequest(BaseModel):
 def list_events(
     resolved: Optional[bool] = None,
     severity: Optional[SecuritySeverity] = None,
-    limit: int = Query(200, le=1000),
+    limit: int = Query(200, ge=1, le=1000),
     _: User = Depends(require_admin),
     session: Session = Depends(get_session),
 ):

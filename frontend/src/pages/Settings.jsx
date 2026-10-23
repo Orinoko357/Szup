@@ -9,6 +9,7 @@ import {
  errorMessage} from '../api'
 import { toast, ask } from '../components/ui/feedback'
 import { getUserRoles } from '../roles'
+import { ErrorAlert, LoadError } from '../components/ui/LoadState'
 
 
 // v3.0 — sekcja ustawień jako karta z nagłówkiem-przyciskiem (ikona w kafelku,
@@ -242,7 +243,11 @@ export default function Settings() {
 
   async function handleTestLdap() {
     setLdapTesting(true); setLdapTestResult(null)
-    try { const r = await testLdap(); setLdapTestResult(r.data) }
+    try {
+      const r = await testLdap(); setLdapTestResult(r.data)
+      // np. połączenie bez weryfikacji certyfikatu — backend dokłada ostrzeżenie
+      if (r.data?.warning) toast(r.data.warning, { tone: 'warning' })
+    }
     catch (ex) { setLdapTestResult({ success: false, message: errorMessage(ex, 'Błąd połączenia') }) }
     finally { setLdapTesting(false) }
   }
@@ -528,11 +533,58 @@ export default function Settings() {
                        onChange={e => setL('port', parseInt(e.target.value))} />
               </div>
             </div>
-            <label className="form-check" style={{ marginBottom: 16 }}>
+            <label className="form-check" style={{ marginBottom: 8 }}>
               <input type="checkbox" checked={ldap.use_ssl ?? false}
-                     onChange={e => setL('use_ssl', e.target.checked)} />
+                     onChange={e => { setL('use_ssl', e.target.checked); if (e.target.checked) setL('use_starttls', false) }} />
               Użyj SSL (LDAPS, port 636)
             </label>
+            {/* v3.8 — szyfrowanie i weryfikacja certyfikatu serwera AD. STARTTLS
+                (port 389) i LDAPS wykluczają się. */}
+            <label className="form-check" style={{ marginBottom: 8 }}>
+              <input type="checkbox" checked={!!ldap.use_starttls} disabled={!!ldap.use_ssl}
+                     aria-describedby="set-ldap-starttls-hint"
+                     onChange={e => setL('use_starttls', e.target.checked)} />
+              STARTTLS
+            </label>
+            <div id="set-ldap-starttls-hint" style={{ fontSize: 11, color: 'var(--color-text-muted)', margin: '-4px 0 10px 24px' }}>
+              Szyfrowanie zwykłego połączenia (port 389). Nie łączy się z LDAPS.
+            </div>
+            <label className="form-check" style={{ marginBottom: 8 }}>
+              <input type="checkbox" checked={ldap.tls_verify ?? true}
+                     onChange={e => setL('tls_verify', e.target.checked)} />
+              Weryfikuj certyfikat serwera (zalecane)
+            </label>
+            {(ldap.tls_verify ?? true) === false && (
+              <div className="alert alert--warning" role="status" style={{ marginBottom: 10, fontSize: 12 }}>
+                Bez weryfikacji certyfikatu połączenie można przechwycić (podszycie się pod kontroler domeny)
+                — hasła logujących się osób mogą wyciec. Wyłączaj tylko na czas diagnozy.
+              </div>
+            )}
+            {!ldap.use_ssl && !ldap.use_starttls && (
+              <>
+                <label className="form-check" style={{ marginBottom: 8 }}>
+                  <input type="checkbox" checked={!!ldap.allow_insecure}
+                         onChange={e => setL('allow_insecure', e.target.checked)} />
+                  Zezwól na połączenie bez szyfrowania (niezalecane)
+                </label>
+                <div className="alert alert--warning" role="status" style={{ marginBottom: 10, fontSize: 12 }}>
+                  {ldap.allow_insecure
+                    ? 'Hasła logujących się osób idą do serwera AD otwartym tekstem. Włącz LDAPS albo STARTTLS.'
+                    : 'Bez LDAPS lub STARTTLS logowanie przez AD jest odrzucane.'}
+                </div>
+              </>
+            )}
+            <div className="form-group">
+              <label className="form-label" htmlFor="set-ldap-ca">Plik CA (ścieżka na serwerze)</label>
+              <input id="set-ldap-ca" className="form-control" value={ldap.ca_cert_file || ''}
+                     onChange={e => setL('ca_cert_file', e.target.value)}
+                     aria-describedby="set-ldap-ca-hint"
+                     placeholder="/etc/ssl/certs/urzad-ca.pem" />
+              <div id="set-ldap-ca-hint" style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
+                Certyfikat urzędu certyfikacji domeny (PEM) — gdy serwer AD ma certyfikat z wewnętrznego CA.
+                Puste = systemowy magazyn certyfikatów.
+              </div>
+            </div>
             <div className="form-group">
               <label className="form-label" htmlFor="set-ldap-base">Kontener bazowy (Base DN)</label>
               <input id="set-ldap-base" className="form-control" value={ldap.base_dn || ''}
@@ -711,7 +763,7 @@ function FactoryResetSection() {
         </div>
       </div>
 
-      {err && <div className="alert alert--error" style={{ marginBottom: 12 }}>{err}</div>}
+      <ErrorAlert style={{ marginBottom: 12 }}>{err}</ErrorAlert>
 
       {result && (
         <div className="alert" style={{
@@ -748,7 +800,7 @@ function NotificationsSection() {
   }
   useEffect(() => { load() }, [])
 
-  if (err) return <div className="alert alert--error">{err}</div>
+  if (err) return <LoadError message={err} onRetry={() => { setErr(null); load() }} />
   if (!tpls) return <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
 
   return (

@@ -6,6 +6,53 @@ Wersjonowanie: [Semantic Versioning](https://semver.org/lang/pl/).
 
 ## [Unreleased]
 
+## [3.8.0] — 2026-10-23
+
+Poprawki po gruntownym audycie 3.7 (wysokie i średnie) oraz akceptacja
+przełożonego dla wniosku kierownika o uprawnienia dla siebie.
+
+### Bezpieczeństwo
+- Sesja rozpoznawana po identyfikatorze konta (nie po loginie); zmiana loginu
+  unieważnia sesje. **Po wdrożeniu wszyscy logują się ponownie.**
+- Zmiana nazwiska: zakaz rozpatrzenia własnego wniosku, zajętość loginu bez
+  względu na wielkość liter, zmiana loginu konta admina tylko przez superadmina,
+  zdarzenie bezpieczeństwa i e-mail do pracownika.
+- Konta z rolą admin/superadmin (reset hasła, odblokowanie, wyłączenie, usunięcie,
+  role) zarządza wyłącznie superadmin.
+- Realizacja IT z loginem AD: te same zasady co dowiązanie konta (nie własne konto,
+  ta sama komórka, bez przepinania wniosku na inną osobę, bez komórki kadrowej).
+- IT nie może odmówić pozycji odebrania (ustanie zawsze odbiera uprawnienia).
+- LDAPS/STARTTLS z weryfikacją certyfikatu (plik CA w Ustawieniach). Istniejąca
+  instalacja działa jak dotąd (bez weryfikacji, połączenie bez szyfrowania jawnie
+  dozwolone) — lista kontrolna ostrzega do czasu konfiguracji. Nowe instalacje:
+  bezpieczne domyślnie.
+- Szablon obiegu musi mieć etap kierownika i realizację IT; zmiany szablonów
+  i ich przypisania do typów wniosków są zdarzeniem bezpieczeństwa.
+- Import z AD nie reaktywuje kont wyłączonych w SZUP; wyłączenie kierownika
+  powiadamia nowego odpowiedzialnego.
+- Zależności bez znanych podatności (axios, react-router, python-multipart,
+  python-jose, fastapi), limity rozmiaru importu i parametrów list, uprawnienia
+  plików (UMask 0077, klucze 0600), rsync z właścicielem root.
+
+### Obieg
+- Wniosek kierownika (lub zastępcy) o uprawnienia dla siebie wymaga akceptacji
+  przełożonego także w komórce jednostopniowej.
+- Wersja robocza nie wycieka do IT i administratora, gdy komórka straci kierownika.
+- Ustanie: pozycje uzupełniane wszystkimi uprawnieniami pracownika, jedno aktywne
+  ustanie na osobę, potwierdzenie realizacji wniosku po ustaniu.
+- Odrzucenie wymaga uzasadnienia; IT nie odrzuci wniosku po częściowej realizacji.
+- „Struktura” pokazuje faktyczne uprawnienia (bez odebranych i odmówionych).
+- Stare wnioski bez obiegu wracają na listy IT i administratora.
+- Import struktury z AD nie przenosi komórek między jednostkami i nie tworzy pętli.
+- Walidacja oświadczenia (data, nazwisko); błędy zapisu dziennika są logowane.
+
+### Interfejs
+- Wybór komórki w Kartotece z klawiatury (combobox ARIA).
+- Nagłówek i tabele zadań przy szerokości 900–1200 px (przyklejona kolumna akcji).
+- Błąd wczytania zamiast mylącej „pustej listy”, z „Spróbuj ponownie”.
+- Kontrastowa ramka fokusu w jasnym motywie; błędy akcji odczytywane przez czytniki.
+- Nowe pola LDAP (weryfikacja certyfikatu, plik CA, STARTTLS, zgoda na brak szyfrowania).
+
 ## [3.7.0] — 2026-10-23
 
 Poprawki po audycie 3.5: logika obiegu i bezpieczeństwo.

@@ -174,6 +174,23 @@ EVENTS: dict[str, dict] = {
             "-- SZUP {datetime}"
         ),
     },
+    "request_take_over_released": {
+        "label": "Przejęcie wniosku zwolnione przez superadmina (do przejmującego)",
+        "description": "Trafia do dotychczasowego przejmującego, gdy superadmin zwolni "
+                       "(„Oddaj”) jego przejęcie wniosku na etapie kierownika komórki.",
+        "macros": _COMMON + ["{released_by_name}"],
+        "subject": "[SZUP] Wniosek #{request_id} — zwolniono Twoje przejęcie",
+        "body": (
+            "{released_by_name} zwolnił(a) Twoje przejęcie wniosku o uprawnienia.\n\n"
+            "Nr wniosku:  #{request_id}\n"
+            "Pracownik:   {worker_name}\n"
+            "Wydział:     {dept_name}\n\n"
+            "Wniosek wrócił do kierownika komórki. Możesz go podejrzeć albo — jeśli "
+            "nadal jest potrzebne — przejąć ponownie.\n\n"
+            "Podgląd wniosku: {request_url}\n\n"
+            "-- SZUP {datetime}"
+        ),
+    },
     "name_change_requested": {
         "label": "Wniosek o zmianę nazwiska (helpdesk IT)",
         "description": "Trafia na skrzynkę helpdesku, gdy pracownik zgłosi zmianę nazwiska.",

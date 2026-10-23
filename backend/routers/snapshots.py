@@ -36,8 +36,8 @@ def _meta(s: PermissionSnapshot) -> dict:
 
 @router.get("")
 def list_snapshots(
-    limit: int = Query(400, le=3000),
-    offset: int = 0,
+    limit: int = Query(400, ge=1, le=3000),
+    offset: int = Query(0, ge=0),
     _: User = Depends(require_it_staff),
     session: Session = Depends(get_session),
 ):

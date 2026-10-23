@@ -11,6 +11,7 @@ import {
 import { fmtDate } from '../serverTime'
 import { toast } from '../components/ui/feedback'
 import Modal from '../components/ui/Modal'
+import { LoadError } from '../components/ui/LoadState'
 import { getUserRoles, hasAnyRole } from '../roles'
 
 /**
@@ -80,6 +81,7 @@ function CurrentRegistry() {
   const [rows, setRows] = useState([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState(null)
   const [units, setUnits] = useState([])
   const [systems, setSystems] = useState([])
   const [detail, setDetail] = useState(null)
@@ -95,10 +97,15 @@ function CurrentRegistry() {
   })
 
   async function load() {
-    setLoading(true)
+    setLoading(true); setErr(null)
     try {
       const r = await listGrantedRegistry({ ...params(), limit: 500 })
       setRows(r.data.items || []); setTotal(r.data.total || 0)
+    } catch (ex) {
+      // Bez catch wyjątek szedł w próżnię (nieobsłużone odrzucenie), a ekran
+      // pokazywał „Brak nadanych uprawnień”.
+      setErr(errorMessage(ex, 'Nie udało się wczytać rejestru uprawnień'))
+      setRows([]); setTotal(0)
     } finally { setLoading(false) }
   }
 
@@ -153,7 +160,7 @@ function CurrentRegistry() {
           </button>
         )}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>Pozycji: <strong style={{ color: 'var(--color-heading)' }}>{total}</strong></span>
+          {!err && <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>Pozycji: <strong style={{ color: 'var(--color-heading)' }}>{total}</strong></span>}
           <a className="btn btn--ghost btn--sm" href={grantedRegistryCsvUrl(params())}
              target="_blank" rel="noopener noreferrer">
             <Download size={14} /> CSV
@@ -167,6 +174,8 @@ function CurrentRegistry() {
       <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
         {loading ? (
           <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>Ładowanie…</div>
+        ) : err ? (
+          <LoadError message={err} onRetry={load} />
         ) : rows.length === 0 ? (
           <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>Brak nadanych uprawnień.</div>
         ) : (
@@ -231,14 +240,17 @@ function SnapshotsRegistry({ isAdmin }) {
   const [q, setQ] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
 
   async function loadList(selectFirst = false) {
-    setLoading(true)
+    setLoading(true); setErr(null)
     try {
       const r = await listSnapshots()
       const items = r.data.items || []
       setList(items)
       if (selectFirst && items.length && !date) setDate(items[0].snapshot_date)
+    } catch (ex) {
+      setErr(errorMessage(ex, 'Nie udało się wczytać listy migawek'))
     } finally { setLoading(false) }
   }
 
@@ -246,8 +258,13 @@ function SnapshotsRegistry({ isAdmin }) {
 
   async function loadSnap(d, query = '') {
     if (!d) { setSnap(null); return }
-    const r = await getSnapshot(d, query.trim() ? { q: query.trim() } : {})
-    setSnap(r.data)
+    try {
+      const r = await getSnapshot(d, query.trim() ? { q: query.trim() } : {})
+      setSnap(r.data); setErr(null)
+    } catch (ex) {
+      setSnap(null)
+      setErr(errorMessage(ex, `Nie udało się wczytać migawki z ${d}`))
+    }
   }
   useEffect(() => { loadSnap(date, q) }, [date])
 
@@ -322,6 +339,8 @@ function SnapshotsRegistry({ isAdmin }) {
       <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
         {loading ? (
           <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>Ładowanie…</div>
+        ) : err ? (
+          <LoadError message={err} onRetry={() => { loadList(); loadSnap(date, q) }} />
         ) : !snap ? (
           <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>
             Brak migawek. Pierwsza powstanie automatycznie o 23:50{isAdmin ? ' albo użyj „Generuj teraz".' : '.'}

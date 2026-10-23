@@ -13,6 +13,7 @@ import RequestViewShell, {
   buildWorkflowSteps, Section, WorkerCard, deptFull, useReturnFocus,
 } from '../components/RequestView'
 import { toast, confirmDialog } from '../components/ui/feedback'
+import { ErrorAlert, LoadError } from '../components/ui/LoadState'
 import { ReviewDialog, describeKeys, diffSelection } from '../components/ChangeSummary'
 import CopyFromColleague, { buildCopiedSelection } from '../components/CopyFromColleague'
 import PermInput, {
@@ -134,8 +135,6 @@ function WorkersTab({ renderHeader }) {
     <div>
       {renderHeader(load, loading)}
 
-      {err && <div className="alert alert--error mb-4">{err}</div>}
-
       {/* v3.0: wyszukiwarka w nagłówku karty listy (wg projektu). */}
       <section aria-label="Pracownicy" className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)' }}>
@@ -154,6 +153,9 @@ function WorkersTab({ renderHeader }) {
         </div>
         {loading ? (
           <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Ładowanie…</div>
+        ) : err ? (
+          // Błąd wczytania — zamiast „Brak pracowników w Twoim zakresie…”.
+          <LoadError message={err} onRetry={load} />
         ) : workers.length === 0 ? (
           <div style={{ padding: 18 }}>
             <div style={{ fontWeight: 700 }}>
@@ -171,8 +173,8 @@ function WorkersTab({ renderHeader }) {
             Brak wyników dla „{search}”. Spróbuj nazwiska, loginu albo nazwy komórki.
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-          <table className="data-table" style={{ minWidth: 1000 }}>
+          <div className="task-table-wrap">
+          <table className="data-table task-table" style={{ minWidth: 1000 }}>
             <thead>
               <tr>
                 <th>Imię i nazwisko</th>
@@ -223,7 +225,7 @@ function WorkersTab({ renderHeader }) {
                         </button>
                       )}
                     </td>
-                    <td style={{ textAlign: 'right' }}>
+                    <td style={{ textAlign: 'right', ...(w.is_self ? { background: 'var(--bg-secondary)' } : {}) }}>
                       <button className="btn btn--action btn--sm" style={{ minHeight: 36 }} onClick={() => setRequestFor(w)}
                               data-return-focus={w.id}>
                         <FilePlus size={13} /> Nowy wniosek
@@ -547,22 +549,29 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
   }
 
   // Dokąd trafi wniosek po wysłaniu — ta sama etykieta na przycisku i w podsumowaniu.
-  // Reguła jak w backendzie (landing_node_type): komórka dwustopniowa → akceptacja
-  // wyższa dla KAŻDEGO rodzaju wniosku; inaczej wprost do realizacji przez IT.
-  const sendLabel = w.requires_higher_approval ? 'Wyślij do akceptacji' : 'Wyślij do realizacji'
-  const destText = w.requires_higher_approval
-    ? 'do akceptacji kierownika nadrzędnego, a potem do realizacji przez IT'
+  // Najpierw dane z backendu (landing/next_node_type wiersza, jeśli są). Bez nich
+  // reguła backendu (landing_node_type): komórka dwustopniowa → akceptacja wyższa
+  // dla KAŻDEGO rodzaju wniosku, a wniosek kierownika SAMEGO DLA SIEBIE (v3.8)
+  // także w komórce jednostopniowej — nie zatwierdza własnego wniosku.
+  const landingNode = w.landing_node_type || w.next_node_type || null
+  const toApproval = landingNode
+    ? ['higher_manager_approve', 'manager_approve'].includes(landingNode)
+    : (!!w.requires_higher_approval || !!w.is_self)
+  const sendLabel = toApproval ? 'Wyślij do akceptacji' : 'Wyślij do realizacji'
+  const approvalWho = landingNode === 'manager_approve' ? 'kierownika komórki' : 'kierownika nadrzędnego'
+  const destText = toApproval
+    ? `do akceptacji ${approvalWho}, a potem do realizacji przez IT`
     : 'bezpośrednio do realizacji przez IT'
 
   const _steps = buildWorkflowSteps({
     sent: true, nodeType: 'select_permissions',
-    requiresHigher: !!w.requires_higher_approval, kind: 'grant',
+    requiresHigher: toApproval, kind: 'grant',
   })
   const _summary = [
     { label: 'Pracownik', value: w.full_name || w.username },
     { label: 'Komórka', value: `${w.department_name || '—'} · ${w.unit_name || '—'}` },
     { label: 'Zmiany', value: `+${toGrant.length + scopeChanged.length} / −${toRevoke.length}` },
-    { label: 'Akceptacja', value: w.requires_higher_approval ? 'wymagana' : 'nie wymagana' },
+    { label: 'Akceptacja', value: toApproval ? 'wymagana' : 'nie wymagana' },
   ]
 
   return (
@@ -810,7 +819,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
           {!loading && !requestTypeId && !err && (
             <div className="alert alert--error" role="alert">{NO_TYPE_MSG}</div>
           )}
-          {err && <div className="alert alert--error">{err}</div>}
+          <ErrorAlert>{err}</ErrorAlert>
     </RequestViewShell>
 
       <ReviewDialog
@@ -818,8 +827,8 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
         workerName={w.full_name || w.username}
         grants={describeKeys([...toGrant, ...scopeChanged], systems, permsBySys, fieldValues)}
         revokes={describeKeys(toRevoke, systems, permsBySys)}
-        target={w.requires_higher_approval
-          ? 'Po wysłaniu wniosek trafi do akceptacji kierownika nadrzędnego, potem do IT.'
+        target={toApproval
+          ? `Po wysłaniu wniosek trafi do akceptacji ${approvalWho}, potem do IT.`
           : 'Po wysłaniu wniosek trafi do realizacji przez IT.'}
         confirmLabel={sendLabel}
         busy={busy}

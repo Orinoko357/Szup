@@ -868,14 +868,33 @@ def ldap_import(
                 if len(same) == 1:
                     existing = same[0]
 
+            if existing and existing.unit_id != unit_id:
+                # Mapowanie na komórkę z INNEJ jednostki przeniosłoby ją między
+                # jednostkami (łańcuch przełożonych i zakres kadr bez sensu) —
+                # pomijamy ją razem z poddrzewem.
+                other = session.get(Unit, existing.unit_id)
+                details.append(f"{indent}⚠ Wydział „{child.name}” — pominięty: wskazana "
+                               f"komórka „{existing.name}” należy do innej jednostki "
+                               f"(„{other.name if other else existing.unit_id}”); "
+                               f"przenoszenie komórek między jednostkami nie jest "
+                               f"możliwe w imporcie (pominięto też jej podkomórki)")
+                counters["depts_skipped"] += 1
+                continue
             if existing:
                 changed = []
                 if ndn and not existing.ldap_dn:
                     existing.ldap_dn = ndn; changed.append("DN")
                 # Aktualizuj podległość i nazwę wg AD (bez tworzenia duplikatu).
                 if existing.parent_dept_id != parent_dept_id:
-                    existing.parent_dept_id = parent_dept_id; changed.append("podległość")
-                    moved_dept_ids.add(existing.id)
+                    try:
+                        _validate_no_cycle(session, existing.id, parent_dept_id)
+                    except HTTPException:
+                        details.append(f"{indent}⚠ Wydział „{child.name}” — pominięto "
+                                       f"zmianę podległości: utworzyłaby cykl w "
+                                       f"strukturze (komórka pod własną podkomórką)")
+                    else:
+                        existing.parent_dept_id = parent_dept_id; changed.append("podległość")
+                        moved_dept_ids.add(existing.id)
                 if existing.name != child.name:
                     existing.name = child.name; changed.append("nazwa")
                 # Opis z AD — ustaw/odśwież (nie czyścimy, gdy w AD pusty).

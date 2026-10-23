@@ -14,6 +14,7 @@ import {
  errorMessage} from '../api'
 import { toast, ask } from '../components/ui/feedback'
 import Modal from '../components/ui/Modal'
+import { ErrorAlert, LoadError } from '../components/ui/LoadState'
 
 
 // Typy węzłów struktury organizacyjnej (zsynchronizowane z backend: models.DEPARTMENT_KINDS)
@@ -114,7 +115,7 @@ export default function Units() {
       {showLdapImport && (
         <LdapImportModal onClose={() => { setShowLdapImport(false); load() }} />
       )}
-      {loadErr && <div className="alert alert--error mb-4" role="alert">{loadErr}</div>}
+      {loadErr && <LoadError message={loadErr} onRetry={load} busy={loading} style={{ marginBottom: 16 }} />}
       {loading && units.length === 0 ? (
         <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
       ) : (
@@ -229,7 +230,7 @@ function UnitAccordion({ unit: u, depts, users, onChanged, onlyDeptIds = null })
               </div>
               <button type="button" className="btn btn--ghost" onClick={() => { setEditing(false); setName(u.name) }}>Anuluj</button>
               <button type="submit" className="btn btn--primary">Zapisz</button>
-              {err && <div className="alert alert--error">{err}</div>}
+              <ErrorAlert>{err}</ErrorAlert>
             </form>
           )}
 
@@ -597,7 +598,7 @@ function AddDeptForm({ unitId, users, unitDepts, onAdded }) {
       <button type="submit" className="btn btn--primary" style={{ marginBottom: 0 }}>
         <Plus size={14} /> Dodaj
       </button>
-      {err && <div className="alert alert--error" style={{ width: '100%' }}>{err}</div>}
+      <ErrorAlert style={{ width: '100%' }}>{err}</ErrorAlert>
     </form>
   )
 }
@@ -636,7 +637,7 @@ function AddUnitCard({ onAdded }) {
           <label className="form-label" htmlFor="unit-new-name">Nazwa jednostki *</label>
           <input id="unit-new-name" className="form-control" required value={name} onChange={e => setName(e.target.value)} />
         </div>
-        {err && <div className="alert alert--error mb-4">{err}</div>}
+        <ErrorAlert className="mb-4">{err}</ErrorAlert>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button type="button" className="btn btn--ghost" onClick={() => setShow(false)}>Anuluj</button>
           <button type="submit" className="btn btn--primary">Zapisz</button>
@@ -889,7 +890,7 @@ function LdapImportModal({ onClose }) {
         </div>
       )}
 
-      {err && <div className="alert alert--error" style={{ marginBottom: 12 }}>{err}</div>}
+      <ErrorAlert style={{ marginBottom: 12 }}>{err}</ErrorAlert>
 
       {/* Krok 2 — podgląd */}
       {step === 'preview' && preview.length > 0 && (
@@ -1159,7 +1160,7 @@ export function LdapUsersImportModal({ onClose }) {
         </div>
       )}
 
-      {err && <div className="alert alert--error" style={{ marginBottom: 12 }}>{err}</div>}
+      <ErrorAlert style={{ marginBottom: 12 }}>{err}</ErrorAlert>
 
       {step === 'preview' && users.length > 0 && (
         <>

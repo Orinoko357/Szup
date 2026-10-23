@@ -23,9 +23,33 @@ function userIsItManager() {
   return roles.includes('manager') && roles.includes('it_staff')
 }
 import { toast, confirmDialog } from '../components/ui/feedback'
+import { ErrorAlert, LoadError } from '../components/ui/LoadState'
 import {
   missingRequiredFields, adminGrantNames, confirmAdminRights, ADMIN_CONFIRM_ABORTED,
 } from '../components/ItemFields'
+
+// Backend (v3.8): nadanie/zmiana uprawnień pracownikowi po ustaniu zatrudnienia
+// wymaga świadomego potwierdzenia — 409 z kodem WORKER_TERMINATED
+// (albo komunikatem o ustaniu); ponawiamy wtedy z confirm_after_termination.
+function needsTerminationConfirm(ex) {
+  if (ex?.response?.status !== 409) return null
+  const det = ex.response.data?.detail
+  const code = det && typeof det === 'object' ? (det.code || det.error) : null
+  const msg = typeof det === 'string' ? det : (det?.message || '')
+  if (code === 'WORKER_TERMINATED' || code === 'CONFIRM_AFTER_TERMINATION'
+      || /ustani|confirm_after_termination/i.test(msg)) {
+    return msg || 'Pracownikowi ustało zatrudnienie.'
+  }
+  return null
+}
+function confirmAfterTermination(msg, r) {
+  return confirmDialog({
+    title: 'Pracownik po ustaniu zatrudnienia',
+    message: `${msg}\n\nCzy na pewno nadać uprawnienia z wniosku #${r.id} (${r.worker_name || 'pracownik'}) `
+      + 'mimo ustania zatrudnienia? Operacja zostanie odnotowana w historii.',
+    confirmLabel: 'Tak, zrealizuj mimo to', danger: true,
+  })
+}
 
 // Lista realizacji IT (zakładka „Realizacja IT” strony Wnioski).
 export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged }) {
@@ -40,6 +64,7 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
       .catch(ex => toast(errorMessage(ex, 'Nie udało się ustalić zalogowanego użytkownika — filtr „Moje” nie zadziała.'), { tone: 'warning' }))
   }, [])
   const [openReq, setOpenReq]   = useState(null)   // jeden wspólny widok: podgląd + realizacja
+  const [err, setErr]           = useState(null)   // błąd wczytania listy (zamiast „Kolejka pusta”)
   const openedRef = useRef(false)
 
   async function load({ silent = false } = {}) {
@@ -48,6 +73,7 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
       const params = filter !== 'all' ? { status: filter } : {}
       const r = await listRequests(params)
       setRequests(r.data)
+      setErr(null)
       // Po cichym odświeżeniu (np. po zapisie odmowy/realizacji pojedynczej
       // pozycji) zsynchronizuj też otwarty wniosek, żeby po zamknięciu i
       // ponownym otwarciu stan pozycji zgadzał się z bazą.
@@ -64,7 +90,10 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
       }
       return r.data
     } catch (ex) {
-      toast(errorMessage(ex, 'Nie udało się pobrać wniosków'), { tone: 'error' })
+      const msg = errorMessage(ex, 'Nie udało się pobrać wniosków')
+      // Ciche odświeżenie (otwarty wniosek) — tylko toast; lista zostaje.
+      if (silent) toast(msg, { tone: 'error' })
+      else { setErr(msg); setRequests([]) }
       return []
     } finally { if (!silent) setLoading(false) }
   }
@@ -129,9 +158,10 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
         {filter === 'pending_it' && (
           <Segmented ariaLabel="Kto realizuje" value={who} onChange={setWho}
                      options={[
-                       { value: 'all',        label: 'Wszystkie',     count: counts.all },
-                       { value: 'mine',       label: 'Moje',          count: counts.mine },
-                       { value: 'unassigned', label: 'Nieprzypisane', count: counts.unassigned },
+                       // Po błędzie wczytania bez liczników (0 sugerowałoby pustą kolejkę).
+                       { value: 'all',        label: 'Wszystkie',     count: err ? null : counts.all },
+                       { value: 'mine',       label: 'Moje',          count: err ? null : counts.mine },
+                       { value: 'unassigned', label: 'Nieprzypisane', count: err ? null : counts.unassigned },
                      ]} />
         )}
         <button className="btn btn--ghost btn--sm" style={{ marginLeft: 'auto' }}
@@ -140,7 +170,9 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
         </button>
       </div>
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        {loading ? <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Ładowanie…</div> : shown.length === 0 ? (
+        {loading ? <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Ładowanie…</div> : err ? (
+          <LoadError message={err} onRetry={() => { load(); onChanged?.() }} />
+        ) : shown.length === 0 ? (
           <div style={{ padding: 18 }}>
             <div style={{ fontWeight: 700 }}>
               {filter === 'pending_it'
@@ -284,14 +316,22 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     } finally { setDenyBusy(null) }
   }
   // Realizacja etapowa: odhaczenie / cofnięcie pojedynczej pozycji przez IT.
-  async function setFulfill(id, done) {
+  async function setFulfill(id, done, confirmTerm = false) {
     setDenyBusy(id); setErr(null)
     try {
-      const res = await fulfillRequestItem(r.id, id, { fulfilled: done })
+      const body = { fulfilled: done }
+      if (confirmTerm) body.confirm_after_termination = true
+      const res = await fulfillRequestItem(r.id, id, body)
       const upd = res.data?.item
       if (upd) setItems(prev => prev.map(it => (it.id === id ? { ...it, ...upd } : it)))
       onRefresh?.()
     } catch (ex) {
+      const termMsg = !confirmTerm && done ? needsTerminationConfirm(ex) : null
+      if (termMsg) {
+        setDenyBusy(null)
+        if (await confirmAfterTermination(termMsg, r)) return setFulfill(id, done, true)
+        return
+      }
       setErr(errorMessage(ex, done ? 'Nie udało się odhaczyć pozycji' : 'Nie udało się cofnąć realizacji'))
     } finally { setDenyBusy(null) }
   }
@@ -357,13 +397,13 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     }
   }
 
-  async function realize() {
+  async function realize(confirmTerm = false) {
     const u = adUsername.trim()
     if (needsAd && !u) { setErr('Wpisz sAMAccountName pracownika (login AD)'); return }
 
     // Praca etapowa: jeśli zostały pozycje nadania ani nieodhaczone, ani
     // nieodmówione — upewnij się, że realizator chce zamknąć wniosek teraz.
-    if (!isRevoke && grantProgress.pending > 0) {
+    if (!confirmTerm && !isRevoke && grantProgress.pending > 0) {
       const ok = await confirmDialog({
         title: 'Zostały pozycje bez decyzji',
         message: `Pozostało ${grantProgress.pending} pozycji bez decyzji (nieodhaczonych i `
@@ -383,7 +423,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       return item
     })
 
-    if (added_items.length > 0) {
+    if (added_items.length > 0 && !confirmTerm) {
       // Te same reguły co u kierownika — backend waliduje niezależnie.
       const miss = missingRequiredFields(addedKeys, addSystems, addFieldValues, addPerms)
       if (miss.length) {
@@ -409,9 +449,18 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       if (ds.length) extra.denials = ds
       // Ochrona przed równoległą akcją — IT mutuje teraz pozycje wniosku.
       if (r.current_node_id) extra.expected_node_id = r.current_node_id
+      if (confirmTerm) extra.confirm_after_termination = true
       await workflowAction(r.id, extra)
       onDone({ realizedId: r.id })
     } catch (ex) {
+      const termMsg = !confirmTerm ? needsTerminationConfirm(ex) : null
+      if (termMsg) {
+        setBusy(false)
+        if (await confirmAfterTermination(termMsg, r)) await realize(true)
+        return
+      }
+      // 409 (np. wniosek zmienił stan albo odrzucenie po częściowej realizacji)
+      // — pokazujemy komunikat backendu i odświeżamy dane.
       setErr(errorMessage(ex, 'Nie udało się potwierdzić realizacji')); setBusy(false)
       if (ex.response?.status === 409) onRefresh?.()
     }
@@ -539,7 +588,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           {canRealize || canLink ? 'Anuluj' : 'Zamknij'}
         </button>
         {canRealize && (
-          <button className="btn btn--success" onClick={realize}
+          <button className="btn btn--success" onClick={() => realize()}
                   disabled={busy || (needsAd && !adUsername.trim())}>
             <CheckCircle size={14} /> {busy ? 'Zapisywanie…' : (isRevoke ? 'Potwierdź odebranie' : 'Potwierdź realizację')}
           </button>
@@ -728,7 +777,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
         </Section>
       )}
 
-          {err && <div className="alert alert--error">{err}</div>}
+          <ErrorAlert>{err}</ErrorAlert>
     </RequestViewShell>
   )
 }

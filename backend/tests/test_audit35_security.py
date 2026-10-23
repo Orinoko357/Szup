@@ -89,10 +89,11 @@ def test_admin_cannot_grant_or_revoke_admin_roles(api):
     assert r.status_code == 403, r.text
     assert "admin" in _roles(other_admin)
 
-    # Zmiana ról operacyjnych konta z rolą admin (admin zostaje) — dozwolona.
+    # Od 3.8 kontem z rolą admin zarządza wyłącznie superadmin — także jego
+    # rolami operacyjnymi (test_audit37_identity.py).
     r = api.patch(f"/users/{other_admin}", token=adm, json={"roles": ["admin", "it_staff"]})
-    assert r.status_code == 200, r.text
-    assert _roles(other_admin) == {"admin", "it_staff"}
+    assert r.status_code == 403, r.text
+    assert _roles(other_admin) == {"admin"}
 
     # Role operacyjne zwykłego konta — dozwolone.
     r = api.patch(f"/users/{viewer}", token=adm, json={"roles": ["viewer", "hr"]})
@@ -196,8 +197,10 @@ def test_ldap_host_change_clears_bind_password(api):
     assert r.status_code == 200, r.text
     assert r.json()["has_password"] is True and not r.json().get("warning")
 
-    # Zapis bez zmiany serwera — hasło zostaje.
-    r = api.put("/settings/ldap", token=root, json={**_LDAP, "port": 636})
+    # Zapis bez zmiany serwera ani sposobu połączenia — hasło zostaje.
+    # (Zmiana portu / LDAPS też czyści hasło — test_audit37_identity.py.)
+    r = api.put("/settings/ldap", token=root,
+                json={**_LDAP, "user_search_base": "OU=Ludzie,DC=example,DC=local"})
     assert r.status_code == 200, r.text
     assert r.json()["has_password"] is True and not r.json().get("warning")
 

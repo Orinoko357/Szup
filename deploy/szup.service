@@ -5,6 +5,9 @@ After=network.target
 [Service]
 Type=simple
 User=root
+# Pliki tworzone przez usługę (szup.db, -wal, -shm, logi, klucze) tylko dla
+# właściciela — baza zawiera dane osobowe, hashe haseł i audyt.
+UMask=0077
 WorkingDirectory=/opt/szup/backend
 EnvironmentFile=-/opt/szup/.env
 Environment=SZUP_DATA_DIR=/opt/szup/data

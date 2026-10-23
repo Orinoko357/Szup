@@ -15,7 +15,7 @@ from sqlmodel import Session, select
 from database import get_session
 from models import RequestType, User, WorkflowInstance, WorkflowTemplate
 from services.permissions import require_admin
-from services.workflow import WorkflowGraphError, parse_graph
+from services.workflow import WorkflowGraphError, check_request_graph_json
 
 router = APIRouter()
 
@@ -30,6 +30,27 @@ def _audit(session: Session, request: Request, user: User, action: str, *,
                  target_type="workflow_template", target_id=template_id, ip=meta["ip"],
                  user_agent=meta["user_agent"],
                  details={"name": name, "version": version, **(details or {})})
+
+
+def _security_event(session: Session, request: Request, user: User, event_type: str,
+                    summary: str, details: dict) -> None:
+    """Zmiana grafu szablonu decyduje, kto akceptuje wnioski (można nią usunąć
+    etapy akceptacji) — zdarzenie bezpieczeństwa wysokiej wagi do przejrzenia
+    (zamyka je superadmin)."""
+    from models import SecuritySeverity
+    from services.audit import request_meta
+    from services.security_events import emit
+    emit(session, event_type=event_type, source="workflow_templates",
+         severity=SecuritySeverity.high, summary=summary, details=details,
+         user_id=user.id, ip=request_meta(request)["ip"], commit=True)
+
+
+def _check_graph(graph_json: str) -> None:
+    """Walidacja struktury i reguł obiegu (etap kierownika, realizacja IT) → 400."""
+    try:
+        check_request_graph_json(graph_json)
+    except WorkflowGraphError as exc:
+        raise HTTPException(400, str(exc))
 
 
 def _serialize(session: Session, t: WorkflowTemplate) -> dict:
@@ -99,10 +120,7 @@ def create_template(
     session: Session = Depends(get_session),
     user: User = Depends(require_admin),
 ):
-    try:
-        parse_graph(data.graph_json)
-    except WorkflowGraphError as exc:
-        raise HTTPException(400, str(exc))
+    _check_graph(data.graph_json)
     t = WorkflowTemplate(
         name=data.name.strip(),
         description=data.description,
@@ -129,11 +147,10 @@ def update_template(
     if not t:
         raise HTTPException(404, "Szablon nie istnieje")
     payload = data.model_dump(exclude_unset=True)
+    graph_changed = "graph_json" in payload and payload["graph_json"] != t.graph_json
     if "graph_json" in payload:
-        try:
-            parse_graph(payload["graph_json"])
-        except WorkflowGraphError as exc:
-            raise HTTPException(400, str(exc))
+        _check_graph(payload["graph_json"])
+    if graph_changed:
         # Nowa wersja szablonu — trwające instancje trzymają snapshot,
         # więc nic im się nie stanie.
         t.version = (t.version or 1) + 1
@@ -146,6 +163,14 @@ def update_template(
         _audit(session, request, user, "workflow_template.updated", template_id=t.id,
                name=t.name, version=t.version,
                details={"changed": changed, "is_active": t.is_active})
+    if graph_changed:
+        types = [rt.code or rt.name for rt in session.exec(
+            select(RequestType).where(RequestType.workflow_template_id == t.id)).all()]
+        _security_event(
+            session, request, user, "workflow_template.graph_changed",
+            f"Zmieniono graf szablonu obiegu „{t.name}” (wersja {t.version}) — "
+            f"przez {user.username}",
+            {"template_id": t.id, "version": t.version, "request_types": types})
     return _serialize(session, t)
 
 

@@ -40,6 +40,10 @@ def _set_sqlite_pragma(dbapi_connection, connection_record):  # noqa: ANN001
 
 
 def init_db():
+    # Rejestracja tabel w metadanych — bez tego create_all nie utworzy nic, gdy
+    # wołający (np. narzędzie z tools/) nie zaimportował wcześniej `models`.
+    import importlib
+    importlib.import_module("models")
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
     SQLModel.metadata.create_all(engine)
     _run_migrations()
@@ -327,6 +331,11 @@ def _run_migrations():
         ("requestitem",   "fulfilled_at",    "DATETIME"),
         ("ldapsettings",  "sso_enabled",     "BOOLEAN DEFAULT 0"),
         ("ldapsettings",  "sso_auto",        "BOOLEAN DEFAULT 0"),
+        # Weryfikacja certyfikatu LDAPS / STARTTLS (3.8)
+        ("ldapsettings",  "tls_verify",      "BOOLEAN DEFAULT 1"),
+        ("ldapsettings",  "ca_cert_file",    "VARCHAR DEFAULT NULL"),
+        ("ldapsettings",  "use_starttls",    "BOOLEAN DEFAULT 0"),
+        ("ldapsettings",  "allow_insecure",  "BOOLEAN DEFAULT 0"),
         ("unit",          "manager_user_id", "INTEGER"),
         ("emailsettings", "to_address",      "VARCHAR DEFAULT ''"),
         ("emailsettings", "sender_as_actor", "BOOLEAN DEFAULT 1"),
@@ -366,8 +375,22 @@ def _run_migrations():
     ]
     from sqlalchemy import text
     with engine.connect() as conn:
+        # Zabezpieczenia LDAP (3.8) na istniejącej instalacji: zachowujemy dotychczasowe
+        # działanie (bez weryfikacji certyfikatu, LDAP bez SSL dozwolony), żeby
+        # wdrożenie nie odcięło logowania AD. Lista kontrolna ostrzega, a superadmin
+        # włącza weryfikację po wskazaniu pliku CA. Nowe instalacje: bezpieczne domyślne.
+        ldap_cols_before = _table_columns(conn, "ldapsettings")
         for table, column, col_def in simple_migrations:
             _add_column(conn, table, column, col_def, _mlog)
+        if ldap_cols_before and "tls_verify" not in ldap_cols_before:
+            conn.execute(text('UPDATE "ldapsettings" SET tls_verify = 0'))
+            conn.commit()
+            _mlog.warning("LDAP: weryfikacja certyfikatu wyłączona dla istniejącej "
+                          "instalacji — włącz ją w Ustawieniach po wskazaniu pliku CA")
+        if ldap_cols_before and "allow_insecure" not in ldap_cols_before:
+            conn.execute(text('UPDATE "ldapsettings" SET allow_insecure = 1 '
+                              'WHERE COALESCE(use_ssl, 0) = 0'))
+            conn.commit()
 
         # H4 — UNIQUE(instance_id, step_index) na istniejących bazach. Tworzymy
         # przez CREATE UNIQUE INDEX (idempotentne). Jeśli w bazie są już duplikaty
@@ -454,11 +477,12 @@ def _run_migrations():
                 _mlog.info("Dropped legacy 'role' column from user table")
             except Exception as exc:
                 conn.rollback()
-                _mlog.warning(
-                    "Cannot DROP COLUMN role (SQLite <3.35?): %s. "
-                    "Próbuję recreate-table fallback.", exc
-                )
-                _drop_role_via_recreate(conn)
+                # Bez usunięcia kolumny INSERT-y nowego modelu nie przejdą (NOT NULL),
+                # więc przerywamy start z jasną przyczyną. SQLite ≥3.35 (2021)
+                # obsługuje DROP COLUMN — starsza wersja wymaga aktualizacji systemu.
+                raise MigrationError(
+                    f"Nie udało się usunąć przestarzałej kolumny user.role: {exc}. "
+                    "Wymagany SQLite 3.35 lub nowszy.") from exc
 
 
 class MigrationError(RuntimeError):
@@ -553,45 +577,6 @@ def _warn_missing_current_node_type(conn, _mlog) -> int:
             "instancji?) — lista wniosków ukrywa je w komórkach z etapem "
             "kierownika. Sprawdź instancje obiegu tych wniosków.", missing)
     return missing
-
-
-def _drop_role_via_recreate(conn) -> None:
-    """Fallback dla SQLite <3.35 — przepisanie tabeli user bez kolumny 'role'.
-
-    Buduje nową tabelę z kolumn aktualnego modelu, kopiuje dane i podmienia.
-    Wykonujemy to TYLKO gdy ALTER ... DROP COLUMN się nie powiódł.
-    """
-    from sqlalchemy import text
-    import logging
-    _mlog = logging.getLogger("szup.migrations")
-    try:
-        cols = conn.exec_driver_sql('PRAGMA table_info("user")').fetchall()
-        keep = [c for c in cols if c[1] != "role"]
-        col_defs = []
-        for c in keep:
-            cid, name, ctype, notnull, dflt, pk = c
-            parts = [f'"{name}"', ctype or "TEXT"]
-            if pk:
-                parts.append("PRIMARY KEY")
-            if notnull and not pk:
-                parts.append("NOT NULL")
-            if dflt is not None:
-                parts.append(f"DEFAULT {dflt}")
-            col_defs.append(" ".join(parts))
-        col_names = ", ".join(f'"{c[1]}"' for c in keep)
-        ddl = f'CREATE TABLE "user_new" ({", ".join(col_defs)})'
-        conn.execute(text("PRAGMA foreign_keys=OFF"))
-        conn.execute(text(ddl))
-        conn.execute(text(f'INSERT INTO "user_new" ({col_names}) SELECT {col_names} FROM "user"'))
-        conn.execute(text('DROP TABLE "user"'))
-        conn.execute(text('ALTER TABLE "user_new" RENAME TO "user"'))
-        conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS ix_user_username ON "user" (username)'))
-        conn.execute(text("PRAGMA foreign_keys=ON"))
-        conn.commit()
-        _mlog.info("Recreated user table without legacy 'role' column")
-    except Exception as exc:
-        conn.rollback()
-        _mlog.error("Failed to drop 'role' column via recreate: %s", exc)
 
 
 def get_session():

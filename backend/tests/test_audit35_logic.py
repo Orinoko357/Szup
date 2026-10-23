@@ -336,8 +336,10 @@ def test_reject_by_taker_notifies_dept_circle_and_hides_draft_note(api, monkeypa
     rid2 = _create(api, w)
     assert api.post(f"/requests/{rid2}/draft", token=kier,
                     json={"comment": "Tajna notatka"}).status_code == 200
-    assert _act(api, rid2, kier, "reject").status_code == 200
-    assert _row(rid2).manager_comment is None
+    # Odrzucenie wymaga uzasadnienia (3.7) — notatkę roboczą zastępuje powód.
+    assert _act(api, rid2, kier, "reject").status_code == 400
+    assert _act(api, rid2, kier, "reject", comment="Brak etatu").status_code == 200
+    assert _row(rid2).manager_comment == "Brak etatu"
 
 
 # ---------------------------------------------------------------------------

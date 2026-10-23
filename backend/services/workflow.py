@@ -229,6 +229,55 @@ def parse_graph(graph_json: str) -> dict:
     return data
 
 
+def validate_request_graph(graph: dict) -> None:
+    """Walidacja BIZNESOWA grafu szablonu, z którego korzystają typy wniosków
+    (`parse_graph` sprawdza tylko strukturę). Rzuca WorkflowGraphError.
+
+    Obieg jest liniowy, więc „każda ścieżka” to jedna ścieżka od startu do końca.
+    Musi na niej stać:
+      - etap kierownika komórki (`select_permissions` albo `manager_approve`) —
+        inaczej uprawnienia trafiłyby do IT bez decyzji przełożonego pracownika,
+      - realizacja IT (`it_execute`) PO etapie kierownika i jako ostatni krok
+        przed końcem — inaczej wniosek kończyłby się jako „zrealizowany”, choć
+        nikt nie nadał uprawnień w systemach, a rejestr i migawki rozjechałyby
+        się z „Moimi uprawnieniami”.
+    """
+    nodes = {n["id"]: n for n in graph.get("nodes") or []}
+    cur = find_start(graph)
+    path: list[str] = []
+    seen: set[str] = set()
+    while cur is not None and cur["id"] not in seen and cur["type"] != "end":
+        seen.add(cur["id"])
+        if cur["type"] != "start":
+            path.append(cur["type"])
+        cur = next_node(graph, cur["id"])
+    if not nodes or cur is None or cur["type"] != "end":
+        raise WorkflowGraphError("Obieg nie dochodzi do węzła końcowego.")
+    stage_idx = [i for i, t in enumerate(path) if t in MANAGER_STAGE_TYPES]
+    if not stage_idx:
+        raise WorkflowGraphError(
+            "Obieg musi zawierać etap kierownika komórki (wybór uprawnień albo "
+            "akceptację kierownika) — bez niego uprawnienia trafiłyby do IT bez "
+            "decyzji przełożonego pracownika.")
+    if not path or path[-1] != "it_execute":
+        raise WorkflowGraphError(
+            "Ostatnim krokiem przed zakończeniem obiegu musi być realizacja przez IT "
+            "(it_execute) — inaczej wniosek zamknąłby się jako zrealizowany bez "
+            "nadania uprawnień w systemach.")
+    if "it_execute" in path[:stage_idx[-1]]:
+        raise WorkflowGraphError(
+            "Realizacja przez IT nie może poprzedzać etapu kierownika komórki.")
+
+
+def check_request_graph_json(graph_json: str) -> dict:
+    """`parse_graph` + `validate_request_graph` — dla szablonów przypisywanych do
+    typów wniosków (tworzenie/edycja szablonu, zmiana szablonu typu, nowy
+    wniosek). Rzuca WorkflowGraphError z polskim komunikatem."""
+    graph = parse_graph(graph_json)
+    validate_request_graph(graph)
+    return graph
+
+
 def find_start(graph: dict) -> dict:
     for n in graph["nodes"]:
         if n["type"] == "start":
@@ -318,12 +367,28 @@ def verify_chain(session: Session, instance_id: int) -> bool:
 # Rozszerzenia (np. skip_if_asset_not_personal_data) dokładamy tu.
 # ---------------------------------------------------------------------------
 
-def should_skip(node: dict, request: AccessRequest, dept: Optional[Department]) -> bool:
+def is_self_request(request: AccessRequest, user: Optional[User]) -> bool:
+    """Czy `user` działa na wniosku, który dotyczy JEGO SAMEGO (jest dowiązanym
+    pracownikiem wniosku) — np. kierownik składa wniosek dla siebie albo kadry
+    złożyły wniosek dla kierownika, który teraz wybiera uprawnienia."""
+    wid = getattr(request, "worker_user_id", None)
+    return bool(user is not None and wid and user.id == wid)
+
+
+def should_skip(node: dict, request: AccessRequest, dept: Optional[Department],
+                actor_user: Optional[User] = None) -> bool:
+    """Czy silnik pomija węzeł. `actor_user` — osoba, której akcja przesuwa
+    obieg (przy podglądzie `landing_node_type`: osoba, która miałaby działać).
+
+    Akceptacja wyższa (`higher_manager_approve`) jest pomijana w komórce
+    jednostopniowej — CHYBA że krok kierownika wykonuje pracownik, którego
+    wniosek dotyczy (rozdział obowiązków: wniosek „dla siebie” zawsze
+    zatwierdza przełożony)."""
     props = node.get("props") or {}
     if node["type"] == "higher_manager_approve":
         if props.get("skip_if_not_required", True):
             if not dept or not dept.requires_higher_approval:
-                return True
+                return not is_self_request(request, actor_user)
     return False
 
 
@@ -332,9 +397,10 @@ def landing_node_type(
     instance: WorkflowInstance,
     request: AccessRequest,
     action: str,
+    actor_user: Optional[User] = None,
 ) -> Optional[str]:
     """Typ węzła, na którym zatrzyma się obieg PO wykonaniu `action` z bieżącego
-    węzła — bez mutacji stanu (podgląd `advance`).
+    węzła przez `actor_user` — bez mutacji stanu (podgląd `advance`).
 
     `reject` nie posuwa obiegu naprzód → None. Dla `select`/`approve` idziemy
     krawędziami od bieżącego węzła, pomijając auto-skip (`should_skip`) aż do
@@ -354,7 +420,7 @@ def landing_node_type(
         node_id = nxt["id"]
         if nxt["type"] == "end":
             return "end"
-        if should_skip(nxt, request, dept):
+        if should_skip(nxt, request, dept, actor_user):
             continue
         return nxt["type"]
     return None
@@ -587,6 +653,13 @@ def manager_stage_visibility(session: Session, request: AccessRequest, user: Use
     zastępcy, osoba, która wniosek przejęła, oraz przełożeni (kierownik / zastępca
     komórki wyżej w strukturze, dyrektor jednostki) — ci ostatni tylko do odczytu,
     dopóki wniosku nie przejmą.
+
+    Zapisana wersja robocza (`draft_saved_at`) jest ukryta w tym samym kręgu
+    także wtedy, gdy komórka NIE ma (już) własnego aktywnego kierownika — np. po
+    dezaktywacji kierownika (urlop) albo gdy wersję roboczą zapisał przełożony
+    w komórce bez kierownika. Krąg nie zależy od aktywności konta kierownika:
+    zastępcy komórki, odpowiedzialny przełożony (i każdy wyżej), twórca,
+    superadmin.
     """
     from services.permissions import is_department_manager_or_deputy, is_superior_for
 
@@ -595,7 +668,9 @@ def manager_stage_visibility(session: Session, request: AccessRequest, user: Use
     if node_type is _UNSET:
         node = current_node_of(session, request)
         node_type = node.get("type") if node else None
-    if not is_manager_stage(session, node_type, dept):
+    if node_type not in MANAGER_STAGE_TYPES:
+        return None
+    if not (dept_has_own_manager(session, dept) or getattr(request, "draft_saved_at", None)):
         return None
     if has_role(user, "superadmin"):
         return True
@@ -619,21 +694,26 @@ def can_view_request(session: Session, request: AccessRequest, user: User,
 def manager_stage_hidden_clause(session: Session, user: User):
     """Warunek SQL (dla `select(AccessRequest).where(...)`) wycinający wnioski,
     które `can_view_request` ukryłby przed `user` — żeby LIMIT/OFFSET listy
-    liczył już tylko widoczne wiersze. None — nic nie trzeba wycinać.
+    liczył już tylko widoczne wiersze. None — nic nie trzeba wycinać
+    (superadmin).
 
-    Ukryty jest wniosek, który stoi na etapie kierownika komórki z własnym,
-    aktywnym kierownikiem (`AccessRequest.current_node_type`), nie został
-    złożony przez `user`, a jego komórka leży poza „kręgiem” `user`
-    (`superior_dept_ids`: komórki, którymi kieruje lub jest zastępcą, ich
-    poddrzewo i komórki jednostki, którą kieruje).
+    Wniosek stoi „na etapie kierownika”, gdy `AccessRequest.current_node_type`
+    to wybór / akceptacja kierownika. Ukryty jest, gdy nie złożył go `user`,
+    a jego komórka leży poza „kręgiem” `user` (`superior_dept_ids`: komórki,
+    którymi kieruje lub jest zastępcą, ich poddrzewo i komórki jednostki, którą
+    kieruje) oraz:
+      - komórka ma własnego, aktywnego kierownika (etap roboczy), albo
+      - wniosek ma zapisaną wersję roboczą (`draft_saved_at`) — także w komórce,
+        która kierownika nie ma (już) — patrz `manager_stage_visibility`.
 
-    Siatka bezpieczeństwa: wniosek W TOKU z pustym `current_node_type` (kolumna
-    niewypełniona — np. nieudany backfill po migracji) w takiej komórce też jest
-    ukryty. Pusty typ przepuszczamy tylko dla wniosków zakończonych/odrzuconych
-    (silnik zeruje wtedy kolumnę). Lepiej chwilowo nie pokazać wniosku na liście,
-    niż ujawnić wersję roboczą kierownika; podgląd pojedynczego wniosku i tak
-    liczy regułę z instancji obiegu (`manager_stage_visibility`)."""
-    from sqlalchemy import and_, or_
+    Siatka bezpieczeństwa: wniosek z pustym `current_node_type` (kolumna
+    niewypełniona — np. nieudany backfill po migracji), który ma AKTYWNĄ
+    instancję obiegu, traktujemy jak wniosek na etapie kierownika. Pusty typ
+    bez aktywnej instancji (wniosek zakończony, odrzucony albo stary wniosek
+    sprzed silnika obiegu) nie jest ukrywany — inaczej stare wnioski w toku
+    znikałyby z list IT i administratora. Podgląd pojedynczego wniosku liczy
+    regułę z instancji obiegu (`manager_stage_visibility`)."""
+    from sqlalchemy import and_, exists, false, func, not_, or_, true
     from sqlmodel import col
     from services.permissions import superior_dept_ids
     if has_role(user, "superadmin"):
@@ -643,15 +723,26 @@ def manager_stage_hidden_clause(session: Session, user: User):
         .where(User.is_active == True)  # noqa: E712
     ).all()
     own_mgr = {d.id for d in staged if getattr(d, "kind", None) != "standalone"}
-    hidden = sorted(own_mgr - set(superior_dept_ids(session, user)))
-    if not hidden:
-        return None
+    circle = set(superior_dept_ids(session, user))
+    hidden_own = sorted(own_mgr - circle)
+
+    node_type = col(AccessRequest.current_node_type)
+    dept_id = func.coalesce(col(AccessRequest.department_id), -1)
+    active_instance = exists().where(
+        WorkflowInstance.request_id == AccessRequest.id,
+        WorkflowInstance.status == WorkflowInstanceStatus.active,
+    )
+    at_manager_stage = or_(
+        and_(node_type.is_not(None), node_type.in_(list(MANAGER_STAGE_TYPES))),
+        and_(node_type.is_(None), active_instance),
+    )
+    outside_staged = dept_id.notin_(hidden_own) if hidden_own else true()
+    in_circle = dept_id.in_(sorted(circle)) if circle else false()
     return or_(
-        and_(col(AccessRequest.current_node_type).is_(None),
-             col(AccessRequest.status).in_([RequestStatus.completed, RequestStatus.rejected])),
-        col(AccessRequest.current_node_type).notin_(list(MANAGER_STAGE_TYPES)),
-        col(AccessRequest.department_id).notin_(hidden),
+        not_(at_manager_stage),
         col(AccessRequest.created_by_id) == user.id,
+        and_(outside_staged,
+             or_(col(AccessRequest.draft_saved_at).is_(None), in_circle)),
     )
 
 
@@ -854,7 +945,7 @@ def _stage_state(session: Session, request: AccessRequest
         if taker_ok:
             return frozenset({request.taken_over_by_id}), True
     ids = []
-    for uid in _stage_actor_ids(session, node, dept):
+    for uid in _stage_actor_ids(session, node, dept, request):
         u = session.get(User, uid)
         if u and u.is_active:
             ids.append(uid)
@@ -928,7 +1019,8 @@ def resync_manager_stage(session: Session, dept_ids: Any, *,
     return released
 
 
-def release_take_overs_of(session: Session, user_id: Optional[int], note: str) -> int:
+def release_take_overs_of(session: Session, user_id: Optional[int], note: str, *,
+                          released_ids: Optional[set] = None) -> int:
     """Zwalnia przejęcia osoby `user_id` na wnioskach, które wciąż stoją na
     etapie kierownika komórki (np. przejmujący został dezaktywowany albo stracił
     stanowisko). Kierownik komórki odzyskuje wniosek i dostaje powiadomienie
@@ -944,6 +1036,8 @@ def release_take_overs_of(session: Session, user_id: Optional[int], note: str) -
     for r in rows:
         clear_take_over(r)
         session.add(r)
+        if released_ids is not None:
+            released_ids.add(r.id)
         record_request_event(session, r.id, "release", actor_user=None,
                              actor_name="SZUP (automatycznie)", note=note)
         node = current_node_of(session, r)
@@ -1052,6 +1146,11 @@ def can_act(node: dict, request: AccessRequest, dept: Optional[Department],
         return False, ("Tylko kierownik, jego zastępca lub przełożony w strukturze może wykonać ten krok.")
 
     if ntype == "higher_manager_approve":
+        # Nikt nie zatwierdza akceptacji wyższej wniosku, który dotyczy jego
+        # samego — także dyrektor jednostki (rozdział obowiązków).
+        if is_self_request(request, user):
+            return False, ("Nie możesz zatwierdzić wniosku, który dotyczy Ciebie — "
+                           "zrobi to przełożony.")
         # Kierownik (lub zastępca) SAMEJ komórki nie zatwierdza akceptacji
         # wyższej wniosku własnej komórki — także wtedy, gdy jest jednocześnie
         # kierownikiem / zastępcą komórki nadrzędnej (inaczej zatwierdziłby
@@ -1213,7 +1312,7 @@ def advance(
             _notify_request_completed(session, request, actor_user)
             return
 
-        if should_skip(nxt, request, dept):
+        if should_skip(nxt, request, dept, actor_user):
             _record_step(session, instance, nxt,
                          action=WorkflowStepAction.auto_skip, actor_user=None,
                          comment="Warunek pominięcia spełniony")
@@ -1267,24 +1366,36 @@ def _unit_director_id(session: Session, dept: Optional[Department]) -> Optional[
 
 
 def _stage_actor_ids(session: Session, node: dict,
-                     dept: Optional[Department]) -> list[int]:
+                     dept: Optional[Department],
+                     request: Optional[AccessRequest] = None) -> list[int]:
     """Id osób, które powinny działać na kroku kierowniczym (kolejność = ważność).
 
     - krok kierownika (wybór / akceptacja): kierownik odpowiedzialnej komórki
       i jej zastępcy, a także zastępcy SAMEJ komórki, gdy nie ma ona kierownika
       (mogą działać — `is_superior_for` z include_self),
     - akceptacja wyższa: kierownik (odpowiedzialny) komórki nadrzędnej, jego
-      zastępcy oraz zastępcy samej komórki nadrzędnej.
+      zastępcy oraz zastępcy samej komórki nadrzędnej — bez kierownika
+      i zastępców samej komórki (wyjątek: dyrektor jednostki) i bez pracownika,
+      którego wniosek dotyczy (`request`).
     Gdy nikogo takiego nie ma (komórka najwyższego poziomu, łańcuch bez
     kierownika) — dyrektor jednostki, który i tak może wykonać ten krok.
+    Akceptacja wyższa wniosku „dla siebie”, gdy poza pracownikiem nie ma
+    żadnego przełożonego — superadmin (`_superadmin_fallback`).
     """
+    return _stage_actor_info(session, node, dept, request)[0]
+
+
+def _stage_actor_info(session: Session, node: dict, dept: Optional[Department],
+                      request: Optional[AccessRequest] = None
+                      ) -> tuple[list[int], bool]:
+    """(adresaci kroku jak w `_stage_actor_ids`, czy to rezerwa „superadmin”)."""
     ntype = node["type"]
     if ntype in ("manager_approve", "select_permissions"):
         own = dept
     elif ntype == "higher_manager_approve":
         own = session.get(Department, dept.parent_dept_id) if dept and dept.parent_dept_id else None
     else:
-        return []
+        return [], False
 
     resp = _responsible_dept(session, own)
     ids: list[int] = []
@@ -1301,17 +1412,30 @@ def _stage_actor_ids(session: Session, node: dict,
         for uid in _deputy_ids(session, own):
             _add(uid)
     director = _unit_director_id(session, dept)
-    if ntype == "higher_manager_approve" and dept is not None:
-        # Kierownik / zastępca samej komórki nie wykona akceptacji wyższej
-        # (patrz `can_act`) — nie wysyłamy mu „czeka na Ciebie”, nawet gdy jest
-        # też zastępcą komórki nadrzędnej. Wyjątek: dyrektor jednostki.
-        own_circle = set(_deputy_ids(session, dept))
-        if dept.manager_user_id:
-            own_circle.add(dept.manager_user_id)
-        ids = [uid for uid in ids if uid not in own_circle or uid == director]
-    if not ids:
+    worker_id = getattr(request, "worker_user_id", None) if request is not None else None
+    own_circle: set[int] = set()
+    if ntype == "higher_manager_approve":
+        if dept is not None:
+            # Kierownik / zastępca samej komórki nie wykona akceptacji wyższej
+            # (patrz `can_act`) — nie wysyłamy mu „czeka na Ciebie”, nawet gdy
+            # jest też zastępcą komórki nadrzędnej. Wyjątek: dyrektor jednostki.
+            own_circle = set(_deputy_ids(session, dept))
+            if dept.manager_user_id:
+                own_circle.add(dept.manager_user_id)
+            ids = [uid for uid in ids if uid not in own_circle or uid == director]
+        if worker_id:
+            # Pracownik nie zatwierdza wniosku, który dotyczy jego samego.
+            ids = [uid for uid in ids if uid != worker_id]
+    if not ids and not (ntype == "higher_manager_approve" and director == worker_id):
         _add(director)
-    return ids
+    if (not ids and ntype == "higher_manager_approve" and worker_id
+            and (worker_id in own_circle or worker_id == director)):
+        # Wniosek „dla siebie” kierownika, nad którym w strukturze nie ma nikogo
+        # innego (np. dyrektor jednostki kierujący komórką) — zatwierdzić może
+        # tylko superadmin.
+        from services.permissions import users_with_role
+        return [u.id for u in users_with_role(session, "superadmin")], True
+    return ids, False
 
 
 def _addressee_for_node(session: Session, node: dict, request: AccessRequest,
@@ -1329,7 +1453,14 @@ def _addressee_for_node(session: Session, node: dict, request: AccessRequest,
         return []
     skip = {x for x in (exclude_ids or ()) if x}
     emails: list[str] = []
-    for uid in _stage_actor_ids(session, node, dept):
+    # Etap kierownika komórki przejęty przez przełożonego (przejęcie wciąż
+    # ważne) — krok wykona wyłącznie przejmujący; kierownik komórki i zastępcy
+    # nie mogą działać, więc nie dostają „czeka na Ciebie”.
+    taker_id = (effective_taker_id(session, request, dept)
+                if node["type"] in MANAGER_STAGE_TYPES
+                and is_manager_stage(session, node["type"], dept) else None)
+    candidates = [taker_id] if taker_id else _stage_actor_ids(session, node, dept, request)
+    for uid in candidates:
         if uid in skip:
             continue
         u = session.get(User, uid)
@@ -1366,10 +1497,10 @@ def waiting_for_label(session: Session, node: Optional[dict], request: AccessReq
         who = request.taken_over_by_name or _person_name(session, taker_id)
         if who:
             return f"{who} (przełożony — przejął wniosek)"
-    if ntype in ("manager_approve", "select_permissions", "higher_manager_approve"):
-        higher = ntype == "higher_manager_approve"
-        own = (session.get(Department, dept.parent_dept_id)
-               if higher and dept and dept.parent_dept_id else (None if higher else dept))
+    if ntype == "higher_manager_approve":
+        return _higher_waiting_label(session, node, request, dept)
+    if ntype in ("manager_approve", "select_permissions"):
+        own = dept
         resp = _responsible_dept(session, own)
         # Komórka bez (własnego) kierownika, ale z zastępcą — to on jest
         # najbliżej i dostaje powiadomienie (kierownik wyżej też może działać).
@@ -1377,23 +1508,52 @@ def waiting_for_label(session: Session, node: Optional[dict], request: AccessReq
             dep_names = [n for n in (_person_name(session, uid)
                                      for uid in _deputy_ids(session, own)) if n]
             if dep_names:
-                return (("kierownik nadrzędny: " if higher else "")
-                        + f"{', '.join(dep_names)} (zastępca kierownika {own.name})")
+                return f"{', '.join(dep_names)} (zastępca kierownika {own.name})"
         name = _person_name(session, resp.manager_user_id) if resp else None
         if name:
-            return (f"kierownik nadrzędny: {name} ({resp.name})" if higher
-                    else f"{name} (kierownik {resp.name})")
+            return f"{name} (kierownik {resp.name})"
         director = _unit_director_id(session, dept)
         dname = _person_name(session, director)
         if dname:
             unit = session.get(Unit, dept.unit_id) if dept else None
             return f"dyrektor jednostki: {dname}" + (f" ({unit.name})" if unit else "")
-        return ("kierownik nadrzędny (nieprzypisany)" if higher
-                else "kierownik komórki (nieprzypisany)")
+        return "kierownik komórki (nieprzypisany)"
     if ntype == "it_execute":
         name = _person_name(session, getattr(request, "assigned_to_user_id", None))
         return f"IT: {name}" if name else "Biuro Informatyki (IT)"
     return node.get("label") or ntype
+
+
+def _higher_waiting_label(session: Session, node: dict, request: AccessRequest,
+                          dept: Optional[Department]) -> str:
+    """„Czeka na” przy akceptacji wyższej — spójnie z adresatami powiadomień
+    (`_stage_actor_info`): bez kierownika i zastępców samej komórki (poza
+    dyrektorem jednostki) i bez pracownika, którego wniosek dotyczy."""
+    from models import Unit
+    ids, superadmin = _stage_actor_info(session, node, dept, request)
+    if superadmin:
+        return ("superadmin — poza pracownikiem, którego dotyczy wniosek, nie ma "
+                "przełożonego, który mógłby go zatwierdzić")
+    if not ids:
+        return "kierownik nadrzędny (nieprzypisany)"
+    parent = (session.get(Department, dept.parent_dept_id)
+              if dept and dept.parent_dept_id else None)
+    resp = _responsible_dept(session, parent)
+    if resp and resp.manager_user_id in ids:
+        return f"kierownik nadrzędny: {_person_name(session, resp.manager_user_id)} ({resp.name})"
+    if parent is not None and parent is not resp:
+        dep_names = [n for n in (_person_name(session, uid)
+                                 for uid in _deputy_ids(session, parent) if uid in ids) if n]
+        if dep_names:
+            return (f"kierownik nadrzędny: {', '.join(dep_names)} "
+                    f"(zastępca kierownika {parent.name})")
+    director = _unit_director_id(session, dept)
+    if ids == [director]:
+        unit = session.get(Unit, dept.unit_id) if dept else None
+        return (f"dyrektor jednostki: {_person_name(session, director)}"
+                + (f" ({unit.name})" if unit else ""))
+    names = [n for n in (_person_name(session, uid) for uid in ids) if n]
+    return "kierownik nadrzędny: " + ", ".join(names)
 
 
 def current_step_since(session: Session, instance: WorkflowInstance) -> Optional[datetime]:

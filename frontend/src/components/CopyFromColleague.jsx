@@ -3,6 +3,7 @@ import { Copy, Search, X } from 'lucide-react'
 import { listMyWorkers, userPermissions, errorMessage } from '../api'
 import { toast } from './ui/feedback'
 import useDialog from './ui/useDialog'
+import { ErrorAlert } from './ui/LoadState'
 
 /**
  * v3.1 — „Skopiuj uprawnienia od współpracownika”: kierownik wybiera osobę
@@ -121,7 +122,7 @@ export default function CopyFromColleague({ excludeUserId, onCopy, disabled }) {
                      onChange={e => setQ(e.target.value)} style={{ paddingLeft: 34, minHeight: 44 }} />
             </div>
             <div style={{ padding: '10px 20px 20px', overflowY: 'auto' }}>
-              {err && <div className="alert alert--error" style={{ marginBottom: 8 }}>{err}</div>}
+              <ErrorAlert style={{ marginBottom: 8 }}>{err}</ErrorAlert>
               {workers === null ? (
                 <div style={{ fontSize: 14, color: 'var(--color-text-muted)' }}>Ładowanie…</div>
               ) : list.length === 0 ? (

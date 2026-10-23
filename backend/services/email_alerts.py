@@ -258,3 +258,16 @@ def notify_request_taken_over(to_address: str, request_id: int, worker_name: str
         "dept_name": dept_name or "", "taker_name": taker_name,
         "request_url": request_url(request_id),
     }, from_name=from_name, from_email=from_email)
+
+
+def notify_take_over_released(to_address: str, request_id: int, worker_name: str,
+                              dept_name: str, released_by_name: str,
+                              from_name: str | None = None,
+                              from_email: str | None = None) -> None:
+    """Superadmin zwolnił („Oddaj”) cudze przejęcie wniosku — informacja dla
+    dotychczasowego przejmującego, że krok wraca do kierownika komórki."""
+    _send_event("request_take_over_released", to_address, {
+        "request_id": request_id, "worker_name": worker_name,
+        "dept_name": dept_name or "", "released_by_name": released_by_name,
+        "request_url": request_url(request_id),
+    }, from_name=from_name, from_email=from_email)

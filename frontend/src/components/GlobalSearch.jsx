@@ -239,7 +239,7 @@ export default function GlobalSearch() {
                       style={{ display: 'flex', alignItems: 'center', gap: 12, minHeight: 52, padding: '6px 12px',
                                borderRadius: 8, cursor: 'pointer',
                                background: sel ? 'var(--bg-secondary)' : 'transparent',
-                               outline: sel ? '2px solid var(--color-gold)' : 'none', outlineOffset: -2 }}>
+                               outline: sel ? '2px solid var(--color-focus-ring)' : 'none', outlineOffset: -2 }}>
                     <span aria-hidden="true" style={{ width: 32, height: 32, flexShrink: 0, borderRadius: 8,
                           display: 'grid', placeItems: 'center', background: 'var(--bg-secondary)', color: 'var(--color-heading)' }}>
                       <Icon size={16} />
@@ -294,6 +294,9 @@ const SEARCH_CSS = `
 .szup-search-btn__kbd {
   font: 600 11px var(--font-mono); padding: 2px 6px; border-radius: 4px;
   border: 1px solid var(--color-border); background: var(--bg-secondary); color: var(--color-text-muted);
+}
+@media (max-width: 1200px) {
+  .szup-search-btn { min-width: 150px; }
 }
 @media (max-width: 720px) {
   .szup-search-btn { min-width: 0; }

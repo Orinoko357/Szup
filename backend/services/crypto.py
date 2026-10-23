@@ -12,6 +12,21 @@ _mf: MultiFernet | None = None
 _KEY_FILE = Path(os.getenv("SZUP_DATA_DIR", "/opt/szup/data")) / "secret.key"
 
 
+def _create_key_file() -> bytes:
+    """Utwórz plik klucza od razu z prawami 0600 (`os.open` z trybem) — bez okna,
+    w którym klucz leży na dysku z prawami domyślnymi, zanim zrobimy chmod.
+    Gdy inny proces utworzył plik w międzyczasie (O_EXCL), używamy jego klucza."""
+    k = Fernet.generate_key()
+    _KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(_KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return _KEY_FILE.read_bytes().strip()
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(k)
+    return k
+
+
 def _load_keys() -> list[bytes]:
     keys: list[bytes] = []
     env_key = os.getenv("SZUP_SECRET_KEY")
@@ -21,11 +36,7 @@ def _load_keys() -> list[bytes]:
         if _KEY_FILE.exists():
             keys.append(_KEY_FILE.read_bytes().strip())
         else:
-            k = Fernet.generate_key()
-            _KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
-            _KEY_FILE.write_bytes(k)
-            _KEY_FILE.chmod(0o600)
-            keys.append(k)
+            keys.append(_create_key_file())
 
     old = os.getenv("SZUP_SECRET_KEY_OLD", "").strip()
     if old:

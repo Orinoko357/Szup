@@ -38,8 +38,8 @@ def list_audit(
     until: Optional[datetime] = None,
     username: Optional[str] = None,
     action: Optional[str] = None,
-    limit: int = Query(500, le=5000),
-    offset: int = 0,
+    limit: int = Query(500, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
     _: User = Depends(require_admin),
     session: Session = Depends(get_session),
 ):

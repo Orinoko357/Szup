@@ -9,6 +9,7 @@ import {
  errorMessage} from '../api'
 import { toast, ask } from '../components/ui/feedback'
 import Field from '../components/ui/Field'
+import { ErrorAlert, LoadError } from '../components/ui/LoadState'
 
 
 const ICON_MAP = {
@@ -34,7 +35,7 @@ export default function RequestTypes() {
         listWorkflowTemplates({ is_active: true }),
       ])
       setItems(r.data); setTemplates(t.data)
-    } catch (ex) { setErr(errorMessage(ex, 'Błąd ładowania')) }
+    } catch (ex) { setErr(errorMessage(ex, 'Nie udało się wczytać typów wniosków')); setItems([]) }
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
@@ -52,13 +53,14 @@ export default function RequestTypes() {
           <button className="btn btn--ghost" onClick={load} disabled={loading}>
             <RefreshCw size={14} /> Odśwież
           </button>
-          <button className="btn btn--action" onClick={() => setEditing('new')}>
+          <button className="btn btn--action" onClick={() => setEditing('new')} disabled={!!err}
+                  title={err ? 'Najpierw wczytaj listę typów (Spróbuj ponownie) — inaczej łatwo o duplikat' : undefined}>
             <Plus size={14} /> Nowy typ
           </button>
         </div>
       </div>
 
-      {err && <div className="alert alert--error mb-4">{err}</div>}
+      {err && <LoadError message={err} onRetry={load} busy={loading} style={{ marginBottom: 16 }} />}
 
       {editing === 'new' && (
         <TypeForm templates={templates}
@@ -75,7 +77,7 @@ export default function RequestTypes() {
           </tr></thead>
           <tbody>
             {loading && <tr><td colSpan={7} style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</td></tr>}
-            {!loading && items.length === 0 && editing !== 'new' && (
+            {!loading && !err && items.length === 0 && editing !== 'new' && (
               <tr><td colSpan={7} style={{ color: 'var(--color-text-muted)', padding: 16 }}>
                 <ListFilter size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
                 Brak typów wniosków. Najpierw utwórz szablon obiegu (Administracja → Szablony obiegu), potem dodaj typ przyciskiem „Nowy typ”.
@@ -207,7 +209,7 @@ function TypeForm({ type, templates, onCancel, onSaved }) {
         <textarea className="form-control" rows={2} style={{ minHeight: 70, fontSize: 14, fontWeight: 400, letterSpacing: 0, textTransform: 'none' }}
                   value={form.description} onChange={e => setF('description', e.target.value)} />
       </Field>
-      {err && <div className="alert alert--error">{err}</div>}
+      <ErrorAlert>{err}</ErrorAlert>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
         <label className="form-check" style={{ flex: '1 1 360px', fontSize: 14 }}>
           <input type="checkbox" checked={form.is_active} onChange={e => setF('is_active', e.target.checked)}

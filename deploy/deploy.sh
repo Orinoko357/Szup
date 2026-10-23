@@ -60,6 +60,13 @@ canon_path() {
 
 DATA_DIR="$(service_setting SZUP_DATA_DIR)"
 [ -n "$DATA_DIR" ] || DATA_DIR="$APP_DIR/data"
+# Ścieżkę względną usługa liczy od WorkingDirectory (= $APP_DIR/backend) —
+# tak samo jak względny SZUP_DB_URL niżej. Liczona od katalogu repo nie
+# wpadłaby w kontrolę „dane w backend/” i dawała mylące „nie ma bazy”.
+case "$DATA_DIR" in
+    /*) ;;
+    *)  DATA_DIR="$APP_DIR/backend/$DATA_DIR" ;;
+esac
 
 # rsync --delete do $APP_DIR/backend skasowałby katalog danych, gdyby leżał
 # w jego wnętrzu — wtedy nie wdrażamy wcale.
@@ -185,17 +192,36 @@ else
     echo ""
 fi
 
+# Prawa do danych i logów: tylko root (instalacje sprzed UMask=0077 w szup.service
+# mają pliki 0644 — czytelne dla każdego konta lokalnego, np. www-data).
+for d in "$DATA_DIR" "$APP_DIR/logs"; do
+    if [ -d "$d" ]; then chmod -R go-rwx "$d"; fi
+done
+UNIT_FILE="$(systemctl show "$SERVICE" -p FragmentPath --value 2>/dev/null || true)"
+if [ -n "$UNIT_FILE" ] && [ -r "$UNIT_FILE" ] && ! grep -q '^UMask=' "$UNIT_FILE"; then
+    echo "UWAGA: $UNIT_FILE nie ma UMask=0077 — skopiuj deploy/szup.service"
+    echo "       do /etc/systemd/system/ i wykonaj: systemctl daemon-reload"
+fi
+
 # 1. Aktualizacja zależności Python (tylko produkcyjne — bez narzędzi testowych)
+#    `pip install -r` podnosi każdy pakiet, którego zainstalowana wersja nie
+#    spełnia zakresu z requirements.txt (np. nowej dolnej granicy po poprawce
+#    bezpieczeństwa), a pozostałych nie rusza. --upgrade-strategy only-if-needed
+#    zapisuje to jawnie także dla zależności pośrednich.
 echo "[1/3] Aktualizacja zależności Python..."
-"$VENV/bin/pip" install --quiet -r backend/requirements.txt
+"$VENV/bin/pip" install --quiet --upgrade-strategy only-if-needed -r backend/requirements.txt
+"$VENV/bin/pip" check >/dev/null \
+    || echo "UWAGA: pip check zgłasza niespójne zależności w $VENV — sprawdź: $VENV/bin/pip check"
 
 # 2. Kopiowanie backendu — bez testów, lokalnego venv i plików kompilacji.
 #    --delete-excluded usuwa też te katalogi z poprzednich wdrożeń.
 #    Dane i sekrety (data/, .env*, *.db*, *.key) są wykluczone ORAZ chronione
 #    (P = protect): nigdy nie trafiają tu z checkoutu (np. lokalna baza
 #    deweloperska) i nigdy nie są kasowane po stronie serwera przez --delete.
+#    Kod należy do roota (--chown) z prawami 755/644: konto, do którego należy
+#    checkout, nie może potem podmienić kodu uruchamianego przez usługę.
 echo "[2/3] Kopiowanie backendu..."
-rsync -a --delete --delete-excluded \
+rsync -a --delete --delete-excluded --chown=root:root --chmod=D755,F644 \
     --filter 'P /data/' --filter 'P .env*' --filter 'P *.db*' --filter 'P *.key' \
     --exclude '/data/' --exclude '.env*' --exclude '*.db*' --exclude '*.key' \
     --exclude '.venv/' --exclude 'venv/' --exclude '__pycache__/' --exclude '*.pyc' \
@@ -208,15 +234,23 @@ if [ ! -d "frontend/dist" ]; then
     echo "BŁĄD: Brak katalogu frontend/dist — zbuduj frontend lokalnie: cd frontend && npm run build"
     exit 1
 fi
-rsync -a --delete frontend/dist/ "$WEBROOT/"
+rsync -a --delete --chown=root:root --chmod=D755,F644 frontend/dist/ "$WEBROOT/"
 
 # Restart usługi i sprawdzenie, czy faktycznie odpowiada (migracje idą przy starcie).
+# Nieudany restart nie kończy skryptu od razu (set -e) — niżej sprawdzenie
+# usługi i komunikat ze ścieżką kopii bazy.
 echo "Restart usługi $SERVICE..."
-systemctl restart "$SERVICE"
+RESTART_OK=1
+systemctl restart "$SERVICE" || RESTART_OK=0
+[ "$RESTART_OK" = "1" ] || echo "UWAGA: systemctl restart $SERVICE zakończył się błędem."
 
 if [ "$HAVE_CURL" != "1" ]; then
     echo "UWAGA: brak curl — pomijam sprawdzenie usługi. Sprawdź ręcznie:"
     echo "       systemctl status $SERVICE; tail -n 40 $APP_DIR/logs/app.log"
+    if [ "$RESTART_OK" != "1" ]; then
+        echo "Kopia bazy sprzed wdrożenia: ${BACKUP_FILE:-brak} (przywracanie: README, sekcja Przywracanie kopii)."
+        exit 1
+    fi
 else
     EXPECTED_VERSION="$(sed -n 's/^[[:space:]]*version="\([^"]*\)".*/\1/p' backend/main.py | head -n 1)"
     HEALTH=""

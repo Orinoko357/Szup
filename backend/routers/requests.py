@@ -29,6 +29,10 @@ from services.permissions import (
 
 _log = logging.getLogger("szup.requests")
 
+# Wpis audytu nie może wywrócić akcji użytkownika, ale jego utrata musi być
+# widoczna w logu (NIS2) — zamiast cichego `pass`.
+AUDIT_WRITE_FAILED_MSG = "Nie udało się zapisać zdarzenia w dzienniku audytu"
+
 
 # ---------------------------------------------------------------------------
 # Helpers — role i widoczność
@@ -37,6 +41,23 @@ _log = logging.getLogger("szup.requests")
 # Komunikat, gdy krok wykonała już inna osoba (np. przełożony) — 409.
 STEP_ALREADY_DONE_MSG = ("Ten krok został już wykonany przez inną osobę (np. przełożonego) "
                          "albo wniosek jest zakończony. Odśwież wniosek.")
+
+
+# Największy klucz INTEGER w SQLite (int64). Większy identyfikator z adresu
+# nie istnieje — 404 zamiast błędu 500 (OverflowError sterownika).
+_MAX_DB_INT = 2 ** 63 - 1
+
+
+def _db_int_ok(value: int) -> bool:
+    return -_MAX_DB_INT - 1 <= value <= _MAX_DB_INT
+
+
+def _load_request(session: Session, request_id: int) -> AccessRequest:
+    """Wniosek o podanym id albo 404 (także dla id spoza zakresu bazy)."""
+    r = session.get(AccessRequest, request_id) if _db_int_ok(request_id) else None
+    if not r:
+        raise HTTPException(404, "Wniosek nie istnieje")
+    return r
 
 
 def _managed_dept_ids(session: Session, user: User) -> tuple[list[int], list[int]]:
@@ -286,6 +307,11 @@ class WorkflowActionIn(BaseModel):
     # front musi świadomie potwierdzić „wniosek bez pozycji" (allow_empty=true).
     allow_empty: bool = False
     expected_node_id: Optional[str] = None  # H4 — optymistyczna kontrola współbieżności
+    # Akcja "execute" wniosku nadającego uprawnienia pracownikowi, którego
+    # stosunek pracy ustał po złożeniu wniosku (zrealizowany wniosek o ustanie)
+    # albo którego konto jest nieaktywne — wymaga świadomego potwierdzenia
+    # (bez niego 409 z kodem WORKER_TERMINATED).
+    confirm_after_termination: bool = False
 
 
 class LinkWorker(BaseModel):
@@ -542,7 +568,7 @@ def _attach_node_info(session: Session, out: list[dict], rows: list, user: User)
     Przejęcie, które wygasło (przejmujący nieaktywny albo nie jest już
     przełożonym), na etapie kierownika jest pokazywane jako brak przejęcia."""
     from services.workflow import (
-        can_act, is_manager_stage, can_take_over, can_release,
+        MANAGER_STAGE_TYPES, can_act, is_manager_stage, can_take_over, can_release,
         effective_taker_id, landing_node_type, request_workflow,
     )
     by_id = {r.id: r for r in rows}
@@ -559,7 +585,9 @@ def _attach_node_info(session: Session, out: list[dict], rows: list, user: User)
             act = bool(allowed)
             stage = is_manager_stage(session, node_type, dept)
             try:
-                next_type = landing_node_type(session, inst, r, "approve")
+                # Z perspektywy oglądającego: wniosek „dla siebie” trafia do
+                # akceptacji przełożonego („Wyślij do akceptacji”), nie do IT.
+                next_type = landing_node_type(session, inst, r, "approve", actor_user=user)
             except Exception:   # podpowiedź dla etykiety — nie może wywrócić listy
                 next_type = None
             if stage:
@@ -573,7 +601,10 @@ def _attach_node_info(session: Session, out: list[dict], rows: list, user: User)
         row["next_node_type"] = next_type
         row["can_act"] = act
         row["manager_stage"] = stage
-        row["is_draft"] = bool(stage and getattr(r, "draft_saved_at", None))
+        # Wersja robocza na etapie kierownika — także w komórce, która straciła
+        # (albo nie ma) własnego kierownika (wtedy `manager_stage` = False).
+        row["is_draft"] = bool(node_type in MANAGER_STAGE_TYPES
+                               and getattr(r, "draft_saved_at", None))
         row["can_take_over"] = take
         row["can_release"] = release
 
@@ -655,6 +686,55 @@ def _resolve_or_create_worker(
     return new_user
 
 
+def _check_worker_link(session: Session, r: AccessRequest, ad_username: Optional[str],
+                       current_user: User) -> Optional[User]:
+    """Reguły dowiązania konta AD do wniosku — wspólne dla `link-worker`
+    i realizacji IT (`execute` z `ad_username`). Zwraca istniejące konto
+    wskazane loginem albo None (zostanie założone nowe konto-widmo).
+
+    - nie wolno dowiązać wniosku do WŁASNEGO konta (403) — uprawnienia nadane
+      na swoje konto musi potwierdzić inna osoba z IT,
+    - wniosek już dowiązany: login musi wskazywać TO SAMO konto (409) —
+      przepięcie przeniosłoby nadanie albo odebranie na inną osobę,
+    - istniejące konto musi należeć do komórki wniosku albo nie mieć komórki (409).
+    Tylko odczyt; nic nie zapisuje."""
+    from services.ldap_service import normalize_login, find_user_by_login
+    uname = normalize_login(ad_username or "")
+    existing = find_user_by_login(session, uname) if uname else None
+    if existing and existing.id == current_user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+            "Nie możesz dowiązać wniosku do własnego konta — uprawnienia nadane "
+            "na Twoje konto musi potwierdzić inna osoba z IT.")
+    if r.worker_user_id:
+        if existing is None or existing.id != r.worker_user_id:
+            linked = session.get(User, r.worker_user_id)
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                f'Wniosek jest już dowiązany do konta „{linked.username if linked else r.worker_user_id}” '
+                f'— login AD musi wskazywać to samo konto. Przepięcie wniosku '
+                f'przeniosłoby nadanie albo odebranie uprawnień na inną osobę.')
+        return existing
+    if existing and existing.department_id and existing.department_id != r.department_id:
+        here = session.get(Department, existing.department_id)
+        raise HTTPException(status.HTTP_409_CONFLICT,
+            f'Konto „{existing.username}” należy do innej komórki '
+            f'(„{here.name if here else existing.department_id}”) niż wniosek — '
+            f'dowiązanie przepisałoby uprawnienia innej osobie. Sprawdź login '
+            f'pracownika albo najpierw popraw jego komórkę w kartotece.')
+    return existing
+
+
+def _link_worker_account(session: Session, r: AccessRequest, ad_username: Optional[str],
+                         current_user: User) -> tuple[User, Optional[User]]:
+    """Sprawdź reguły (`_check_worker_link`) i znajdź albo załóż konto
+    pracownika. Istniejącemu kontu NIE uzupełniamy komórki, a nowe konto nie
+    dostaje komórki kadrowej (przynależność do niej daje zdolność HR).
+    Zwraca (konto pracownika, istniejące konto albo None). Tylko flush."""
+    existing = _check_worker_link(session, r, ad_username, current_user)
+    worker = _resolve_or_create_worker(session, ad_username, r, fill_department=False,
+                                       ghost_hr_department=False)
+    return worker, existing
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -663,8 +743,8 @@ def _resolve_or_create_worker(
 def list_requests(
     status_filter: Optional[RequestStatus] = Query(None, alias="status"),
     scope: Optional[str] = Query(None, description="manager|it — wymuś perspektywę roli"),
-    limit: int = Query(200, le=1000),
-    offset: int = 0,
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0, le=_MAX_DB_INT),
     active: bool = Query(False, description="true = tylko wnioski w toku (bez zakończonych/odrzuconych)"),
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
@@ -854,9 +934,7 @@ def get_request(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    r = session.get(AccessRequest, request_id)
-    if not r:
-        raise HTTPException(404, "Wniosek nie istnieje")
+    r = _load_request(session, request_id)
     _check_access(current_user, r, session)
     out = _serialize_request(r, _get_items(session, r.id), session)
     _attach_node_info(session, [out], [r], current_user)
@@ -906,6 +984,14 @@ def create_request(
     tpl = session.get(WorkflowTemplate, rtype.workflow_template_id)
     if not tpl or not tpl.is_active:
         raise HTTPException(400, "Szablon obiegu dla tego typu jest niedostępny")
+    # Szablon bez etapu kierownika albo bez realizacji IT (np. wpisany wprost
+    # do bazy przed walidacją) nie może przyjmować nowych wniosków.
+    from services.workflow import WorkflowGraphError, check_request_graph_json
+    try:
+        check_request_graph_json(tpl.graph_json)
+    except WorkflowGraphError as exc:
+        raise HTTPException(400, f"Szablon obiegu tego typu wniosku jest niepoprawny: {exc} "
+                                 f"Zgłoś to administratorowi.")
 
     # "grant" — nadanie (nowy pracownik), "revoke" — odebranie (ustanie),
     # "change" — zmiana (stan docelowy: część pozycji nadaje, część odbiera).
@@ -921,6 +1007,20 @@ def create_request(
         if wu.department_id != data.department_id:
             raise HTTPException(400,
                 "Wybrany pracownik nie należy do wskazanego wydziału")
+    if kind == "revoke":
+        # Jeden wniosek o ustanie stosunku pracy na pracownika naraz — drugi
+        # równoległy dublowałby obieg i mógł zamknąć się z inną listą pozycji.
+        pending = session.exec(
+            select(AccessRequest)
+            .where(AccessRequest.worker_user_id == worker_user_id)
+            .where(AccessRequest.kind == "revoke")
+            .where(col(AccessRequest.status).notin_(
+                [RequestStatus.completed, RequestStatus.rejected]))
+        ).first()
+        if pending:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                f"Dla tego pracownika trwa już wniosek o odebranie uprawnień "
+                f"(#{pending.id}). Dokończ go albo odrzuć, zanim złożysz kolejny.")
 
     # M3 — scoping wnioskodawcy:
     #  - kierownik (bez HR) może składać dla komórek ze SWOJEGO zakresu — ten sam
@@ -984,6 +1084,16 @@ def create_request(
         session.add(req)
         session.flush()   # nadaje req.id bez zatwierdzania transakcji
 
+        # Ustanie stosunku pracy bez wskazanych pozycji — wniosek obejmuje
+        # wszystkie bieżące uprawnienia pracownika (do odebrania); kierownik
+        # może listę zawęzić przy wyborze uprawnień.
+        if kind == "revoke" and not data.items and worker_user_id:
+            for p in _worker_permissions(session, worker_user_id):
+                session.add(RequestItem(
+                    request_id=req.id, system_id=p["system_id"],
+                    permission_id=p["permission_id"], kind="revoke"))
+            session.flush()
+
         # Ewentualne uprawnienia od razu z wniosku (np. HR podpowiada,
         # kierownik ma je do potwierdzenia w kroku select_permissions).
         if data.items:
@@ -1000,6 +1110,9 @@ def create_request(
 
         start_instance(session, req, tpl)
         session.flush()
+        # Składający, który sam może działać na pierwszym kroku (np. kierownik
+        # komórki), nie dostaje maila „czeka na Ciebie” o własnym wniosku.
+        _discard_own_first_step_mail(session, req, dept, current_user)
 
         if superior_creator:
             _finish_creation_take_over(session, req, current_user)
@@ -1028,15 +1141,30 @@ def create_request(
     return out
 
 
-def _discard_stage_mail(session: Session, request_id: int, node_type: str) -> None:
+def _discard_stage_mail(session: Session, request_id: int, node_type: str,
+                        to_address: Optional[str] = None) -> None:
     """Usuń z kolejki po-commitowej e-mail „wniosek czeka na Ciebie” dla
-    węzła `node_type` — gdy krok wykonał/przejął sam składający."""
+    węzła `node_type` — gdy krok wykonał/przejął sam składający.
+    `to_address` — tylko wiadomość do tego adresata (pozostali ją dostaną)."""
     from services.after_commit import discard_jobs
     from services.email_alerts import notify_workflow_stage
     discard_jobs(session, lambda fn, kw: (
         fn is notify_workflow_stage
         and kw.get("request_id") == request_id
-        and kw.get("node_type") == node_type))
+        and kw.get("node_type") == node_type
+        and (to_address is None or kw.get("to_address") == to_address)))
+
+
+def _discard_own_first_step_mail(session: Session, req: AccessRequest,
+                                 dept: Optional[Department], user: User) -> None:
+    """Po starcie obiegu: składający, który może działać na pierwszym kroku,
+    nie dostaje powiadomienia o własnym wniosku (pozostali adresaci tak)."""
+    from services.workflow import can_act, request_workflow
+    if not user.email:
+        return
+    _inst, node = request_workflow(session, req)
+    if node and can_act(node, req, dept, user, session)[0]:
+        _discard_stage_mail(session, req.id, node.get("type"), to_address=user.email)
 
 
 def _finish_creation_take_over(session: Session, req: AccessRequest, user: User) -> None:
@@ -1069,7 +1197,7 @@ def _finish_creation_take_over(session: Session, req: AccessRequest, user: User)
             commit=False,
         )
     except Exception:
-        pass
+        _log.exception(AUDIT_WRITE_FAILED_MSG)
     session.flush()
 
 
@@ -1088,6 +1216,11 @@ def _auto_manager_steps(session: Session, req: AccessRequest, dept: Optional[Dep
         inst, node = request_workflow(session, req)
         ntype = (node or {}).get("type")
         if ntype not in MANAGER_STAGE_TYPES or not can_act(node, req, dept, user, session)[0]:
+            return
+        action = "select" if ntype == "select_permissions" else "approve"
+        if _self_request_blocked(session, inst, req, user, action):
+            # Wniosek „dla siebie” w obiegu bez akceptacji przełożonego — krok
+            # zostaje na etapie kierownika (przełożony może go przejąć).
             return
         if ntype == "select_permissions":
             action = "select"
@@ -1150,7 +1283,7 @@ def _save_initial_draft(session: Session, req: AccessRequest, dept: Optional[Dep
             commit=False,
         )
     except Exception:
-        pass
+        _log.exception(AUDIT_WRITE_FAILED_MSG)
     session.flush()
 
 
@@ -1179,9 +1312,7 @@ def assign_request(
     """
     from services.audit import record_event
 
-    r = session.get(AccessRequest, request_id)
-    if not r:
-        raise HTTPException(404, "Wniosek nie istnieje")
+    r = _load_request(session, request_id)
 
     is_it_manager = has_role(current_user, "manager") and has_role(current_user, "it_staff")
     if not is_it_manager:
@@ -1217,7 +1348,7 @@ def assign_request(
             commit=False,
         )
     except Exception:
-        pass
+        _log.exception(AUDIT_WRITE_FAILED_MSG)
     session.commit(); session.refresh(r)
     return _request_out(session, r, current_user)
 
@@ -1243,30 +1374,13 @@ def link_worker(
     zrealizowanego trafia do zdarzeń bezpieczeństwa (medium).
     """
     from services.audit import record_event
-    from services.ldap_service import normalize_login, find_user_by_login
 
-    r = session.get(AccessRequest, request_id)
-    if not r:
-        raise HTTPException(404, "Wniosek nie istnieje")
+    r = _load_request(session, request_id)
     _check_access(current_user, r, session)
     if r.worker_user_id:
         raise HTTPException(status.HTTP_409_CONFLICT,
             "Wniosek ma już dowiązane konto pracownika — dowiązania nie można zmienić.")
-    uname = normalize_login(data.ad_username or "")
-    existing = find_user_by_login(session, uname) if uname else None
-    if existing and existing.id == current_user.id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN,
-            "Nie możesz dowiązać wniosku do własnego konta — uprawnienia nadane "
-            "na Twoje konto musi potwierdzić inna osoba z IT.")
-    if existing and existing.department_id and existing.department_id != r.department_id:
-        here = session.get(Department, existing.department_id)
-        raise HTTPException(status.HTTP_409_CONFLICT,
-            f'Konto „{existing.username}” należy do innej komórki '
-            f'(„{here.name if here else existing.department_id}”) niż wniosek — '
-            f'dowiązanie przepisałoby uprawnienia innej osobie. Sprawdź login '
-            f'pracownika albo najpierw popraw jego komórkę w kartotece.')
-    worker = _resolve_or_create_worker(session, data.ad_username, r, fill_department=False,
-                                       ghost_hr_department=False)
+    worker, existing = _link_worker_account(session, r, data.ad_username, current_user)
     old_worker = r.worker_user_id
     r.worker_user_id = worker.id
     session.add(r)
@@ -1281,7 +1395,7 @@ def link_worker(
             commit=False,
         )
     except Exception:
-        pass
+        _log.exception(AUDIT_WRITE_FAILED_MSG)
     if r.status == RequestStatus.completed:
         # Zrealizowane uprawnienia trafiają w rejestrze na to konto — ślad
         # w zdarzeniach bezpieczeństwa (do przejrzenia przez superadmina).
@@ -1342,9 +1456,7 @@ def get_workflow_state(
     [{action: "draft"|"take_over"|"release", actor_name, at (ISO), note}]."""
     from services.workflow import instance_of, serialize_instance, serialize_request_events
 
-    r = session.get(AccessRequest, request_id)
-    if not r:
-        raise HTTPException(404, "Wniosek nie istnieje")
+    r = _load_request(session, request_id)
     _check_access(current_user, r, session)
 
     inst = instance_of(session, r)
@@ -1366,13 +1478,13 @@ def _enforce_declaration(session, inst, request, action, current_user, declarati
     """
     from datetime import datetime as _dt
     from services.workflow import landing_node_type, grants_permissions
-    from services.declarations import create_declaration
+    from services.declarations import create_declaration, validate_declaration
     from routers.settings import effective_declaration_text
     from services.audit import record_event
 
     if action not in ("select", "approve"):
         return payload
-    if landing_node_type(session, inst, request, action) != "it_execute":
+    if landing_node_type(session, inst, request, action, actor_user=current_user) != "it_execute":
         return payload
     if not grants_permissions(session, request):
         return payload
@@ -1388,6 +1500,11 @@ def _enforce_declaration(session, inst, request, action, current_user, declarati
                 "declaration_text": effective_declaration_text(session),
             },
         )
+
+    try:
+        validate_declaration(declaration.declared_by_name, declaration.declared_date)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
     approved_at = _dt.utcnow()
     text = effective_declaration_text(session)
@@ -1409,7 +1526,7 @@ def _enforce_declaration(session, inst, request, action, current_user, declarati
             commit=False,
         )
     except Exception:
-        pass
+        _log.exception(AUDIT_WRITE_FAILED_MSG)
     # Dane oświadczenia trafiają do podpisanego payloadu kroku obiegu (łańcuch SHA256).
     return {
         **(payload or {}),
@@ -1424,6 +1541,20 @@ def _select_payload(session: Session, r: AccessRequest, data: "WorkflowActionIn"
     uzupełnia koszyk). Każda pozycja niesie własny kierunek (grant/revoke) —
     stan docelowy. Zwraca payload kroku obiegu."""
     old = session.exec(select(RequestItem).where(RequestItem.request_id == r.id)).all()
+    # Ustanie stosunku pracy bez żadnej pozycji, choć pracownik nadal ma
+    # uprawnienia — zamknięcie takiego wniosku zostawiłoby mu cały dostęp.
+    # Wymagamy wskazania pozycji albo świadomego potwierdzenia (allow_empty,
+    # np. uprawnienia odebrano już poza systemem).
+    if (not data.items and not data.allow_empty
+            and (getattr(r, "kind", None) or "grant") == "revoke" and r.worker_user_id):
+        held = _worker_permissions(session, r.worker_user_id)
+        if held:
+            names = ", ".join(f'{p.get("system_name")} — {p.get("permission_name")}'
+                              for p in held[:5]) + (" …" if len(held) > 5 else "")
+            raise HTTPException(400,
+                "Wniosek o odebranie uprawnień nie zawiera żadnej pozycji, a pracownik "
+                f"nadal ma uprawnienia ({names}). Zaznacz uprawnienia do odebrania "
+                "albo potwierdź świadomie wniosek bez pozycji.")
     # Pusty wybór na wniosku z pozycjami (np. wpisanymi przez kadry) skasowałby
     # je po cichu — typowo, gdy front nie zdołał wczytać listy uprawnień.
     # Wymagamy świadomego potwierdzenia (allow_empty). To samo po zapisanej
@@ -1440,6 +1571,36 @@ def _select_payload(session: Session, r: AccessRequest, data: "WorkflowActionIn"
             "Wersja robocza nie zawiera żadnych uprawnień. Zaznacz uprawnienia "
             "albo potwierdź wysłanie wniosku bez pozycji.")
     return {"items": _replace_request_items(session, r, data.items)}
+
+
+def _worker_permissions(session: Session, worker_user_id: int) -> list[dict]:
+    """Bieżące (efektywne) uprawnienia pracownika — jak w „Moich uprawnieniach”."""
+    from routers.users import _effective_permissions
+    return list(_effective_permissions(session, worker_user_id).get("permissions") or [])
+
+
+def _terminated_since(session: Session, r: AccessRequest) -> Optional[str]:
+    """Powód, dla którego nadanie uprawnień z wniosku `r` wymaga potwierdzenia
+    (`confirm_after_termination`): konto pracownika jest nieaktywne albo po
+    złożeniu wniosku zrealizowano wniosek o ustanie stosunku pracy. None — brak."""
+    if not r.worker_user_id:
+        return None
+    wu = session.get(User, r.worker_user_id)
+    if wu is not None and not wu.is_active:
+        return "konto pracownika jest nieaktywne"
+    term = session.exec(
+        select(AccessRequest)
+        .where(AccessRequest.worker_user_id == r.worker_user_id)
+        .where(AccessRequest.kind == "revoke")
+        .where(AccessRequest.status == RequestStatus.completed)
+        .where(AccessRequest.id != r.id)
+        .where(col(AccessRequest.completed_at) >= r.created_at)
+        .order_by(col(AccessRequest.completed_at).desc())
+    ).first()
+    if term:
+        when = term.completed_at.strftime("%Y-%m-%d") if term.completed_at else ""
+        return f"po złożeniu wniosku zrealizowano wniosek o ustanie stosunku pracy #{term.id} ({when})"
+    return None
 
 
 def _add_it_items(session: Session, r: AccessRequest, data: "WorkflowActionIn",
@@ -1504,6 +1665,8 @@ def _apply_item_denials(session: Session, r: AccessRequest, denials: list,
     """Odmowa wskazanych pozycji przy akcji obiegu (kombinację akcja/węzeł
     sprawdza wołający). Odmowa wyklucza „zrealizowano” — czyścimy odhaczenie."""
     want = {d.item_id: ((d.comment or "").strip() or None) for d in denials}
+    if not all(_db_int_ok(k) for k in want):
+        raise HTTPException(400, "Część pozycji do odmowy nie należy do tego wniosku.")
     rows = session.exec(
         select(RequestItem).where(RequestItem.request_id == r.id)
         .where(col(RequestItem.id).in_(list(want.keys())))
@@ -1511,6 +1674,11 @@ def _apply_item_denials(session: Session, r: AccessRequest, denials: list,
     missing = set(want.keys()) - {x.id for x in rows}
     if missing:
         raise HTTPException(400, "Część pozycji do odmowy nie należy do tego wniosku.")
+    # Jak przy odmowie pojedynczej pozycji: odebranie samo w sobie nic nie
+    # nadaje, a jego odmowa po cichu zostawiłaby pracownikowi uprawnienie
+    # (np. przy ustaniu stosunku pracy).
+    if any((getattr(x, "kind", "grant") or "grant") == "revoke" for x in rows):
+        raise HTTPException(400, "Odmówić można tylko pozycji nadania uprawnienia.")
     for x in rows:
         x.denied = True
         x.deny_comment = want[x.id]
@@ -1543,6 +1711,60 @@ def _close_it_realization(session: Session, r: AccessRequest, user: User) -> Non
     session.flush()
 
 
+def _grants_undenied(session: Session, r: AccessRequest) -> bool:
+    """Czy wniosek nadaje co najmniej jedno uprawnienie (pozycja nadania,
+    której nie odmówiono)."""
+    return any((getattr(i, "kind", None) or "grant") == "grant" and not getattr(i, "denied", False)
+               for i in session.exec(select(RequestItem).where(RequestItem.request_id == r.id)).all())
+
+
+def _check_reject_allowed(session: Session, r: AccessRequest, ntype: Optional[str],
+                          comment: Optional[str]) -> None:
+    """Odrzucenie wniosku: obowiązkowe uzasadnienie (400) — wnioskodawca
+    i kadry muszą wiedzieć dlaczego. Na etapie realizacji IT nie można
+    odrzucić wniosku, którego część pozycji jest już odhaczona jako
+    zrealizowana (409) — w systemach nadano już te uprawnienia, a odrzucenie
+    zostawiłoby je poza rejestrem; należy dokończyć realizację z odmową
+    pozostałych pozycji."""
+    if not (comment or "").strip():
+        raise HTTPException(400, "Odrzucenie wniosku wymaga uzasadnienia — wpisz powód odrzucenia.")
+    if ntype == "it_execute" and session.exec(
+        select(RequestItem).where(RequestItem.request_id == r.id)
+        .where(col(RequestItem.fulfilled) == True)  # noqa: E712
+    ).first():
+        raise HTTPException(status.HTTP_409_CONFLICT,
+            "Nie można odrzucić wniosku — część pozycji została już zrealizowana. "
+            "Dokończ realizację z odmową pozostałych pozycji.")
+
+
+SELF_REQUEST_NO_SUPERIOR_MSG = (
+    "Wniosek dotyczy Ciebie, a obieg tego typu nie ma etapu akceptacji przełożonego — "
+    "wniosku „dla siebie” nie możesz wysłać do realizacji sam. Poproś przełożonego "
+    "o przejęcie wniosku.")
+
+
+def _self_request_blocked(session: Session, inst, r: AccessRequest, user: User,
+                          action: str) -> bool:
+    """Czy krok kierownika wykonywany przez pracownika, którego wniosek dotyczy,
+    ominąłby akceptację przełożonego (szablon bez `higher_manager_approve`)."""
+    from services.workflow import MANAGER_STAGE_TYPES, is_self_request, landing_node_type
+    if action not in ("select", "approve") or has_role(user, "superadmin"):
+        return False
+    if not is_self_request(r, user):
+        return False
+    landing = landing_node_type(session, inst, r, action, actor_user=user)
+    return landing not in ("higher_manager_approve", *MANAGER_STAGE_TYPES)
+
+
+def _check_self_request_route(session: Session, inst, r: AccessRequest, user: User,
+                              action: str) -> None:
+    """Rozdział obowiązków: wniosek „dla siebie” musi zatwierdzić przełożony
+    (silnik nie pomija wtedy akceptacji wyższej — `should_skip`). Gdy szablon
+    nie ma takiego etapu → 409."""
+    if _self_request_blocked(session, inst, r, user, action):
+        raise HTTPException(status.HTTP_409_CONFLICT, SELF_REQUEST_NO_SUPERIOR_MSG)
+
+
 def _ensure_taker_unchanged(session: Session, r: AccessRequest,
                             observed_taker: Optional[int]) -> None:
     """Wyścig kroku kierownika z przejęciem: zapis jest już w transakcji
@@ -1568,15 +1790,16 @@ def workflow_action(
 ):
     """Wykonuje akcję na aktualnym węźle obiegu. Silnik przechodzi dalej.
 
-    Kolejność: walidacja bez zmian w bazie → payload akcji (wybór pozycji /
-    pozycje dołożone przez IT, dowiązanie konta) → odmowy pozycji → zamknięcie
-    realizacji IT → oświadczenie → krok silnika → kontrola wyścigu z przejęciem
-    → commit. Wszystko w jednej transakcji."""
+    Kolejność: walidacja bez zmian w bazie (uprawnienie do kroku, uzasadnienie
+    odrzucenia, wniosek „dla siebie”) → payload akcji (wybór pozycji / pozycje
+    dołożone przez IT, dowiązanie konta) → odmowy pozycji → potwierdzenie
+    nadania po ustaniu stosunku pracy → zamknięcie realizacji IT → oświadczenie
+    → krok silnika → kontrola wyścigu z przejęciem → commit. Wszystko w jednej
+    transakcji."""
+    from services.audit import record_event
     from services.workflow import execute_action, instance_of, serialize_instance
 
-    r = session.get(AccessRequest, request_id)
-    if not r:
-        raise HTTPException(404, "Wniosek nie istnieje")
+    r = _load_request(session, request_id)
     _check_access(current_user, r, session)
 
     inst = instance_of(session, r)
@@ -1602,6 +1825,11 @@ def workflow_action(
     ntype = (cur_node or {}).get("type")
     # Stan przejęcia widziany przy walidacji — sprawdzany ponownie przed commitem.
     observed_taker = r.taken_over_by_id
+
+    if data.action == "reject":
+        _check_reject_allowed(session, r, ntype, data.comment)
+    elif ntype in MANAGER_STAGE_TYPES:
+        _check_self_request_route(session, inst, r, current_user, data.action)
 
     # Odmowa konkretnych pozycji — tylko kierownik nadrzędny (approve na
     # higher_manager_approve) albo IT (execute na it_execute).
@@ -1631,13 +1859,55 @@ def workflow_action(
         # Dowiąż wniosek do konta pracownika (tworzy ghost-LDAP, jeśli trzeba).
         # Dzięki temu pracownik od razu widzi swoje
         # uprawnienia w „Moje uprawnienia", a wniosek pojawia się w strukturze.
+        # Reguły jak w `link-worker` (własne konto, komórka, istniejące dowiązanie).
         if data.ad_username and data.ad_username.strip():
-            worker = _resolve_or_create_worker(session, data.ad_username, r)
-            r.worker_user_id = worker.id
+            prev_worker = r.worker_user_id
+            worker, existing = _link_worker_account(session, r, data.ad_username, current_user)
+            if worker.id != prev_worker:
+                r.worker_user_id = worker.id
+                session.add(r)
+                try:
+                    record_event(
+                        session, action="request.worker_linked",
+                        user_id=current_user.id, username=current_user.username,
+                        target_type="access_request", target_id=r.id,
+                        details={"old_worker_user_id": prev_worker,
+                                 "new_worker_user_id": worker.id,
+                                 "ad_username": worker.username,
+                                 "created_account": existing is None,
+                                 "on_execute": True},
+                        commit=False,
+                    )
+                except Exception:
+                    _log.exception(AUDIT_WRITE_FAILED_MSG)
 
     # Odmowa konkretnych pozycji (kombinację akcja/węzeł sprawdzono wyżej).
     if data.denials:
         _apply_item_denials(session, r, data.denials, current_user)
+
+    # Nadanie uprawnień osobie, której stosunek pracy ustał po złożeniu wniosku
+    # (albo z nieaktywnym kontem) — tylko po świadomym potwierdzeniu.
+    if data.action == "execute" and (getattr(r, "kind", None) or "grant") != "revoke":
+        why = _terminated_since(session, r) if _grants_undenied(session, r) else None
+        if why and not data.confirm_after_termination:
+            raise HTTPException(status.HTTP_409_CONFLICT, {
+                "code": "WORKER_TERMINATED",
+                "message": (f"Uwaga: {why}. Realizacja nada uprawnienia osobie, której "
+                            "stosunek pracy ustał. Potwierdź, że uprawnienia mają "
+                            "zostać nadane, albo odrzuć wniosek."),
+            })
+        if why:
+            payload = {**(payload or {}), "confirmed_after_termination": why}
+            try:
+                record_event(
+                    session, action="request.executed_after_termination",
+                    user_id=current_user.id, username=current_user.username,
+                    target_type="access_request", target_id=r.id,
+                    details={"worker_user_id": r.worker_user_id, "reason": why},
+                    commit=False,
+                )
+            except Exception:
+                _log.exception(AUDIT_WRITE_FAILED_MSG)
 
     # Zamknięcie realizacji przez IT (execute na it_execute).
     if data.action == "execute":
@@ -1733,9 +2003,7 @@ def save_draft(
     from services.workflow import can_act, MANAGER_STAGE_TYPES, record_request_event
     from services.audit import record_event
 
-    r = session.get(AccessRequest, request_id)
-    if not r:
-        raise HTTPException(404, "Wniosek nie istnieje")
+    r = _load_request(session, request_id)
     _check_access(current_user, r, session)
 
     inst, node = _active_node(session, request_id)
@@ -1786,7 +2054,7 @@ def save_draft(
                 commit=False,
             )
         except Exception:
-            pass
+            _log.exception(AUDIT_WRITE_FAILED_MSG)
         session.flush()
         # Ponowna kontrola w tej samej transakcji (zapis trzyma już blokadę
         # SQLite): obieg nie poszedł dalej i nikt nie przejął wniosku.
@@ -1859,9 +2127,7 @@ def take_over_request(
     )
     from services.audit import record_event
 
-    r = session.get(AccessRequest, request_id)
-    if not r:
-        raise HTTPException(404, "Wniosek nie istnieje")
+    r = _load_request(session, request_id)
     _check_access(current_user, r, session)
 
     inst, node = _active_node(session, request_id)
@@ -1895,7 +2161,7 @@ def take_over_request(
             commit=False,
         )
     except Exception:
-        pass
+        _log.exception(AUDIT_WRITE_FAILED_MSG)
 
     # Poinformuj kierownika komórki (i zastępców) oraz poprzednio przejmującego.
     _notify_taken_over(session, r, dept, current_user, extra_ids=(prev_taker_id,))
@@ -1903,6 +2169,26 @@ def take_over_request(
     session.commit()
     session.refresh(r)
     return _request_out(session, r, current_user)
+
+
+def _notify_take_over_released(session: Session, r: AccessRequest,
+                               dept: Optional[Department], taker_id: Optional[int],
+                               actor: User) -> None:
+    """E-mail do dotychczasowego przejmującego, gdy jego przejęcie zwolnił
+    ktoś inny (superadmin)."""
+    try:
+        from services.after_commit import defer
+        from services.email_alerts import notify_take_over_released
+        u = session.get(User, taker_id) if taker_id else None
+        if not u or not u.is_active or not u.email or u.id == actor.id:
+            return
+        actor_name = actor.full_name or actor.username
+        defer(session, notify_take_over_released,
+              to_address=u.email, request_id=r.id, worker_name=r.worker_name,
+              dept_name=dept.name if dept else "", released_by_name=actor_name,
+              from_name=actor_name, from_email=actor.email)
+    except Exception as exc:
+        _log.warning("Powiadomienie o zwolnieniu przejęcia nie zostało zlecone: %s", exc)
 
 
 @router.post("/{request_id}/release")
@@ -1923,9 +2209,7 @@ def release_request(
     )
     from services.audit import record_event
 
-    r = session.get(AccessRequest, request_id)
-    if not r:
-        raise HTTPException(404, "Wniosek nie istnieje")
+    r = _load_request(session, request_id)
     _check_access(current_user, r, session)
 
     inst, node = _active_node(session, request_id)
@@ -1959,9 +2243,12 @@ def release_request(
             commit=False,
         )
     except Exception:
-        pass
+        _log.exception(AUDIT_WRITE_FAILED_MSG)
     # Kierownik komórki znów jest adresatem kroku — przypomnij mu o wniosku.
-    _notify_stage(session, r, node, dept, current_user)
+    _notify_stage(session, r, node, dept, current_user, exclude_ids=(prev_id,))
+    if prev_id != current_user.id:
+        # Superadmin zwolnił cudze przejęcie — przejmujący musi o tym wiedzieć.
+        _notify_take_over_released(session, r, dept, prev_id, current_user)
     session.commit()
     session.refresh(r)
     return _request_out(session, r, current_user)
@@ -2001,12 +2288,10 @@ def set_item_denial(
     from services.audit import record_event
     from services.workflow import can_act
 
-    r = session.get(AccessRequest, request_id)
-    if not r:
-        raise HTTPException(404, "Wniosek nie istnieje")
+    r = _load_request(session, request_id)
     _check_access(current_user, r, session)
 
-    item = session.get(RequestItem, item_id)
+    item = session.get(RequestItem, item_id) if _db_int_ok(item_id) else None
     if not item or item.request_id != request_id:
         raise HTTPException(404, "Pozycja nie należy do tego wniosku.")
 
@@ -2058,7 +2343,7 @@ def set_item_denial(
             commit=False,
         )
     except Exception:
-        pass
+        _log.exception(AUDIT_WRITE_FAILED_MSG)
 
     session.commit()
     updated = next((x for x in _get_items(session, request_id) if x["id"] == item_id), None)
@@ -2084,12 +2369,10 @@ def set_item_fulfilled(
     from services.audit import record_event
     from services.workflow import can_act
 
-    r = session.get(AccessRequest, request_id)
-    if not r:
-        raise HTTPException(404, "Wniosek nie istnieje")
+    r = _load_request(session, request_id)
     _check_access(current_user, r, session)
 
-    item = session.get(RequestItem, item_id)
+    item = session.get(RequestItem, item_id) if _db_int_ok(item_id) else None
     if not item or item.request_id != request_id:
         raise HTTPException(404, "Pozycja nie należy do tego wniosku.")
 
@@ -2134,7 +2417,7 @@ def set_item_fulfilled(
             commit=False,
         )
     except Exception:
-        pass
+        _log.exception(AUDIT_WRITE_FAILED_MSG)
 
     session.commit()
     updated = next((x for x in _get_items(session, request_id) if x["id"] == item_id), None)
@@ -2150,9 +2433,7 @@ def verify_workflow_chain(
     """Weryfikuje łańcuch podpisów kroków. Dla audytora / superadmina."""
     from services.workflow import instance_of, verify_chain
 
-    r = session.get(AccessRequest, request_id)
-    if not r:
-        raise HTTPException(404, "Wniosek nie istnieje")
+    r = _load_request(session, request_id)
     _check_access(current_user, r, session)
 
     inst = instance_of(session, r)

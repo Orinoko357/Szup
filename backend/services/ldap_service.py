@@ -9,6 +9,60 @@ import re
 logger = logging.getLogger(__name__)
 
 
+class LdapInsecureError(RuntimeError):
+    """Odmowa wysłania hasła do serwera LDAP bez szyfrowania."""
+
+
+LDAP_INSECURE_MSG = (
+    "Odmowa logowania do LDAP bez szyfrowania — hasło poszłoby otwartym tekstem. "
+    "Włącz LDAPS (SSL, zwykle port 636) albo STARTTLS w Ustawieniach → AD/LDAP "
+    "(awaryjnie: „Zezwól na połączenie bez szyfrowania”)."
+)
+
+
+def ldap_tls_enabled(settings) -> bool:
+    """Czy połączenie z serwerem LDAP jest szyfrowane (LDAPS albo STARTTLS)."""
+    return bool(getattr(settings, "use_ssl", False) or getattr(settings, "use_starttls", False))
+
+
+def ldap_tls_verified(settings) -> bool:
+    """Czy certyfikat serwera jest weryfikowany. NULL w starej bazie = tak."""
+    return getattr(settings, "tls_verify", True) is not False
+
+
+def build_tls(settings):
+    """Konfiguracja TLS dla ldap3: domyślnie weryfikacja certyfikatu serwera
+    (CERT_REQUIRED, także nazwa hosta) względem `ca_cert_file` albo systemowego
+    magazynu CA. `version=None` = `ssl.create_default_context` — minimum TLS 1.2
+    (Python ≥ 3.10). Bez tego ldap3 przyjmuje DOWOLNY certyfikat (CERT_NONE)
+    i podstawiony serwer przechwyciłby hasła AD."""
+    import ssl
+    from ldap3 import Tls
+    ca_file = (getattr(settings, "ca_cert_file", None) or "").strip() or None
+    validate = ssl.CERT_REQUIRED if ldap_tls_verified(settings) else ssl.CERT_NONE
+    return Tls(validate=validate, ca_certs_file=ca_file, version=None)
+
+
+def build_server(settings, **kwargs):
+    """`ldap3.Server` z ustawień: LDAPS albo STARTTLS z weryfikacją certyfikatu."""
+    from ldap3 import Server
+    tls = build_tls(settings) if ldap_tls_enabled(settings) else None
+    return Server(settings.host, port=settings.port, use_ssl=bool(settings.use_ssl),
+                  tls=tls, **kwargs)
+
+
+def open_connection(settings, server, user: str, password: str):
+    """Połączenie z automatycznym bind. Przy STARTTLS szyfrowanie zestawiamy
+    PRZED bind; hasła nie wysyłamy nigdy do serwera bez TLS (LdapInsecureError)."""
+    from ldap3 import Connection, AUTO_BIND_NO_TLS, AUTO_BIND_TLS_BEFORE_BIND
+    if password and not ldap_tls_enabled(settings) \
+            and not getattr(settings, "allow_insecure", False):
+        raise LdapInsecureError(LDAP_INSECURE_MSG)
+    use_starttls = bool(getattr(settings, "use_starttls", False)) and not settings.use_ssl
+    return Connection(server, user=user, password=password,
+                      auto_bind=AUTO_BIND_TLS_BEFORE_BIND if use_starttls else AUTO_BIND_NO_TLS)
+
+
 def service_bind_user(settings) -> str:
     """Nazwa do simple bind konta usługowego. AD przyjmuje pełny DN, UPN
     (svc@domena.local) albo DOMENA\\svc; gołe 'svc' kończy się invalidCredentials
@@ -94,17 +148,17 @@ def lookup_user(settings, username: str) -> tuple[str, dict]:
     "ok" + {display_name}, "not_found", "disabled", albo "error" + {message}."""
     if not is_valid_login(username or ""):
         return "not_found", {}
-    from ldap3 import Server, Connection, SUBTREE
+    from ldap3 import SUBTREE
     from ldap3.utils.conv import escape_filter_chars
     from services.crypto import decrypt
 
     bind_password = decrypt(settings.bind_password_enc) if settings.bind_password_enc else ""
     search_base = settings.user_search_base or settings.base_dn
     search_filter = settings.user_filter.format(username=escape_filter_chars(username))
-    server = Server(settings.host, port=settings.port, use_ssl=settings.use_ssl)
     try:
-        with Connection(server, user=service_bind_user(settings), password=bind_password,
-                        auto_bind=True) as conn:
+        server = build_server(settings)
+        with open_connection(settings, server, service_bind_user(settings),
+                             bind_password) as conn:
             conn.search(search_base, search_filter, search_scope=SUBTREE,
                         attributes=["displayName", "userAccountControl"])
             if not conn.entries:
@@ -142,11 +196,11 @@ def fetch_ou_structure(settings, search_base: str) -> list[dict]:
     Zwraca listę słowników:
       [{ dn, name, departments: [{ dn, name, children: [...] }] }]
     """
-    from ldap3 import Server, Connection, ALL, SUBTREE
+    from ldap3 import ALL, SUBTREE
     from services.crypto import decrypt
 
     bind_password = decrypt(settings.bind_password_enc) if settings.bind_password_enc else ""
-    server = Server(settings.host, port=settings.port, use_ssl=settings.use_ssl, get_info=ALL)
+    server = build_server(settings, get_info=ALL)
 
     def _ou_name(entry) -> str:
         try:
@@ -168,7 +222,7 @@ def fetch_ou_structure(settings, search_base: str) -> list[dict]:
 
     base_norm = normalize_dn(search_base)
 
-    with Connection(server, user=service_bind_user(settings), password=bind_password, auto_bind=True) as conn:
+    with open_connection(settings, server, service_bind_user(settings), bind_password) as conn:
         conn.search(search_base, "(objectClass=organizationalUnit)",
                     search_scope=SUBTREE, attributes=["ou", "description"])
         entries = [(e.entry_dn, _ou_name(e), _ou_desc(e)) for e in conn.entries]
@@ -217,11 +271,11 @@ def fetch_ldap_users(settings, search_base: str) -> list[dict]:
     Zwraca listę słowników z kluczami:
         dn, parent_dn, username, full_name, email, is_enabled_in_ad
     """
-    from ldap3 import Server, Connection, ALL, SUBTREE
+    from ldap3 import ALL, SUBTREE
     from services.crypto import decrypt
 
     bind_password = decrypt(settings.bind_password_enc) if settings.bind_password_enc else ""
-    server = Server(settings.host, port=settings.port, use_ssl=settings.use_ssl, get_info=ALL)
+    server = build_server(settings, get_info=ALL)
 
     # AD: ACCOUNTDISABLE = 0x2 w userAccountControl
     ACCOUNTDISABLE = 0x2
@@ -234,7 +288,7 @@ def fetch_ldap_users(settings, search_base: str) -> list[dict]:
         return str(value) if value is not None else None
 
     out: list[dict] = []
-    with Connection(server, user=service_bind_user(settings), password=bind_password, auto_bind=True) as conn:
+    with open_connection(settings, server, service_bind_user(settings), bind_password) as conn:
         conn.search(
             search_base,
             "(&(objectCategory=person)(objectClass=user))",
@@ -281,7 +335,7 @@ def authenticate_ldap(settings, username: str, password: str) -> bool:
         logger.warning("LDAP: rejected empty password for %r", username)
         return False
     try:
-        from ldap3 import Server, Connection, ALL, SUBTREE
+        from ldap3 import ALL, SUBTREE
         from ldap3.utils.conv import escape_filter_chars
         from services.crypto import decrypt
 
@@ -289,18 +343,22 @@ def authenticate_ldap(settings, username: str, password: str) -> bool:
         search_base   = settings.user_search_base or settings.base_dn
         search_filter = settings.user_filter.format(username=escape_filter_chars(username))
 
-        server = Server(settings.host, port=settings.port, use_ssl=settings.use_ssl, get_info=ALL)
+        server = build_server(settings, get_info=ALL)
 
-        with Connection(server, user=service_bind_user(settings), password=bind_password, auto_bind=True) as conn:
+        with open_connection(settings, server, service_bind_user(settings), bind_password) as conn:
             conn.search(search_base, search_filter, search_scope=SUBTREE, attributes=["distinguishedName"])
             if not conn.entries:
                 logger.info("LDAP: user %r not found", username)
                 return False
             user_dn = conn.entries[0].entry_dn
 
-        with Connection(server, user=user_dn, password=password, auto_bind=True):
+        with open_connection(settings, server, user_dn, password):
             logger.info("LDAP: user %r authenticated", username)
             return True
+
+    except LdapInsecureError:
+        logger.error("LDAP: %s", LDAP_INSECURE_MSG)
+        return False
 
     except Exception as exc:
         logger.warning("LDAP error for %r: %s", username, exc)

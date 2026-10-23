@@ -59,7 +59,7 @@ _PROD = os.getenv("SZUP_PROD", "").lower() in ("1", "true", "yes")
 
 app = FastAPI(
     title="SZUP",
-    version="3.7.0",
+    version="3.8.0",
     description="System Zarządzania Uprawnieniami IT",
     lifespan=lifespan,
     docs_url=None if _PROD else "/docs",

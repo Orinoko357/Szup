@@ -241,6 +241,11 @@ class LdapSettingsSchema(BaseModel):
     user_filter: str = "(sAMAccountName={username})"
     sso_enabled: bool = False
     sso_auto: bool = False
+    # Weryfikacja certyfikatu serwera (LDAPS / STARTTLS) i plik CA (PEM).
+    tls_verify: bool = True
+    ca_cert_file: Optional[str] = None
+    use_starttls: bool = False
+    allow_insecure: bool = False
 
 
 class LdapSettingsRead(BaseModel):
@@ -256,18 +261,40 @@ class LdapSettingsRead(BaseModel):
     has_password: bool
     sso_enabled: bool = False
     sso_auto: bool = False
+    tls_verify: bool = True
+    ca_cert_file: Optional[str] = None
+    use_starttls: bool = False
+    allow_insecure: bool = False
     # Komunikat po zapisie, gdy coś wymaga uwagi (np. wyczyszczone hasło konta usługowego).
     warning: Optional[str] = None
 
 
-# Hasło konta usługowego LDAP — jak hasło SMTP — jest związane z serwerem
-# i kontem (bind DN), dla których je podano. Gdy zmienia się serwer albo konto,
-# a nowego hasła nie wpisano, zapisane hasło kasujemy — inaczej przy teście
-# połączenia lub logowaniu trafiłoby na podstawiony serwer.
+# Hasło konta usługowego LDAP — jak hasło SMTP — jest związane z serwerem,
+# sposobem połączenia i kontem, dla których je podano. Gdy zmienia się serwer,
+# port, szyfrowanie (LDAPS / STARTTLS / weryfikacja certyfikatu), konto (bind
+# DN) albo Base DN (z niego powstaje UPN konta podanego bez domeny), a nowego
+# hasła nie wpisano, zapisane hasło kasujemy — inaczej przy teście połączenia
+# lub logowaniu trafiłoby na podstawiony serwer albo poszło bez szyfrowania.
 LDAP_PASSWORD_CLEARED_MSG = (
-    "Zmieniono serwer LDAP lub konto usługowe (bind DN), więc zapisane hasło "
-    "konta usługowego zostało usunięte. Wpisz hasło ponownie."
+    "Zmieniono serwer LDAP, sposób połączenia lub konto usługowe, więc zapisane "
+    "hasło konta usługowego zostało usunięte. Wpisz hasło ponownie."
 )
+# Pola, których zmiana (bez podania nowego hasła) kasuje hasło konta usługowego.
+_LDAP_PASSWORD_BOUND_FIELDS = ("host", "port", "use_ssl", "use_starttls", "tls_verify",
+                               "ca_cert_file", "bind_dn", "base_dn")
+
+
+def _ldap_password_binding(cfg: LdapSettings) -> tuple:
+    """Wartości, z którymi związane jest zapisane hasło konta usługowego.
+    Base DN liczy się tylko wtedy, gdy bind DN jest bez domeny (UPN z Base DN)."""
+    from services.ldap_service import service_bind_user
+    return (
+        (cfg.host or "").strip().lower(), cfg.port, bool(cfg.use_ssl),
+        bool(getattr(cfg, "use_starttls", False)),
+        getattr(cfg, "tls_verify", True) is not False,
+        (getattr(cfg, "ca_cert_file", None) or "").strip(),
+        service_bind_user(cfg),
+    )
 
 
 def _ldap_read(cfg: LdapSettings, warning: Optional[str] = None) -> "LdapSettingsRead":
@@ -278,6 +305,11 @@ def _ldap_read(cfg: LdapSettings, warning: Optional[str] = None) -> "LdapSetting
         has_password=bool(cfg.bind_password_enc),
         sso_enabled=bool(getattr(cfg, "sso_enabled", False)),
         sso_auto=bool(getattr(cfg, "sso_auto", False)),
+        # NULL w bazie sprzed migracji = wartości domyślne (bezpieczne).
+        tls_verify=getattr(cfg, "tls_verify", True) is not False,
+        ca_cert_file=(getattr(cfg, "ca_cert_file", None) or None),
+        use_starttls=bool(getattr(cfg, "use_starttls", False)),
+        allow_insecure=bool(getattr(cfg, "allow_insecure", False)),
         warning=warning,
     )
 
@@ -429,20 +461,32 @@ def update_ldap(
     if not cfg:
         cfg = LdapSettings()
 
-    old_host, old_bind_dn = (cfg.host or "").strip().lower(), (cfg.bind_dn or "").strip()
+    ca_file = (data.ca_cert_file or "").strip() or None
+    if ca_file:
+        import os
+        if not os.path.isabs(ca_file):
+            raise HTTPException(400, "Plik CA podaj jako pełną ścieżkę na serwerze "
+                                     "(np. /etc/ssl/certs/ca-domena.pem).")
+        if not os.path.isfile(ca_file):
+            raise HTTPException(400, f"Plik CA „{ca_file}” nie istnieje na serwerze.")
+    if data.use_ssl and data.use_starttls:
+        raise HTTPException(400, "Wybierz LDAPS albo STARTTLS — nie oba naraz.")
+
+    old_binding = _ldap_password_binding(cfg)
     changed = _apply_fields(cfg, {
         "enabled": data.enabled, "host": data.host, "port": data.port,
         "use_ssl": data.use_ssl, "base_dn": data.base_dn, "bind_dn": data.bind_dn,
         "user_search_base": data.user_search_base, "user_filter": data.user_filter,
         "sso_enabled": data.sso_enabled, "sso_auto": data.sso_auto,
+        "tls_verify": data.tls_verify, "ca_cert_file": ca_file,
+        "use_starttls": data.use_starttls,
+        "allow_insecure": data.allow_insecure,
     })
     warning = None
     if data.bind_password is not None:
         cfg.bind_password_enc = encrypt(data.bind_password) if data.bind_password else None
         changed.append("bind_password")
-    elif (cfg.bind_password_enc
-          and ((cfg.host or "").strip().lower() != old_host
-               or (cfg.bind_dn or "").strip() != old_bind_dn)):
+    elif cfg.bind_password_enc and _ldap_password_binding(cfg) != old_binding:
         cfg.bind_password_enc = None
         changed.append("bind_password")
         warning = LDAP_PASSWORD_CLEARED_MSG
@@ -453,6 +497,9 @@ def update_ldap(
                       summary="Zmieniono ustawienia LDAP/AD",
                       extra={"host": cfg.host, "enabled": cfg.enabled,
                              "sso_enabled": bool(cfg.sso_enabled),
+                             "use_ssl": bool(cfg.use_ssl),
+                             "use_starttls": bool(cfg.use_starttls),
+                             "tls_verify": bool(cfg.tls_verify),
                              "password_cleared": warning is not None})
     return _ldap_read(cfg, warning=warning)
 
@@ -581,20 +628,24 @@ def test_ldap(
     _: User = Depends(require_admin),
     session: Session = Depends(get_session),
 ):
-    from ldap3 import Server, Connection, ALL
+    from ldap3 import ALL
     from services.crypto import decrypt
-    from services.ldap_service import service_bind_user
+    from services.ldap_service import (
+        service_bind_user, build_server, open_connection, ldap_tls_enabled,
+    )
 
     cfg = session.exec(select(LdapSettings)).first()
     if not cfg or not cfg.host:
         return {"ok": False, "error": "Brak konfiguracji LDAP"}
     try:
         bind_password = decrypt(cfg.bind_password_enc) if cfg.bind_password_enc else ""
-        server = Server(cfg.host, port=cfg.port, use_ssl=cfg.use_ssl, get_info=ALL)
-        # Ta sama nazwa konta usługowego co przy logowaniu i imporcie (UPN z Base DN).
-        with Connection(server, user=service_bind_user(cfg), password=bind_password,
-                        auto_bind=True):
-            return {"ok": True, "message": f"Połączono z {cfg.host}:{cfg.port}"}
+        server = build_server(cfg, get_info=ALL)
+        # Ta sama nazwa konta usługowego i to samo zabezpieczenie połączenia
+        # (TLS z weryfikacją certyfikatu) co przy logowaniu i imporcie.
+        with open_connection(cfg, server, service_bind_user(cfg), bind_password):
+            mode = ("LDAPS" if cfg.use_ssl else "STARTTLS") if ldap_tls_enabled(cfg) \
+                else "bez szyfrowania"
+            return {"ok": True, "message": f"Połączono z {cfg.host}:{cfg.port} ({mode})"}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
@@ -1029,6 +1080,38 @@ def config_health(
                     else f"{HELPDESK_EMAIL} (domyślny z konfiguracji)"),
          "link": "/settings"},
     ]
+
+    # LDAP bez szyfrowania albo bez weryfikacji certyfikatu — hasła AD może
+    # przechwycić podstawiony serwer (ARP / DNS spoofing w sieci do DC).
+    if ldap and ldap.enabled:
+        from services.ldap_service import ldap_tls_enabled, ldap_tls_verified
+        if not ldap_tls_enabled(ldap):
+            checks.append({
+                "key": "ldap_tls", "label": "LDAP bez szyfrowania", "ok": False,
+                "detail": (("Hasła AD idą do serwera otwartym tekstem (zezwolono na "
+                            "połączenie bez szyfrowania). Włącz LDAPS (port 636) albo STARTTLS")
+                           if getattr(ldap, "allow_insecure", False) else
+                           ("Włącz LDAPS (port 636) albo STARTTLS — bez tego logowanie AD "
+                            "jest odrzucane, bo hasło poszłoby otwartym tekstem")),
+                "link": "/settings",
+            })
+        elif not ldap_tls_verified(ldap):
+            checks.append({
+                "key": "ldap_tls", "label": "LDAP bez weryfikacji certyfikatu", "ok": False,
+                "detail": ("Weryfikacja certyfikatu serwera jest wyłączona — podstawiony "
+                           "serwer mógłby przechwycić hasła AD. Wskaż plik CA domeny "
+                           "i włącz weryfikację"),
+                "link": "/settings",
+            })
+        else:
+            checks.append({
+                "key": "ldap_tls", "label": "LDAP: szyfrowanie i weryfikacja certyfikatu",
+                "ok": True,
+                "detail": ("LDAPS" if ldap.use_ssl else "STARTTLS")
+                          + (f", CA: {ldap.ca_cert_file}" if ldap.ca_cert_file
+                             else ", systemowy magazyn CA"),
+                "link": "/settings",
+            })
 
     # SSO bez sekretu proxy — backend odrzuci każde logowanie SSO (sekret jest
     # obowiązkowy). Pokazujemy tylko, gdy SSO jest włączone w ustawieniach.

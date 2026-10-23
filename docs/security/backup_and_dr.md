@@ -45,14 +45,13 @@ tworzy spójną kopię „na gorąco” razem z zawartością dziennika.
 ## Kopie zapasowe
 
 Wszystkie kopie trafiają do `/opt/szup/backups/` (katalog `700`, pliki `600`).
-Nazwy sortują się chronologicznie, więc retencję liczymy po nazwie, a nie po
-dacie modyfikacji pliku. Dwa rodzaje kopii mają **różne prefiksy**, żeby
-retencja jednego nie kasowała drugiego:
+Nazwy zawierają datę i godzinę, więc sortują się chronologicznie. Dwa rodzaje
+kopii mają **różne prefiksy**, żeby retencja jednego nie kasowała drugiego:
 
 | Prefiks | Kto tworzy | Retencja |
 |---|---|---|
-| `szup-RRRR-MM-DD-GGMMSS.db` + `szup-keys-RRRR-MM-DD-GGMMSS.tar.gz` | codzienna kopia (cron) | 30 dni |
-| `szup-predeploy-RRRR-MM-DD-GGMMSS.db` | `deploy/deploy.sh` przed wdrożeniem | 10 najnowszych |
+| `szup-RRRR-MM-DD-GGMMSS.db` + `szup-keys-RRRR-MM-DD-GGMMSS.tar.gz` | codzienna kopia (cron) | 30 dni wg daty modyfikacji pliku (`find -mtime +30`) |
+| `szup-predeploy-RRRR-MM-DD-GGMMSS.db` | `deploy/deploy.sh` przed wdrożeniem | 10 najnowszych wg nazwy |
 
 ### Kopia przed każdym wdrożeniem
 
@@ -81,8 +80,21 @@ DATA_DIR=/opt/szup/data                     # = SZUP_DATA_DIR usługi
 BACKUP_DIR=/opt/szup/backups
 STAMP="$(date +%F-%H%M%S)"
 
+# Brak bazy albo pusty plik (np. inny SZUP_DATA_DIR niż wpisany wyżej) przerywa
+# kopię — inaczej sqlite3 utworzyłby pustą bazę i „udaną”, ale bezwartościową kopię.
+if [ ! -s "$DATA_DIR/szup.db" ]; then
+    echo "szup-backup: brak bazy $DATA_DIR/szup.db (albo plik jest pusty) — kopia przerwana" >&2
+    exit 1
+fi
+
 mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
 sqlite3 "$DATA_DIR/szup.db" ".backup '$BACKUP_DIR/szup-$STAMP.db'"
+# Kopia musi być spójna — w przeciwnym razie błąd (cron wyśle wynik mailem).
+CHECK="$(sqlite3 "$BACKUP_DIR/szup-$STAMP.db" 'PRAGMA integrity_check;')"
+if [ "$CHECK" != "ok" ]; then
+    echo "szup-backup: kopia $BACKUP_DIR/szup-$STAMP.db nie przeszła integrity_check: $CHECK" >&2
+    exit 1
+fi
 # Klucze: workflow_secret.key, secret.key, jwt_secret.key i .env (gdy klucze
 # są w zmiennych SZUP_WORKFLOW_SECRET / SZUP_SECRET_KEY). Brakujący plik
 # (np. klucz trzymany tylko w .env) tar pomija z ostrzeżeniem.
@@ -91,8 +103,9 @@ tar -czf "$BACKUP_DIR/szup-keys-$STAMP.tar.gz" --ignore-failed-read \
          "${DATA_DIR#/}/jwt_secret.key" "${APP_DIR#/}/.env"
 chmod 600 "$BACKUP_DIR/szup-$STAMP.db" "$BACKUP_DIR/szup-keys-$STAMP.tar.gz"
 
-# Retencja 30 dni — tylko kopie codzienne (szup-<data>…); kopii
-# przedwdrożeniowych (szup-predeploy-…) nie ruszamy, mają własną retencję.
+# Retencja 30 dni (wg daty modyfikacji pliku) — tylko kopie codzienne
+# (szup-<data>…); kopii przedwdrożeniowych (szup-predeploy-…) nie ruszamy,
+# mają własną retencję.
 find "$BACKUP_DIR" -maxdepth 1 -type f \
     \( -name 'szup-[0-9]*.db' -o -name 'szup-keys-[0-9]*.tar.gz' \) \
     -mtime +30 -delete

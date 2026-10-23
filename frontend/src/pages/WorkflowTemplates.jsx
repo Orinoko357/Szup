@@ -10,6 +10,7 @@ import {
 import { fmtDateTime } from '../serverTime'
 import { toast, ask } from '../components/ui/feedback'
 import Field from '../components/ui/Field'
+import { LoadError } from '../components/ui/LoadState'
 import { NODE_LABEL } from '../labels'
 
 
@@ -135,7 +136,7 @@ export default function WorkflowTemplates() {
     try {
       const r = await listWorkflowTemplates({})
       setItems(r.data)
-    } catch (ex) { setErr(errorMessage(ex, 'Błąd ładowania')) }
+    } catch (ex) { setErr(errorMessage(ex, 'Nie udało się wczytać szablonów obiegu')); setItems([]) }
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
@@ -164,17 +165,18 @@ export default function WorkflowTemplates() {
           <button className="btn btn--ghost" onClick={load} disabled={loading}>
             <RefreshCw size={14} /> Odśwież
           </button>
-          <button className="btn btn--action" onClick={() => setEditing({ mode: 'add' })}>
+          <button className="btn btn--action" onClick={() => setEditing({ mode: 'add' })} disabled={!!err}
+                  title={err ? 'Najpierw wczytaj listę szablonów (Spróbuj ponownie) — inaczej łatwo o duplikat' : undefined}>
             <Plus size={14} /> Nowy szablon
           </button>
         </div>
       </div>
 
-      {err && <div className="alert alert--error mb-4">{err}</div>}
-
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {loading && <div className="card" style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>}
-        {!loading && items.length === 0 && (
+        {/* Błąd wczytania — zamiast „Brak szablonów. Utwórz pierwszy” (groziło duplikatami). */}
+        {!loading && err && <LoadError message={err} onRetry={load} />}
+        {!loading && !err && items.length === 0 && (
           <div className="card" style={{ color: 'var(--color-text-muted)', padding: 16 }}>
             <GitBranch size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
             Brak szablonów. Utwórz pierwszy przyciskiem „Nowy szablon” — bez szablonu obiegu nie da się dodać typu wniosku.
@@ -391,8 +393,8 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
       </div>
 
       {err && (
-        <div className="alert alert--error mb-4" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <AlertTriangle size={14} /> {err}
+        <div className="alert alert--error mb-4" role="alert" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <AlertTriangle size={14} aria-hidden="true" /> {err}
         </div>
       )}
 

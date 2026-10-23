@@ -111,6 +111,9 @@ class TestLoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    # ID konta — front zapamiętuje je przy logowaniu (np. ukrywa „Zamknij” przy
+    # własnych zdarzeniach bezpieczeństwa), tak samo jak z /auth/me.
+    id: Optional[int] = None
     username: str
     roles: list[str]
     role: str                  # primary role (dla kompatybilności)
@@ -239,7 +242,7 @@ def setup(data: SetupRequest, request: Request, session: Session = Depends(get_s
 
     user_roles = parse_roles(user.roles)
     token = create_access_token(user.username, user_roles, user.id)
-    return TokenResponse(access_token=token, username=user.username,
+    return TokenResponse(access_token=token, id=user.id, username=user.username,
                          roles=_effective_roles(session, user, user_roles), role=primary_role(user),
                          full_name=user.full_name, must_change_password=False,
                          password_expires_in_days=_days_until_expiry(user))
@@ -277,7 +280,7 @@ def login(data: LoginRequest, request: Request, session: Session = Depends(get_s
 
     user_roles = parse_roles(user.roles)
     token = create_access_token(user.username, user_roles, user.id)
-    return TokenResponse(access_token=token, username=user.username,
+    return TokenResponse(access_token=token, id=user.id, username=user.username,
                          roles=_effective_roles(session, user, user_roles), role=primary_role(user),
                          full_name=user.full_name, must_change_password=must_change,
                          password_expired=is_password_expired(user) and not user.must_change_password,
@@ -345,7 +348,7 @@ def login_test(data: TestLoginRequest, request: Request, session: Session = Depe
     token = create_access_token(user.username, user_roles, user.id)
     # Flaga zgodna z egzekwowaniem w get_current_user — inaczej front nie pokaże
     # ekranu zmiany hasła, a backend odrzuci każde żądanie (403).
-    return TokenResponse(access_token=token, username=user.username,
+    return TokenResponse(access_token=token, id=user.id, username=user.username,
                          roles=_effective_roles(session, user, user_roles), role=primary_role(user),
                          full_name=user.full_name, must_change_password=password_change_required(user))
 
@@ -407,7 +410,7 @@ def login_ldap(data: LoginRequest, request: Request, session: Session = Depends(
 
     user_roles = parse_roles(user.roles)
     token = create_access_token(user.username, user_roles, user.id)
-    return TokenResponse(access_token=token, username=user.username,
+    return TokenResponse(access_token=token, id=user.id, username=user.username,
                          roles=_effective_roles(session, user, user_roles), role=primary_role(user),
                          full_name=user.full_name, must_change_password=False)
 
@@ -543,7 +546,7 @@ def sso_exchange(data: SsoExchange, session: Session = Depends(get_session)):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Konto nieaktywne")
     user_roles = parse_roles(user.roles)
     token = create_access_token(user.username, user_roles, user.id)
-    return TokenResponse(access_token=token, username=user.username,
+    return TokenResponse(access_token=token, id=user.id, username=user.username,
                          roles=_effective_roles(session, user, user_roles), role=primary_role(user),
                          full_name=user.full_name, must_change_password=False)
 

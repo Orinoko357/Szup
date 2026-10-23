@@ -14,6 +14,7 @@ import { ROLE_META, ROLE_LABEL } from '../labels'
 import { getUserRoles } from '../roles'
 import Modal from '../components/ui/Modal'
 import Field from '../components/ui/Field'
+import { LoadError } from '../components/ui/LoadState'
 
 /**
  * Wybór komórki organizacyjnej z WYSZUKIWANIEM i DRZEWEM.
@@ -448,7 +449,7 @@ export default function Users() {
                      onAdded={() => { setShowAdd(false); load() }} onCancel={() => setShowAdd(false)} />
       )}
 
-      {loadErr && <div className="alert alert--error mb-4" role="alert">{loadErr}</div>}
+      {loadErr && <LoadError message={loadErr} onRetry={load} busy={loading} style={{ marginBottom: 16 }} />}
 
       {loading ? (
         <div className="card"><div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div></div>

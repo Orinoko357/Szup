@@ -145,8 +145,8 @@ def granted_registry(
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
     only_with_declaration: bool = False,
-    limit: int = Query(200, le=2000),
-    offset: int = 0,
+    limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
     _: User = Depends(require_it_staff),
     session: Session = Depends(get_session),
 ):

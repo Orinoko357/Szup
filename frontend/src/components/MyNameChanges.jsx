@@ -6,6 +6,7 @@ import Modal from './ui/Modal'
 import { fmtDate } from '../serverTime'
 import { NAME_CHANGE_STATUS } from '../labels'
 import { toast } from './ui/feedback'
+import { ErrorAlert } from './ui/LoadState'
 
 /**
  * Samoobsługowe zgłoszenie zmiany nazwiska (pracownik → IT). Widoczne w
@@ -108,7 +109,7 @@ export default function MyNameChanges() {
                    <Check size={14} /> {busy ? 'Wysyłanie…' : 'Wyślij zgłoszenie'}
                  </button>
                </>}>
-          {err && <div className="alert alert--error mb-4">{err}</div>}
+          <ErrorAlert className="mb-4">{err}</ErrorAlert>
           <div className="form-group">
             <label className="form-label" htmlFor="nc-new-name">Nowe imię i nazwisko *</label>
             <input id="nc-new-name" className="form-control" autoFocus value={name}

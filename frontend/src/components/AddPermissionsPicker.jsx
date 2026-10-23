@@ -4,6 +4,7 @@ import PermInput, {
   permInput, splitAdminPerm, AdminPermRow,
   groupPerms, subgroupPerms, isPermVisible, PermGroupSection, SystemBlock, isScopeGated,
 } from './ItemFields'
+import { ErrorAlert } from './ui/LoadState'
 
 /**
  * Dokładanie uprawnień przez IT na etapie realizacji wniosku.
@@ -65,7 +66,7 @@ export default function AddPermissionsPicker({
   }, [unitId])
 
   if (loading) return <div style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>Ładowanie uprawnień…</div>
-  if (err) return <div className="alert alert--error" style={{ fontSize: 12 }}>{err}</div>
+  if (err) return <ErrorAlert style={{ fontSize: 12 }}>{err}</ErrorAlert>
 
   // Odfiltruj to, co już jest na wniosku; system znika, gdy nie zostaje nic.
   const rows = systems.map(s => {
