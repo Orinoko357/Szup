@@ -66,11 +66,15 @@ def _managed_dept_ids(session: Session, user: User) -> tuple[list[int], list[int
     return manager_scope(session, user)
 
 
-def _validate_items_scope(session: Session, unit_id: int, items) -> None:
+def _validate_items_scope(session: Session, unit_id: int, items,
+                          request_kind: str = "grant") -> None:
     """Zweryfikuj że każdy (system_id, permission_id) z items:
       - istnieje,
       - permission_id należy do tego system_id,
-      - system jest dostępny w tej jednostce (all_units=True lub wpis w M:N).
+      - system jest dostępny w tej jednostce (all_units=True lub wpis w M:N),
+      - przy NADANIU: uprawnienie nie jest usunięte (superadmin) ani wygaszone —
+        inaczej usunięte uprawnienie wracałoby przez ponowny wybór
+        (odebranie takiego uprawnienia jest dozwolone).
 
     Rzuca HTTPException(400) przy pierwszej niezgodności.
     """
@@ -92,6 +96,13 @@ def _validate_items_scope(session: Session, unit_id: int, items) -> None:
             raise HTTPException(
                 400,
                 f"Uprawnienie {p.id} nie należy do systemu {s.id}",
+            )
+        kind = getattr(item, "kind", None) or ("revoke" if request_kind == "revoke" else "grant")
+        if kind != "revoke" and (getattr(p, "deleted_at", None) or not p.is_active):
+            raise HTTPException(
+                400,
+                f'Uprawnienie „{p.permission_name}” ({s.name}) zostało usunięte '
+                f'lub wygaszone — nie można go nadać.',
             )
         if not s.all_units and s.id not in scoped_ids:
             raise HTTPException(
@@ -196,8 +207,8 @@ def _replace_request_items(session: Session, r: AccessRequest, items, *,
     kierunek (grant/revoke) — stan docelowy. Waliduje zakres systemów
     i wartości kontrolek; zwraca listę pozycji do payloadu kroku / audytu.
     Tylko flush — commit robi wywołujący."""
-    _validate_items_scope(session, r.unit_id, items)
     rkind = getattr(r, "kind", "grant") or "grant"
+    _validate_items_scope(session, r.unit_id, items, rkind)
     # Najpierw walidacja wartości (bez zmian w bazie), dopiero potem podmiana.
     cleaned = [_clean_custom_values(session, it, allow_incomplete=allow_incomplete)
                for it in items]
@@ -708,6 +719,12 @@ def _check_worker_link(session: Session, r: AccessRequest, ad_username: Optional
         raise HTTPException(status.HTTP_403_FORBIDDEN,
             "Nie możesz dowiązać wniosku do własnego konta — uprawnienia nadane "
             "na Twoje konto musi potwierdzić inna osoba z IT.")
+    if existing and not r.worker_user_id and _is_decision_maker(session, r, existing.id):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+            f'Konto „{existing.username}” należy do osoby, która złożyła wniosek albo '
+            f'wybrała w nim uprawnienia — bez akceptacji innej osoby byłby to wniosek '
+            f'„dla siebie”. Taki wniosek trzeba złożyć ze wskazaniem konta pracownika; '
+            f'wtedy trafi do akceptacji przełożonego.')
     if r.worker_user_id:
         if existing is None or existing.id != r.worker_user_id:
             linked = session.get(User, r.worker_user_id)
@@ -724,6 +741,34 @@ def _check_worker_link(session: Session, r: AccessRequest, ad_username: Optional
             f'dowiązanie przepisałoby uprawnienia innej osobie. Sprawdź login '
             f'pracownika albo najpierw popraw jego komórkę w kartotece.')
     return existing
+
+
+def _is_decision_maker(session: Session, r: AccessRequest, user_id: int) -> bool:
+    """Czy osoba złożyła wniosek, wykonała krok kierownika albo go przejęła,
+    a żadna INNA osoba nie zatwierdziła go na akceptacji wyższej. Dowiązanie
+    takiego wniosku do jej konta byłoby nadaniem uprawnień samemu sobie."""
+    from models import WorkflowInstance, WorkflowStep
+    from services.workflow import MANAGER_STAGE_TYPES
+    makers = {r.created_by_id, getattr(r, "taken_over_by_id", None)}
+    independent = False
+    inst = session.exec(select(WorkflowInstance)
+                        .where(WorkflowInstance.request_id == r.id)).first()
+    if inst:
+        for st in session.exec(select(WorkflowStep)
+                               .where(WorkflowStep.instance_id == inst.id)).all():
+            act = getattr(st.action, "value", st.action)
+            if st.node_type in MANAGER_STAGE_TYPES and act in ("select", "approve"):
+                makers.add(st.actor_user_id)
+    if user_id not in makers:
+        return False
+    if inst:
+        for st in session.exec(select(WorkflowStep)
+                               .where(WorkflowStep.instance_id == inst.id)).all():
+            act = getattr(st.action, "value", st.action)
+            if st.node_type == "higher_manager_approve" and act == "approve" \
+                    and st.actor_user_id not in makers:
+                independent = True
+    return not independent
 
 
 def _link_worker_account(session: Session, r: AccessRequest, ad_username: Optional[str],
@@ -1113,7 +1158,7 @@ def create_request(
         # Ewentualne uprawnienia od razu z wniosku (np. HR podpowiada,
         # kierownik ma je do potwierdzenia w kroku select_permissions).
         if data.items:
-            _validate_items_scope(session, req.unit_id, data.items)
+            _validate_items_scope(session, req.unit_id, data.items, kind)
             for item in data.items:
                 ik = item.kind if item.kind in ("grant", "revoke") else (
                     "revoke" if kind == "revoke" else "grant")

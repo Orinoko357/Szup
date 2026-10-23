@@ -6,6 +6,18 @@ Wersjonowanie: [Semantic Versioning](https://semver.org/lang/pl/).
 
 ## [Unreleased]
 
+## [3.9.1] — 2026-10-23
+
+### Naprawiono
+- Samoprzydział przez późne dowiązanie konta: wniosku złożonego bez wskazania
+  konta nie można dowiązać (przy realizacji ani później) do konta osoby, która
+  go złożyła, wybrała w nim uprawnienia albo przejęła, jeśli nie zatwierdziła go
+  inna osoba na akceptacji wyższej. Wniosek „dla siebie” trzeba złożyć ze
+  wskazaniem konta — wtedy trafia do przełożonego.
+- Uprawnienie usunięte przez superadmina (lub wygaszone) nie może zostać ponownie
+  nadane: ani w nowym wniosku, ani przy wyborze lub wersji roboczej wniosku w toku;
+  pozycje odmówione nie wracają do zaznaczenia.
+
 ## [3.9.0] — 2026-10-23
 
 Decyzje właściciela systemu: role, superadmin, kadry, AD.

@@ -545,7 +545,9 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           for (const it of r.items || []) {
             const key = `${it.system_id}:${it.permission_id}`
             if ((it.kind || 'grant') === 'revoke') target.delete(key)
-            else target.add(key)
+            // Pozycja odmówiona (np. uprawnienie usunięte z rejestru) nie wraca
+            // do zaznaczenia — inaczej ponowny wybór nadałby je jeszcze raz.
+            else if (!it.denied) target.add(key)
           }
           // Programy oznaczone „domyślnie zaznaczone" — dokładamy te, których
           // pracownik nie ma. Pozycje jawnie odebrane w TYM wniosku zostają
