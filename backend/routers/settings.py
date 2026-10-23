@@ -256,9 +256,21 @@ class LdapSettingsRead(BaseModel):
     has_password: bool
     sso_enabled: bool = False
     sso_auto: bool = False
+    # Komunikat po zapisie, gdy coś wymaga uwagi (np. wyczyszczone hasło konta usługowego).
+    warning: Optional[str] = None
 
 
-def _ldap_read(cfg: LdapSettings) -> "LdapSettingsRead":
+# Hasło konta usługowego LDAP — jak hasło SMTP — jest związane z serwerem
+# i kontem (bind DN), dla których je podano. Gdy zmienia się serwer albo konto,
+# a nowego hasła nie wpisano, zapisane hasło kasujemy — inaczej przy teście
+# połączenia lub logowaniu trafiłoby na podstawiony serwer.
+LDAP_PASSWORD_CLEARED_MSG = (
+    "Zmieniono serwer LDAP lub konto usługowe (bind DN), więc zapisane hasło "
+    "konta usługowego zostało usunięte. Wpisz hasło ponownie."
+)
+
+
+def _ldap_read(cfg: LdapSettings, warning: Optional[str] = None) -> "LdapSettingsRead":
     return LdapSettingsRead(
         id=cfg.id, enabled=cfg.enabled, host=cfg.host, port=cfg.port,
         use_ssl=cfg.use_ssl, base_dn=cfg.base_dn, bind_dn=cfg.bind_dn,
@@ -266,6 +278,7 @@ def _ldap_read(cfg: LdapSettings) -> "LdapSettingsRead":
         has_password=bool(cfg.bind_password_enc),
         sso_enabled=bool(getattr(cfg, "sso_enabled", False)),
         sso_auto=bool(getattr(cfg, "sso_auto", False)),
+        warning=warning,
     )
 
 
@@ -416,23 +429,32 @@ def update_ldap(
     if not cfg:
         cfg = LdapSettings()
 
+    old_host, old_bind_dn = (cfg.host or "").strip().lower(), (cfg.bind_dn or "").strip()
     changed = _apply_fields(cfg, {
         "enabled": data.enabled, "host": data.host, "port": data.port,
         "use_ssl": data.use_ssl, "base_dn": data.base_dn, "bind_dn": data.bind_dn,
         "user_search_base": data.user_search_base, "user_filter": data.user_filter,
         "sso_enabled": data.sso_enabled, "sso_auto": data.sso_auto,
     })
+    warning = None
     if data.bind_password is not None:
         cfg.bind_password_enc = encrypt(data.bind_password) if data.bind_password else None
         changed.append("bind_password")
+    elif (cfg.bind_password_enc
+          and ((cfg.host or "").strip().lower() != old_host
+               or (cfg.bind_dn or "").strip() != old_bind_dn)):
+        cfg.bind_password_enc = None
+        changed.append("bind_password")
+        warning = LDAP_PASSWORD_CLEARED_MSG
 
     session.add(cfg); session.commit(); session.refresh(cfg)
     _settings_changed(session, request, current_user, kind="ldap", changed=changed,
                       severity=SecuritySeverity.high,
                       summary="Zmieniono ustawienia LDAP/AD",
                       extra={"host": cfg.host, "enabled": cfg.enabled,
-                             "sso_enabled": bool(cfg.sso_enabled)})
-    return _ldap_read(cfg)
+                             "sso_enabled": bool(cfg.sso_enabled),
+                             "password_cleared": warning is not None})
+    return _ldap_read(cfg, warning=warning)
 
 
 def _effective_helpdesk(cfg: Optional[AppSettings]) -> str:

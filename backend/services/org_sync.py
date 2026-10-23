@@ -156,10 +156,17 @@ def release_manager_posts(session: Session, user_id: int | None) -> bool:
     if not user_id:
         return False
     changed = False
-    from services.workflow import release_take_overs_of
+    from services.workflow import (
+        release_take_overs_of, manager_stage_snapshot, resync_manager_stage,
+    )
     if release_take_overs_of(session, user_id,
                              "Przejmujący stracił stanowisko lub konto zostało wyłączone"):
         changed = True
+    # Komórki, w których zwolnienie stanowisk zmienia osobę odpowiedzialną za
+    # wnioski w toku (poddrzewa komórek tej osoby i komórki jednostek, którymi
+    # kierowała) — stan sprzed zmiany do `resync_manager_stage`.
+    affected = _posts_subtree(session, user_id)
+    before = manager_stage_snapshot(session, affected)
     for dept in session.exec(
         select(Department).where(Department.manager_user_id == user_id)
     ).all():
@@ -180,7 +187,27 @@ def release_manager_posts(session: Session, user_id: int | None) -> bool:
         session.add(unit)
         changed = True
         _log.info("Zwolniono stanowisko kierownika jednostki '%s' (odebrano rolę)", unit.name)
+    if changed and affected:
+        session.flush()
+        resync_manager_stage(session, affected, before=before,
+                             reason="Zwolnienie stanowiska w strukturze")
     return changed
+
+
+def _posts_subtree(session: Session, user_id: int) -> set[int]:
+    """Komórki, na które wpływa stanowisko `user_id`: poddrzewa komórek,
+    którymi kieruje (lub jest zastępcą), i wszystkie komórki jednostek, którymi
+    kieruje."""
+    from models import Unit
+    from services.workflow import subtree_dept_ids, unit_dept_ids
+    roots = {d.id for d in session.exec(
+        select(Department).where(Department.manager_user_id == user_id)).all()}
+    roots.update(int(x) for x in session.exec(
+        select(DepartmentDeputy.department_id).where(DepartmentDeputy.user_id == user_id)).all())
+    out = subtree_dept_ids(session, roots)
+    for unit in session.exec(select(Unit).where(Unit.manager_user_id == user_id)).all():
+        out |= unit_dept_ids(session, unit.id)
+    return out
 
 
 def sync_after_user_change(session: Session, user: User) -> tuple[bool, str | None]:
@@ -213,8 +240,18 @@ def sync_after_user_change(session: Session, user: User) -> tuple[bool, str | No
     if dept.manager_user_id == user.id:
         return False, None
 
+    # Nowy kierownik komórki zmienia adresata (i przełożonych) wniosków w toku
+    # w jej poddrzewie — porządki jak przy edycji struktury.
+    from services.workflow import (
+        manager_stage_snapshot, resync_manager_stage, subtree_dept_ids,
+    )
+    affected = subtree_dept_ids(session, {dept.id})
+    before = manager_stage_snapshot(session, affected)
     dept.manager_user_id = user.id
     session.add(dept)
+    session.flush()
+    resync_manager_stage(session, affected, before=before,
+                         reason="Nowy kierownik komórki")
     _log.info("Użytkownik %s ustawiony kierownikiem komórki '%s' (miała wolne stanowisko)",
               user.username, dept.name)
     return True, None

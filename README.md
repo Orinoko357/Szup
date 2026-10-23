@@ -112,14 +112,18 @@ cd /root/szup && ./deploy/deploy.sh
 
 `deploy.sh` można uruchomić z dowolnego katalogu (sam przechodzi do katalogu
 repo). Przed aktualizacją robi kopię bazy do `/opt/szup/backups/`
-(`szup-RRRR-MM-DD-GGMMSS.db`, `sqlite3 .backup`; bez `sqlite3` — `cp`, o ile
-baza nie ma niezapisanego pliku `-wal`). Zostaje 10 najnowszych kopii (według
-nazwy). Ścieżkę bazy bierze z `SZUP_DATA_DIR` w `/opt/szup/.env` albo
-w środowisku usługi `szup`. Nieudana kopia przerywa wdrożenie; tak samo brak
-bazy przy istniejącej instalacji (zła ścieżka). Na produkcję trafiają tylko
-zależności z `requirements.txt`, a do `/opt/szup/backend` nie są kopiowane
-`tests/`, `.venv/` ani `__pycache__/`. Po restarcie skrypt sprawdza
-`GET /api/health` i kończy się błędem, gdy usługa nie odpowiada.
+(`szup-predeploy-RRRR-MM-DD-GGMMSS.db`, `sqlite3 .backup`; bez `sqlite3` — `cp`,
+o ile baza nie ma niezapisanego pliku `-wal`). Zostaje 10 najnowszych kopii
+przedwdrożeniowych (według nazwy); nocnych kopii `szup-RRRR-…` z crona skrypt
+nie rusza. Ścieżkę bazy bierze z `SZUP_DB_URL` (gdy wskazuje plik SQLite) albo
+`SZUP_DATA_DIR` — z `/opt/szup/.env` lub ze środowiska usługi `szup`. Nieudana
+kopia przerywa wdrożenie; tak samo brak bazy przy istniejącej instalacji (zła
+ścieżka) i katalog danych wewnątrz `/opt/szup/backend`. Na produkcję trafiają
+tylko zależności z `requirements.txt`, a do `/opt/szup/backend` nie są
+kopiowane `tests/`, `.venv/` ani `__pycache__/`; `data/`, `.env*`, `*.db*`
+i `*.key` są przy synchronizacji wykluczone i chronione (ani nadpisane
+z checkoutu, ani usunięte). Po restarcie skrypt sprawdza `GET /api/health`
+i kończy się błędem, gdy usługa nie odpowiada (bez `curl` — tylko ostrzega).
 
 Nowe tabele tworzą się przy starcie (`create_all`); nowe kolumny dokładane są
 idempotentnie w `database.py` (migracje ręczne, bez Alembica). Po wdrożeniu z
@@ -141,9 +145,10 @@ produkcyjne **nigdy** w repo).
 | Zmienna | Opis |
 |---|---|
 | `SZUP_SECRET_KEY` | Klucz Fernet do szyfrowania sekretów w bazie (SMTP/LDAP). **Wymagany.** |
+| `SZUP_WORKFLOW_SECRET` | Sekret podpisów łańcuchowych kroków obiegu. Bez niego aplikacja generuje `workflow_secret.key` w katalogu danych — **kopiuj go razem z bazą**. |
 | `SZUP_SECRET_KEY_OLD` | Poprzedni klucz Fernet na czas rotacji (`python -m tools.rotate_fernet`). |
-| `SZUP_DATA_DIR` | Katalog danych (domyślnie `/opt/szup/data`); tu leży `szup.db` i klucz JWT `jwt_secret.key` (generowany przy pierwszym starcie). |
-| `SZUP_DB_URL` | Opcjonalne nadpisanie URL bazy. |
+| `SZUP_DATA_DIR` | Katalog danych (domyślnie `/opt/szup/data`); tu leży `szup.db` i klucze generowane przy pierwszym starcie: `jwt_secret.key` (sesje), a przy braku zmiennych środowiskowych także `secret.key` (Fernet) i `workflow_secret.key` (obieg). |
+| `SZUP_DB_URL` | Opcjonalne nadpisanie URL bazy (`deploy.sh` robi kopię, gdy to plik SQLite). |
 | `SZUP_CORS_ORIGINS` | Dozwolone originy CORS (dev). |
 | `SZUP_ALLOW_TEST_MODE` | `1` dopuszcza tryb testowy (logowanie bez hasła) — tylko dev/staging. |
 | `SZUP_SSO_PROXY_SECRET` | Sekret współdzielony Apache ↔ backend dla SSO — **wymagany** przy włączonym SSO (bez niego backend odrzuca logowanie SSO). |
@@ -172,23 +177,36 @@ panele operacyjne nie są dostępne dla samego admina.
   rewokacja JWT (jti + `tokens_valid_from`), wymuszona zmiana hasła.
 - **Sekrety** szyfrowane Fernet (rotacja MultiFernet); nigdy nie zwracane przez API.
 - **Nagłówki** CSP, HSTS, X‑Frame‑Options; `X‑Request‑ID` w odpowiedziach.
-- Kopie zapasowe bazy i **osobno** klucza Fernet — patrz `docs/security/backup_and_dr.md`.
+- Kopie zapasowe bazy **razem z kluczami** (obieg, Fernet, JWT; archiwum kluczy przechowywane osobno i zaszyfrowane) — patrz `docs/security/backup_and_dr.md`.
 - Zgłaszanie podatności: `SECURITY.md`. Polityki NIS2/KSC: `docs/security/`.
 
 ---
 
 ## Kopie zapasowe
 
-Baza to jeden plik SQLite (`$SZUP_DATA_DIR/szup.db`). Kopia „na gorąco":
+Baza to jeden plik SQLite (`$SZUP_DATA_DIR/szup.db`). Kopia „na gorąco"
+razem z kluczami (prawa `600`):
 ```bash
-sqlite3 /opt/szup/data/szup.db ".backup '/opt/szup/backups/szup-$(date +%F-%H%M%S).db'"
+umask 077; D=$(date +%F-%H%M%S)
+sqlite3 /opt/szup/data/szup.db ".backup '/opt/szup/backups/szup-$D.db'"
+tar -czf /opt/szup/backups/szup-keys-$D.tar.gz --ignore-failed-read -C / \
+    opt/szup/data/workflow_secret.key opt/szup/data/secret.key \
+    opt/szup/data/jwt_secret.key opt/szup/.env
 ```
-Klucz Fernet (`SZUP_SECRET_KEY`) trzymaj w kopii **osobno** — bez niego nie
-odszyfrujesz haseł SMTP/LDAP.
+Bez kluczy kopia bazy jest niepełna: sekret obiegu (`workflow_secret.key` lub
+`SZUP_WORKFLOW_SECRET`) weryfikuje łańcuch podpisów kroków obiegu — z innym
+sekretem cała historia akceptacji wygląda na naruszoną; klucz Fernet
+(`secret.key` lub `SZUP_SECRET_KEY`) odszyfrowuje hasła SMTP/LDAP; klucz JWT
+(`jwt_secret.key`) podpisuje sesje (utrata = wylogowanie wszystkich).
+Archiwum `szup-keys-*` to sekret — poza serwer kopiuj je osobno
+i zaszyfrowane. Codzienna kopia z cronem (prefiks `szup-`, retencja 30 dni;
+kopie z `deploy.sh` mają prefiks `szup-predeploy-`):
+`docs/security/backup_and_dr.md`.
 
 ### Przywracanie kopii
 
-Dotyczy kopii z `deploy.sh` i z polecenia wyżej (katalog `/opt/szup/backups/`):
+Dotyczy kopii z `deploy.sh` (`szup-predeploy-…`) i z polecenia wyżej
+(`szup-…`, katalog `/opt/szup/backups/`):
 ```bash
 systemctl stop szup
 cd /opt/szup/data
@@ -201,11 +219,14 @@ rm -f szup.db-wal szup.db-shm szup.db-journal
 cp /opt/szup/backups/szup-RRRR-MM-DD-GGMMSS.db szup.db
 chmod 600 szup.db
 sqlite3 szup.db "PRAGMA integrity_check;"     # oczekiwane: ok
+# klucze — na nowym serwerze albo gdy różnią się od tych z dnia kopii
+tar -xzpf /opt/szup/backups/szup-keys-RRRR-MM-DD-GGMMSS.tar.gz -C /
 systemctl start szup
 curl -fsS http://127.0.0.1:8003/api/health
 ```
 Kopia musi pasować do wersji kodu albo być od niej starsza — brakujące kolumny
-dołożą migracje przy starcie. Szczegóły i scenariusze awarii:
+dołożą migracje przy starcie. Nie uruchamiaj przywróconej bazy z innymi
+kluczami niż te z dnia kopii (patrz wyżej). Szczegóły i scenariusze awarii:
 `docs/security/backup_and_dr.md`.
 
 ---

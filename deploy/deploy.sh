@@ -17,26 +17,108 @@ ENV_FILE="$APP_DIR/.env"
 HEALTH_URL="http://127.0.0.1:8003/api/health"
 BACKUP_DIR="${SZUP_BACKUP_DIR:-$APP_DIR/backups}"
 BACKUP_KEEP=10
+# Kopie z deploy.sh mają WŁASNY prefiks: retencja (BACKUP_KEEP) obejmuje tylko
+# je, a nocne kopie z crona (szup-RRRR-MM-DD-GGMMSS.db, patrz
+# docs/security/backup_and_dr.md) zostają nietknięte.
+BACKUP_PREFIX="szup-predeploy-"
 
-# Katalog danych tak, jak widzi go usługa: SZUP_DATA_DIR z $ENV_FILE
-# (EnvironmentFile nadpisuje Environment= w szup.service), potem ze środowiska
-# usługi systemd, a na końcu wartość domyślna.
-data_dir_from_env_file() {
+# Wartość zmiennej z $ENV_FILE (składnia KEY=wartość, opcjonalnie z `export`).
+# Ostatnie wystąpienie wygrywa. Wartość w cudzysłowie/apostrofach bierzemy
+# dosłownie (bez cudzysłowów); bez cudzysłowów obcinamy komentarz „ #…”
+# i końcowe spacje.
+env_file_value() {
+    local key="$1" line value
     [ -r "$ENV_FILE" ] || return 0
-    grep -E '^[[:space:]]*(export[[:space:]]+)?SZUP_DATA_DIR=' "$ENV_FILE" | tail -n 1 \
-        | sed -E 's/^[^=]*=//; s/^["'\'']//; s/["'\'']?[[:space:]]*$//'
+    line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*=" "$ENV_FILE" | tail -n 1)" || true
+    [ -n "$line" ] || return 0
+    value="${line#*=}"
+    value="$(printf '%s' "$value" | sed -E 's/^[[:space:]]+//')"
+    case "$value" in
+        \"*) value="$(printf '%s' "$value" | sed -E 's/^"([^"]*)".*$/\1/')" ;;
+        \'*) value="$(printf '%s' "$value" | sed -E "s/^'([^']*)'.*\$/\\1/")" ;;
+        *)   value="$(printf '%s' "$value" | sed -E 's/(^|[[:space:]])#.*$//; s/[[:space:]]+$//')" ;;
+    esac
+    printf '%s\n' "$value"
 }
-data_dir_from_service() {
+# Wartość zmiennej ze środowiska usługi systemd (Environment= w szup.service).
+service_env_value() {
     systemctl show "$SERVICE" -p Environment --value 2>/dev/null | tr ' ' '\n' \
-        | sed -n 's/^SZUP_DATA_DIR=//p' | tail -n 1
+        | sed -n "s/^$1=//p" | tail -n 1
 }
-DATA_DIR="$(data_dir_from_env_file || true)"
-[ -n "$DATA_DIR" ] || DATA_DIR="$(data_dir_from_service || true)"
+# Zmienna tak, jak widzi ją usługa: najpierw $ENV_FILE (EnvironmentFile
+# nadpisuje Environment= w szup.service), potem środowisko usługi.
+service_setting() {
+    local v
+    v="$(env_file_value "$1" || true)"
+    [ -n "$v" ] || v="$(service_env_value "$1" || true)"
+    printf '%s\n' "$v"
+}
+# Ścieżka kanoniczna (dowiązania rozwiązane, nie musi istnieć); bez realpath — bez zmian.
+canon_path() {
+    realpath -m -- "$1" 2>/dev/null || printf '%s\n' "$1"
+}
+
+DATA_DIR="$(service_setting SZUP_DATA_DIR)"
 [ -n "$DATA_DIR" ] || DATA_DIR="$APP_DIR/data"
-DB="${SZUP_DB:-$DATA_DIR/szup.db}"
+
+# rsync --delete do $APP_DIR/backend skasowałby katalog danych, gdyby leżał
+# w jego wnętrzu — wtedy nie wdrażamy wcale.
+DATA_DIR_CANON="$(canon_path "$DATA_DIR")"
+BACKEND_CANON="$(canon_path "$APP_DIR/backend")"
+case "$DATA_DIR_CANON/" in
+    "$BACKEND_CANON"/*)
+        echo "BŁĄD: katalog danych ($DATA_DIR_CANON) leży wewnątrz $BACKEND_CANON."
+        echo "      Synchronizacja kodu (rsync --delete) mogłaby go usunąć — wdrożenie przerwane."
+        echo "      Przenieś dane poza katalog backendu i popraw SZUP_DATA_DIR."
+        exit 1 ;;
+esac
+
+# Baza: SZUP_DB (jawnie przy uruchomieniu) → SZUP_DB_URL usługi, o ile wskazuje
+# plik SQLite → $DATA_DIR/szup.db. Ścieżkę względną w URL usługa liczy od
+# WorkingDirectory (= $APP_DIR/backend).
+DB_URL="$(service_setting SZUP_DB_URL)"
+if [ -n "${SZUP_DB:-}" ]; then
+    DB="$SZUP_DB"
+elif [ -n "$DB_URL" ]; then
+    case "$DB_URL" in
+        sqlite:///*)
+            DB="${DB_URL#sqlite:///}"
+            DB="${DB%%\?*}"
+            case "$DB" in
+                /*) ;;
+                *)  DB="$APP_DIR/backend/$DB" ;;
+            esac ;;
+        *)
+            echo "UWAGA: SZUP_DB_URL wskazuje bazę inną niż plik SQLite — deploy.sh nie zrobi jej kopii."
+            if [ "${SZUP_NO_DB_OK:-0}" != "1" ]; then
+                echo "BŁĄD: zrób kopię bazy samodzielnie i uruchom ponownie z SZUP_NO_DB_OK=1."
+                exit 1
+            fi
+            DB="" ;;
+    esac
+else
+    DB="$DATA_DIR/szup.db"
+fi
+if [ -n "$DB" ]; then
+    case "$(canon_path "$DB")" in
+        "$BACKEND_CANON"/*)
+            echo "UWAGA: baza ($DB) leży w katalogu backendu. Pliki *.db* są chronione"
+            echo "       przed rsync --delete, ale przenieś bazę do katalogu danych."
+            ;;
+    esac
+fi
+
+# curl jest potrzebny tylko do sprawdzenia usługi po restarcie. Bez niego
+# nie zgłaszamy fałszywej awarii — pomijamy sprawdzenie z ostrzeżeniem.
+HAVE_CURL=1
+if ! command -v curl >/dev/null 2>&1; then
+    HAVE_CURL=0
+    echo "UWAGA: brak curl — po restarcie pominę sprawdzenie $HEALTH_URL (apt install curl)."
+fi
 
 echo "=== SZUP — wdrożenie ==="
-echo "Baza danych: $DB"
+echo "Katalog danych: $DATA_DIR"
+echo "Baza danych: ${DB:-(poza SQLite — bez kopii)}"
 echo ""
 
 # 0. Audyt bezpieczeństwa zależności (NIS2) — nie blokuje deployu, ale ostrzega.
@@ -48,11 +130,11 @@ fi
 
 # Kopia bazy PRZED zmianą kodu — migracje (ALTER) idą przy restarcie usługi.
 # Nieudana kopia przerywa wdrożenie (set -e + jawny exit).
-if [ -f "$DB" ]; then
+if [ -n "$DB" ] && [ -f "$DB" ]; then
     echo "Kopia bazy danych..."
     mkdir -p "$BACKUP_DIR"
     chmod 700 "$BACKUP_DIR"
-    BACKUP_FILE="$BACKUP_DIR/szup-$(date +%F-%H%M%S).db"
+    BACKUP_FILE="$BACKUP_DIR/${BACKUP_PREFIX}$(date +%F-%H%M%S).db"
     if command -v sqlite3 >/dev/null 2>&1; then
         # .backup — spójna kopia „na gorąco” (usługa może działać), razem
         # z zawartością pliku -wal. Ścieżka w apostrofach — apostrof w niej
@@ -81,10 +163,15 @@ if [ -f "$DB" ]; then
     fi
     chmod 600 "$BACKUP_FILE"
     echo "  → $BACKUP_FILE"
-    # Zostaw tylko $BACKUP_KEEP najnowszych kopii. Sortujemy po NAZWIE
-    # (szup-RRRR-MM-DD-GGMMSS.db), a nie po czasie modyfikacji pliku.
-    ls -1 "$BACKUP_DIR"/szup-*.db 2>/dev/null | sort -r \
-        | tail -n +$((BACKUP_KEEP + 1)) | xargs -r rm -f --
+    # Zostaw tylko $BACKUP_KEEP najnowszych kopii PRZEDWDROŻENIOWYCH (prefiks
+    # $BACKUP_PREFIX — kopii z crona nie ruszamy). Sortujemy po NAZWIE
+    # (…-RRRR-MM-DD-GGMMSS.db), a nie po czasie modyfikacji pliku.
+    find "$BACKUP_DIR" -maxdepth 1 -type f -name "${BACKUP_PREFIX}*.db" -printf '%f\n' \
+        | sort -r | tail -n +$((BACKUP_KEEP + 1)) \
+        | while IFS= read -r old_backup; do rm -f -- "$BACKUP_DIR/$old_backup"; done
+    echo ""
+elif [ -z "$DB" ]; then
+    echo "Baza poza SQLite — pomijam kopię (SZUP_NO_DB_OK=1)."
     echo ""
 elif [ -d "$APP_DIR/backend" ] && [ "${SZUP_NO_DB_OK:-0}" != "1" ]; then
     # Aplikacja jest już zainstalowana, a bazy nie ma pod oczekiwaną ścieżką —
@@ -104,8 +191,13 @@ echo "[1/3] Aktualizacja zależności Python..."
 
 # 2. Kopiowanie backendu — bez testów, lokalnego venv i plików kompilacji.
 #    --delete-excluded usuwa też te katalogi z poprzednich wdrożeń.
+#    Dane i sekrety (data/, .env*, *.db*, *.key) są wykluczone ORAZ chronione
+#    (P = protect): nigdy nie trafiają tu z checkoutu (np. lokalna baza
+#    deweloperska) i nigdy nie są kasowane po stronie serwera przez --delete.
 echo "[2/3] Kopiowanie backendu..."
 rsync -a --delete --delete-excluded \
+    --filter 'P /data/' --filter 'P .env*' --filter 'P *.db*' --filter 'P *.key' \
+    --exclude '/data/' --exclude '.env*' --exclude '*.db*' --exclude '*.key' \
     --exclude '.venv/' --exclude 'venv/' --exclude '__pycache__/' --exclude '*.pyc' \
     --exclude '.pytest_cache/' --exclude 'tests/' --exclude 'requirements-dev.txt' \
     backend/ "$APP_DIR/backend/"
@@ -122,31 +214,35 @@ rsync -a --delete frontend/dist/ "$WEBROOT/"
 echo "Restart usługi $SERVICE..."
 systemctl restart "$SERVICE"
 
-EXPECTED_VERSION="$(sed -n 's/^[[:space:]]*version="\([^"]*\)".*/\1/p' backend/main.py | head -n 1)"
-HEALTH=""
-for _ in $(seq 1 15); do
-    sleep 2
-    if HEALTH="$(curl -fsS --max-time 5 "$HEALTH_URL" 2>/dev/null)"; then
-        break
-    fi
+if [ "$HAVE_CURL" != "1" ]; then
+    echo "UWAGA: brak curl — pomijam sprawdzenie usługi. Sprawdź ręcznie:"
+    echo "       systemctl status $SERVICE; tail -n 40 $APP_DIR/logs/app.log"
+else
+    EXPECTED_VERSION="$(sed -n 's/^[[:space:]]*version="\([^"]*\)".*/\1/p' backend/main.py | head -n 1)"
     HEALTH=""
-done
-if [ -z "$HEALTH" ]; then
-    echo ""
-    echo "BŁĄD: usługa $SERVICE nie odpowiada na $HEALTH_URL po restarcie."
-    systemctl status "$SERVICE" --no-pager || true
-    echo "--- ostatnie wpisy $APP_DIR/logs/app.log ---"
-    tail -n 40 "$APP_DIR/logs/app.log" 2>/dev/null || true
-    echo ""
-    echo "Kopia bazy sprzed wdrożenia: ${BACKUP_FILE:-brak} (przywracanie: README, „Przywracanie kopii”)."
-    exit 1
+    for _ in $(seq 1 15); do
+        sleep 2
+        if HEALTH="$(curl -fsS --max-time 5 "$HEALTH_URL" 2>/dev/null)"; then
+            break
+        fi
+        HEALTH=""
+    done
+    if [ -z "$HEALTH" ]; then
+        echo ""
+        echo "BŁĄD: usługa $SERVICE nie odpowiada na $HEALTH_URL po restarcie."
+        systemctl status "$SERVICE" --no-pager || true
+        echo "--- ostatnie wpisy $APP_DIR/logs/app.log ---"
+        tail -n 40 "$APP_DIR/logs/app.log" 2>/dev/null || true
+        echo ""
+        echo "Kopia bazy sprzed wdrożenia: ${BACKUP_FILE:-brak} (przywracanie: README, sekcja Przywracanie kopii)."
+        exit 1
+    fi
+    RUNNING_VERSION="$(printf '%s' "$HEALTH" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    echo "  → usługa działa, wersja $RUNNING_VERSION"
+    if [ -n "$EXPECTED_VERSION" ] && [ "$RUNNING_VERSION" != "$EXPECTED_VERSION" ]; then
+        echo "UWAGA: oczekiwano wersji $EXPECTED_VERSION — sprawdź, czy skopiowano właściwy kod."
+    fi
 fi
-RUNNING_VERSION="$(printf '%s' "$HEALTH" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-echo "  → usługa działa, wersja $RUNNING_VERSION"
-if [ -n "$EXPECTED_VERSION" ] && [ "$RUNNING_VERSION" != "$EXPECTED_VERSION" ]; then
-    echo "UWAGA: oczekiwano wersji $EXPECTED_VERSION — sprawdź, czy skopiowano właściwy kod."
-fi
-
 echo ""
 echo "=== Wdrożenie zakończone ==="
 echo "Logi: tail -f $APP_DIR/logs/app.log"

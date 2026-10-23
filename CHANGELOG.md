@@ -6,6 +6,35 @@ Wersjonowanie: [Semantic Versioning](https://semver.org/lang/pl/).
 
 ## [Unreleased]
 
+## [3.7.0] — 2026-10-23
+
+Poprawki po audycie 3.5: logika obiegu i bezpieczeństwo.
+
+### Zmieniono
+- Kierownik lub zastępca komórki nie zatwierdza akceptacji wyższej własnej komórki,
+  nawet gdy pełni funkcję w komórce nadrzędnej (wyjątek: dyrektor jednostki).
+- Zmiany struktury w trakcie obiegu (kierownik, komórka nadrzędna, zastępcy,
+  dyrektor jednostki, import z AD) zwalniają nieważne przejęcia z wpisem w historii
+  i powiadamiają nowego odpowiedzialnego.
+- Nikt nie dostaje maila o kroku, który sam właśnie przekazał.
+- Role admin/superadmin nadaje i odbiera wyłącznie superadmin; zdarzenia
+  bezpieczeństwa wysokiej i krytycznej wagi zamyka tylko superadmin.
+- Zmiana serwera lub konta usługowego LDAP czyści zapisane hasło bind.
+- `deploy.sh`: kopie przed wdrożeniem z prefiksem `szup-predeploy-` (nie usuwają
+  nocnych kopii), ochrona `data/`, `.env`, `*.db`, kluczy przy rsync, obsługa
+  `SZUP_DB_URL`, przerwanie, gdy katalog danych leży w `backend/`.
+- Kopie zapasowe obejmują klucze (podpisy obiegu, szyfrowanie haseł, sesje) —
+  `docs/security/backup_and_dr.md`, README.
+
+### Naprawiono
+- Akceptacja kierownika po wyborze nie kasuje notatki z wyboru.
+- Odrzucenie przez przejmującego powiadamia kierownika komórki; notatka robocza
+  nie trafia po odrzuceniu do IT ani administratora.
+- „Oddaj” z zapisem warunkowym (bez nadpisania równoczesnego przejęcia).
+- Dowiązanie konta przez IT: nie do własnego konta, tylko konto tej samej komórki
+  lub bez komórki; bez nadawania komórki kadrowej kontom tworzonym automatycznie.
+- Wygasłe przejęcie nie jest pokazywane po wysłaniu wniosku.
+
 ## [3.6.0] — 2026-10-23
 
 Poprawki po audycie 3.5: reset, interfejs, porządki.

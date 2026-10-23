@@ -230,9 +230,12 @@ export default function Settings() {
     e.preventDefault()
     setLdapSaving(true); setLdapTestResult(null)
     try {
-      await updateLdapSettings({ ...ldap, bind_password: ldapBindPassword || null })
+      const r = await updateLdapSettings({ ...ldap, bind_password: ldapBindPassword || null })
       setLdapBindPassword('')
+      if (r.data) setLdap(l => ({ ...l, ...r.data }))
       toast('Zapisano ustawienia AD/LDAP')
+      // Zmiana serwera lub konta usługowego czyści zapisane hasło bind.
+      if (r.data?.warning) toast(r.data.warning, { tone: 'warning' })
     } catch (ex) { toast(errorMessage(ex, 'Nie udało się zapisać ustawień AD/LDAP'), { tone: 'error' }) }
     finally { setLdapSaving(false) }
   }

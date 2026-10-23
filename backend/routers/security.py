@@ -1,8 +1,12 @@
 """
 Router: Security events — superadmin/admin only.
+
+Przegląd: admin i superadmin. Zamykanie: zdarzenia high/critical wyłącznie
+superadmin; admin zamyka low/medium, z wyjątkiem dotyczących jego konta.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Optional
 
@@ -78,6 +82,47 @@ def summary(
     return {"open_total": open_total, "open_by_severity": by_sev}
 
 
+# Zdarzenia o wysokiej wadze (nadanie roli admin, zmiana LDAP, reset do
+# ustawień fabrycznych…) zamyka wyłącznie superadmin — administrator mógłby
+# inaczej sam „wyciszyć” ślad własnego nadużycia uprawnień.
+SUPERADMIN_ONLY_SEVERITIES = {SecuritySeverity.high, SecuritySeverity.critical}
+
+
+def _target_user_id(ev: SecurityEvent) -> Optional[int]:
+    """`details.target_user_id` zdarzenia (konto, którego zdarzenie dotyczy)."""
+    details = ev.details
+    if isinstance(details, str):
+        try:
+            details = json.loads(details)
+        except ValueError:
+            return None
+    if not isinstance(details, dict):
+        return None
+    try:
+        raw = details.get("target_user_id")
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _guard_resolve(ev: SecurityEvent, current_user: User) -> None:
+    """Kto może zamknąć zdarzenie. Superadmin — każde; admin — tylko low/medium
+    i nie te, które dotyczą jego własnego konta."""
+    if has_role(current_user, "superadmin"):
+        return
+    severity = getattr(ev.severity, "value", ev.severity)
+    if severity in {s.value for s in SUPERADMIN_ONLY_SEVERITIES}:
+        raise HTTPException(403,
+            "Zdarzenie o wadze wysokiej lub krytycznej może zamknąć tylko superadmin")
+    # Zdarzenie dotyczące samego admina (np. jego nieudane logowania, zmiany
+    # wprowadzone przez niego albo nadanie mu roli) zamyka ktoś inny — inaczej
+    # mógłby zacierać ślady.
+    if current_user.id in (ev.user_id, _target_user_id(ev)):
+        raise HTTPException(403,
+            "Nie możesz zamknąć zdarzenia, które dotyczy Twojego konta — "
+            "zrobi to inny administrator lub superadmin")
+
+
 @router.post("/{event_id}/resolve")
 def resolve(
     event_id: int,
@@ -90,12 +135,7 @@ def resolve(
         raise HTTPException(404, "Zdarzenie nie istnieje")
     if ev.resolved_at:
         return {"ok": True, "already": True}
-    # Zdarzenie dotyczące samego admina (np. jego nieudane logowania, zmiany
-    # wprowadzone przez niego) zamyka ktoś inny — inaczej mógłby zacierać ślady.
-    if ev.user_id == current_user.id and not has_role(current_user, "superadmin"):
-        raise HTTPException(403,
-            "Nie możesz zamknąć zdarzenia, które dotyczy Twojego konta — "
-            "zrobi to inny administrator lub superadmin")
+    _guard_resolve(ev, current_user)
     ev.resolved_at = datetime.utcnow()
     ev.resolved_by_user_id = current_user.id
     ev.resolution_note = (data.note or "")[:1000] or None

@@ -3,7 +3,8 @@ Router: Zarządzanie użytkownikami.
 
 Superadmin (break-glass): pełny dostęp, może nadawać/odbierać dowolną rolę.
 Admin: może zakładać konta i zarządzać użytkownikami z wyjątkiem kont superadmin;
-       nie może nadawać roli superadmin.
+       nadaje wyłącznie role operacyjne (kierownik, IT, kadry, podgląd) —
+       ról admin/superadmin nie nadaje ani nie odbiera.
 """
 from __future__ import annotations
 
@@ -78,14 +79,30 @@ def _guard_superadmin_target(current_user: User, target: User) -> None:
         )
 
 
-def _guard_superadmin_role(current_user: User, roles: list[str]) -> None:
-    """Admin nie może nadawać roli superadmin."""
+def _guard_superadmin_role(current_user: User, roles: list[str],
+                           current_roles: Optional[list[str]] = None) -> None:
+    """Role administracyjne (admin, superadmin) nadaje i odbiera wyłącznie superadmin.
+
+    Inaczej administrator mógłby założyć konto-„marionetkę” z rolą admin
+    (albo nadać ją istniejącemu kontu) i działać nim z pominięciem rozdziału
+    obowiązków. Role operacyjne admin nadaje nadal — każde nadanie trafia do
+    audytu i zdarzeń bezpieczeństwa (`_roles_granted_event`).
+
+    `current_roles` — obecne role konta przy edycji (None przy zakładaniu).
+    """
     if has_role(current_user, "superadmin"):
         return
-    if "superadmin" in roles:
+    requested = set(roles) & ADMIN_ROLES
+    existing = set(current_roles or []) & ADMIN_ROLES
+    if "superadmin" in requested - existing:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "Administrator nie może nadawać roli superadmin",
+        )
+    if requested != existing:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Role administracyjne (admin, superadmin) nadaje i odbiera wyłącznie superadmin",
         )
 
 
@@ -938,7 +955,7 @@ def update_user(
         raise HTTPException(404, "Użytkownik nie istnieje")
     _guard_superadmin_target(current_user, user)
     if data.roles is not None:
-        _guard_superadmin_role(current_user, data.roles)
+        _guard_superadmin_role(current_user, data.roles, parse_roles(user.roles))
         invalid = [r for r in data.roles if r not in VALID_ROLES]
         if invalid:
             raise HTTPException(400, f"Nieznane role: {invalid}")

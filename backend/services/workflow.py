@@ -743,6 +743,191 @@ def clear_take_over(request: AccessRequest) -> None:
     request.taken_over_at = None
 
 
+def unclaim_take_over(session: Session, request: AccessRequest, *,
+                      expected_taker_id: int, expected_node_id: str) -> bool:
+    """Warunkowe oddanie przejęcia („Oddaj”) — lustro `claim_take_over`.
+
+    `UPDATE accessrequest SET taken_over_* = NULL WHERE taken_over_by_id =
+    <odczytany> AND obieg nadal stoi na <odczytanym> węźle`. Zwraca False, gdy
+    w międzyczasie ktoś wyżej przejął wniosek ponownie albo obieg poszedł dalej
+    (wołający zwraca 409 i nie wysyła powiadomień)."""
+    from sqlalchemy import exists, update
+    node_ok = exists().where(
+        WorkflowInstance.request_id == AccessRequest.id,
+        WorkflowInstance.current_node_id == expected_node_id,
+        WorkflowInstance.status == WorkflowInstanceStatus.active,
+    )
+    stmt = (update(AccessRequest)
+            .where(AccessRequest.id == request.id,
+                   AccessRequest.taken_over_by_id == expected_taker_id, node_ok)
+            .values(taken_over_by_id=None, taken_over_by_name=None, taken_over_at=None)
+            .execution_options(synchronize_session=False))
+    res = session.connection().execute(stmt)
+    session.expire(request, ["taken_over_by_id", "taken_over_by_name", "taken_over_at"])
+    return res.rowcount == 1
+
+
+def drop_expired_take_over(session: Session, request: AccessRequest,
+                           dept: Any = _UNSET) -> bool:
+    """Po wyjściu wniosku z etapu kierownika komórki: przejęcie, które już
+    wygasło (`effective_taker_id` → None), usuwamy z bazy — inaczej IT
+    i pozostali widzieliby „Przejęty przez” osobę, która nie miała już do
+    tego prawa. Ważne przejęcie zostaje (informacja historyczna). Tylko
+    `session.add`; commit robi wywołujący. Zwraca True, gdy wyczyszczono."""
+    if not getattr(request, "taken_over_by_id", None):
+        return False
+    if effective_taker_id(session, request, dept) is not None:
+        return False
+    clear_take_over(request)
+    session.add(request)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Zmiana struktury w trakcie obiegu (kierownik / zastępcy / podległość / typ
+# komórki, dyrektor jednostki) — porządki na wnioskach w toku
+# ---------------------------------------------------------------------------
+
+# Węzły, na których adresat kroku zależy od struktury: etap kierownika komórki
+# i akceptacja wyższa (kierownik komórki nadrzędnej).
+STRUCTURE_SENSITIVE_TYPES = MANAGER_STAGE_TYPES + ("higher_manager_approve",)
+
+AUTO_ACTOR_NAME = "SZUP (automatycznie)"
+
+
+def subtree_dept_ids(session: Session, roots: Any) -> set[int]:
+    """Komórki `roots` wraz z całym ich poddrzewem (zmiana kierownika komórki
+    zmienia przełożonych wszystkich komórek pod nią)."""
+    roots = {int(x) for x in (roots or ()) if x}
+    if not roots:
+        return set()
+    children: dict[int, list[int]] = {}
+    for d in session.exec(select(Department)).all():
+        if d.parent_dept_id is not None:
+            children.setdefault(d.parent_dept_id, []).append(d.id)
+    out: set[int] = set()
+    stack = list(roots)
+    while stack:
+        cur = stack.pop()
+        if cur in out:
+            continue
+        out.add(cur)
+        stack.extend(children.get(cur, []))
+    return out
+
+
+def unit_dept_ids(session: Session, unit_id: Optional[int]) -> set[int]:
+    """Wszystkie komórki jednostki (zmiana dyrektora jednostki)."""
+    if not unit_id:
+        return set()
+    return {int(x) for x in session.exec(
+        select(Department.id).where(Department.unit_id == unit_id)).all()}
+
+
+def _structure_rows(session: Session, dept_ids: Any) -> list[AccessRequest]:
+    from sqlmodel import col
+    ids = sorted({int(x) for x in (dept_ids or ()) if x})
+    if not ids:
+        return []
+    return list(session.exec(
+        select(AccessRequest)
+        .where(col(AccessRequest.department_id).in_(ids))
+        .where(col(AccessRequest.current_node_type).in_(list(STRUCTURE_SENSITIVE_TYPES)))
+    ).all())
+
+
+def _stage_state(session: Session, request: AccessRequest
+                 ) -> Optional[tuple[frozenset, bool]]:
+    """(odpowiedzialni za bieżący krok, czy przejęcie jest ważne) — None, gdy
+    wniosek nie stoi na węźle zależnym od struktury.
+
+    Odpowiedzialny = ważny przejmujący, a bez niego aktywni adresaci kroku
+    (`_stage_actor_ids`)."""
+    node = current_node_of(session, request)
+    if not node or node.get("type") not in STRUCTURE_SENSITIVE_TYPES:
+        return None
+    dept = session.get(Department, request.department_id) if request.department_id else None
+    taker_ok = False
+    if node["type"] in MANAGER_STAGE_TYPES and request.taken_over_by_id:
+        taker_ok = (is_manager_stage(session, node["type"], dept)
+                    and effective_taker_id(session, request, dept) is not None)
+        if taker_ok:
+            return frozenset({request.taken_over_by_id}), True
+    ids = []
+    for uid in _stage_actor_ids(session, node, dept):
+        u = session.get(User, uid)
+        if u and u.is_active:
+            ids.append(uid)
+    return frozenset(ids), taker_ok
+
+
+def manager_stage_snapshot(session: Session, dept_ids: Any) -> dict[int, tuple[frozenset, bool]]:
+    """Stan „kto odpowiada za krok” wniosków w toku w komórkach `dept_ids` —
+    robiony PRZED zmianą struktury i przekazywany do `resync_manager_stage`."""
+    out: dict[int, tuple[frozenset, bool]] = {}
+    for r in _structure_rows(session, dept_ids):
+        st = _stage_state(session, r)
+        if st is not None:
+            out[r.id] = st
+    return out
+
+
+def resync_manager_stage(session: Session, dept_ids: Any, *,
+                         before: Optional[dict] = None,
+                         reason: str = "Zmiana w strukturze organizacyjnej") -> int:
+    """Porządki na wnioskach w toku po zmianie struktury w komórkach `dept_ids`
+    (wołający podaje już całe dotknięte poddrzewo — `subtree_dept_ids` /
+    `unit_dept_ids`).
+
+    1. Przejęcie, które przestało być ważne (przejmujący nie jest już
+       przełożonym, komórka straciła etap kierownika), albo było nieważne już
+       przed zmianą (`before`), jest usuwane ze zdarzeniem „release”
+       (aktor: SZUP (automatycznie), notatka z powodem). Dzięki temu
+       „uśpione” przejęcie nie ożywa, gdy dawny przełożony odzyska stanowisko.
+    2. Gdy zmieniła się osoba odpowiedzialna za bieżący krok, nowi adresaci
+       dostają powiadomienie o etapie (po commicie — `defer`); osoby
+       odpowiedzialne już wcześniej — nie.
+
+    Tylko `session.add` + flush; commit robi wywołujący. Zwraca liczbę
+    zwolnionych przejęć."""
+    released = 0
+    for r in _structure_rows(session, dept_ids):
+        node = current_node_of(session, r)
+        if not node:
+            continue
+        ntype = node.get("type")
+        dept = session.get(Department, r.department_id) if r.department_id else None
+        prev = (before or {}).get(r.id)
+        prev_ids: Optional[frozenset] = prev[0] if prev else None
+
+        if ntype in MANAGER_STAGE_TYPES and r.taken_over_by_id:
+            valid_now = (is_manager_stage(session, ntype, dept)
+                         and effective_taker_id(session, r, dept) is not None)
+            was_stale = prev is not None and not prev[1]
+            if not valid_now or was_stale:
+                taker_id, taker_name = r.taken_over_by_id, r.taken_over_by_name
+                clear_take_over(r)
+                session.add(r)
+                record_request_event(
+                    session, r.id, "release", actor_user=None, actor_name=AUTO_ACTOR_NAME,
+                    note=(f"{reason} — przejęcie ({taker_name or f'id={taker_id}'}) "
+                          f"straciło ważność; wniosek wraca do kierownika komórki."))
+                released += 1
+                if prev_ids is None:
+                    prev_ids = frozenset({taker_id})
+
+        if prev_ids is None:
+            continue   # brak stanu sprzed zmiany i nic nie zwolniono — bez maili
+        now = _stage_state(session, r)
+        if now is None or now[1]:
+            continue   # krok przy ważnym przejmującym — adresat bez zmian
+        if now[0] and now[0] != prev_ids:
+            _notify_stage(session, r, node, dept, None, exclude_ids=prev_ids)
+    if released:
+        session.flush()
+    return released
+
+
 def release_take_overs_of(session: Session, user_id: Optional[int], note: str) -> int:
     """Zwalnia przejęcia osoby `user_id` na wnioskach, które wciąż stoją na
     etapie kierownika komórki (np. przejmujący został dezaktywowany albo stracił
@@ -867,15 +1052,22 @@ def can_act(node: dict, request: AccessRequest, dept: Optional[Department],
         return False, ("Tylko kierownik, jego zastępca lub przełożony w strukturze może wykonać ten krok.")
 
     if ntype == "higher_manager_approve":
+        # Kierownik (lub zastępca) SAMEJ komórki nie zatwierdza akceptacji
+        # wyższej wniosku własnej komórki — także wtedy, gdy jest jednocześnie
+        # kierownikiem / zastępcą komórki nadrzędnej (inaczej zatwierdziłby
+        # wniosek „sam u siebie” dwa razy). Jedyny wyjątek: dyrektor jednostki
+        # (świadoma decyzja — nad nim nie ma już nikogo w strukturze).
+        if (is_department_manager_or_deputy(session, user, dept)
+                and _unit_director_id(session, dept) != user.id):
+            return False, ("Kierownik komórki i jego zastępcy nie zatwierdzają akceptacji "
+                           "wyższej wniosku własnej komórki — zrobi to przełożony.")
         parent = None
         if dept and dept.parent_dept_id:
             parent = session.get(Department, dept.parent_dept_id)
         if is_department_manager_or_deputy(session, user, parent):
             return True, ""
         # Każdy przełożony NAD komórką (wyżej niż jej kierownik) oraz dyrektor
-        # jednostki. Kierownik samej komórki nie zatwierdza akceptacji wyższej —
-        # wyjątek: gdy jest też dyrektorem jednostki (świadoma decyzja, na razie
-        # bez zmian; `is_superior_for` liczy dyrektora niezależnie od include_self).
+        # jednostki (`is_superior_for` liczy dyrektora niezależnie od include_self).
         if is_superior_for(session, user, dept, include_self=False):
             return True, ""
         return False, ("Tylko kierownik wydziału nadrzędnego, jego zastępca lub przełożony wyżej może wykonać ten krok.")
@@ -1108,24 +1300,38 @@ def _stage_actor_ids(session: Session, node: dict,
     if own and own is not resp:
         for uid in _deputy_ids(session, own):
             _add(uid)
+    director = _unit_director_id(session, dept)
+    if ntype == "higher_manager_approve" and dept is not None:
+        # Kierownik / zastępca samej komórki nie wykona akceptacji wyższej
+        # (patrz `can_act`) — nie wysyłamy mu „czeka na Ciebie”, nawet gdy jest
+        # też zastępcą komórki nadrzędnej. Wyjątek: dyrektor jednostki.
+        own_circle = set(_deputy_ids(session, dept))
+        if dept.manager_user_id:
+            own_circle.add(dept.manager_user_id)
+        ids = [uid for uid in ids if uid not in own_circle or uid == director]
     if not ids:
-        _add(_unit_director_id(session, dept))
+        _add(director)
     return ids
 
 
 def _addressee_for_node(session: Session, node: dict, request: AccessRequest,
-                        dept: Optional[Department]) -> list[str]:
+                        dept: Optional[Department],
+                        exclude_ids: Any = ()) -> list[str]:
     """Adresy e-mail osób, które trzeba powiadomić o wejściu w dany węzeł.
 
     Spójnie z `waiting_for_label` i `can_act` — patrz `_stage_actor_ids`.
-    Puste, jeśli nie potrafimy znaleźć adresata."""
+    `exclude_ids` — osoby pomijane (np. sprawca przejścia, który sam wysłał
+    wniosek na ten etap). Puste, jeśli nie potrafimy znaleźć adresata."""
     if node["type"] == "it_execute":
         # Realizacja IT: powiadamiamy WYŁĄCZNIE skrzynkę helpdesku
         # (patrz `_notify_helpdesk`) — bez imiennych maili do pracowników IT,
         # bo zgłoszenie zakłada się w systemie helpdesku, nie u poszczególnych osób.
         return []
+    skip = {x for x in (exclude_ids or ()) if x}
     emails: list[str] = []
     for uid in _stage_actor_ids(session, node, dept):
+        if uid in skip:
+            continue
         u = session.get(User, uid)
         if u and u.is_active and u.email and u.email not in emails:
             emails.append(u.email)
@@ -1254,19 +1460,26 @@ def _notify_helpdesk(session: Session, request: AccessRequest,
 
 def _notify_stage(session: Session, request: AccessRequest, node: dict,
                   dept: Optional[Department],
-                  actor_user: Optional[User] = None) -> None:
+                  actor_user: Optional[User] = None,
+                  exclude_ids: Any = ()) -> None:
     """Powiadamia adresata w tle o wejściu wniosku w nowy węzeł.
 
     Nadawcą powiadomienia jest `actor_user` — osoba, której akcja przesunęła
     wniosek do tego etapu (np. kierownik, który zaakceptował). To ona figuruje
-    jako „od kogo" w skrzynce adresata.
+    jako „od kogo" w skrzynce adresata, ale sama maila NIE dostaje (np.
+    przełożony, który przejął i wysłał wniosek dwustopniowy, a teraz może
+    wykonać też akceptację wyższą — krok zostaje, bez „czeka na Ciebie”).
+    `exclude_ids` — dodatkowe osoby do pominięcia (np. już powiadomione).
     """
     try:
         # Wejście w realizację IT → dodatkowo zgłoszenie na helpdesk.
         if node.get("type") == "it_execute":
             _notify_helpdesk(session, request, actor_user)
 
-        emails = _addressee_for_node(session, node, request, dept)
+        skip = set(exclude_ids or ())
+        if actor_user is not None and actor_user.id:
+            skip.add(actor_user.id)
+        emails = _addressee_for_node(session, node, request, dept, skip)
         if not emails:
             return
         s_name, s_email = _actor_sender(actor_user)
@@ -1299,8 +1512,8 @@ def _notify_request_completed(session: Session, request: AccessRequest,
         step = _selector_step(session, request)
         if step and step.actor_user_id:
             target_id = step.actor_user_id
-        if not target_id:
-            return
+        if not target_id or (actor_user is not None and target_id == actor_user.id):
+            return   # brak adresata albo realizujący sam jest wnioskodawcą
         u = session.get(User, target_id)
         if not u or not u.email:
             return
@@ -1340,10 +1553,12 @@ def _notify_request_completed(session: Session, request: AccessRequest,
 
 
 def _notify_request_rejected(session: Session, request: AccessRequest,
-                             actor_user: Optional[User], comment: Optional[str]) -> None:
+                             actor_user: Optional[User], comment: Optional[str],
+                             extra_ids: Any = ()) -> None:
     """Wniosek odrzucony — powiadom twórcę zgłoszenia (zwykle kadry) oraz
     kierownika, który wybierał uprawnienia (jeśli to inna osoba niż odrzucający).
-    Wcześniej szablon `request_rejected` istniał, ale nie był nigdzie wysyłany."""
+    `extra_ids` — dodatkowi adresaci (np. kierownik komórki i jego zastępcy,
+    gdy wniosek odrzucił na etapie kierownika przełożony)."""
     try:
         targets: list[int] = []
         if request.created_by_id:
@@ -1351,13 +1566,16 @@ def _notify_request_rejected(session: Session, request: AccessRequest,
         step = _selector_step(session, request)
         if step and step.actor_user_id and step.actor_user_id not in targets:
             targets.append(step.actor_user_id)
+        for uid in extra_ids or ():
+            if uid and uid not in targets:
+                targets.append(uid)
         from services.email_alerts import notify_request_rejected
         from services.permissions import user_is_hr
         for uid in targets:
             if actor_user and uid == actor_user.id:
                 continue   # odrzucający nie dostaje maila o własnej decyzji
             u = session.get(User, uid)
-            if not u or not u.email:
+            if not u or not u.is_active or not u.email:
                 continue
             defer(session, notify_request_rejected, **{
                     "requester_email": u.email,
@@ -1463,7 +1681,7 @@ def execute_action(
 
     action ∈ {"approve", "reject", "select", "execute"}
     """
-    node, _dept = validate_action(session, instance, request, user, action)
+    node, dept = validate_action(session, instance, request, user, action)
 
     action_enum = {
         "approve": WorkflowStepAction.approve,
@@ -1476,11 +1694,20 @@ def execute_action(
                  action=action_enum, actor_user=user, payload=payload, comment=comment)
 
     if action == "reject":
+        # Odrzucenie na etapie kierownika komórki przez przełożonego (po
+        # przejęciu) — kierownik komórki i jego zastępcy też muszą o tym wiedzieć
+        # (wniosek był „u nich”). Liczymy PRZED zmianą statusu instancji.
+        extra: list[int] = []
+        if is_manager_stage(session, node["type"], dept):
+            from services.permissions import is_department_manager_or_deputy
+            if not is_department_manager_or_deputy(session, user, dept):
+                extra = ([dept.manager_user_id] if dept.manager_user_id else []) \
+                    + _deputy_ids(session, dept)
         instance.status = WorkflowInstanceStatus.rejected
         instance.completed_at = datetime.utcnow()
         session.add(instance)
         _sync_request_status(request, instance)
-        _notify_request_rejected(session, request, user, comment)
+        _notify_request_rejected(session, request, user, comment, extra_ids=extra)
         return instance
 
     # Dodatkowa logika: przy select_permissions zapisujemy wybrane item_ids

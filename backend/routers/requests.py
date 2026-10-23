@@ -589,12 +589,15 @@ def _item_kind(item, request_kind: str) -> str:
 def _resolve_or_create_worker(
     session: Session, ad_username: str, req: AccessRequest, *,
     fill_department: bool = True,
+    ghost_hr_department: bool = True,
 ) -> User:
     """
     Znajduje konto po sAMAccountName (username) lub tworzy nowe „ghost" konto
     typu LDAP z danymi z wniosku. Login jest normalizowany jak przy logowaniu
     i imporcie z AD („DOMENA\\jan” → „jan”). Uzupełnia puste imię i e-mail,
     a gdy `fill_department` — także pustą komórkę istniejącego konta.
+    `ghost_hr_department=False` — nowe konto NIE dostaje komórki kadrowej
+    (`is_hr`), bo przynależność do niej daje zdolność HR (dowiązanie wsteczne).
     Nie zmienia konta lokalnego (admin/superadmin) — rzuca 400.
     """
     from services.ldap_service import normalize_login, is_valid_login, find_user_by_login
@@ -633,6 +636,11 @@ def _resolve_or_create_worker(
 
     # Tworzymy „ghost" konto LDAP, is_active=True. Przy późniejszym imporcie
     # z AD (Users → LDAP → import) dane zostaną nadpisane aktualnymi z AD.
+    ghost_dept_id = req.department_id
+    if ghost_dept_id and not ghost_hr_department:
+        d = session.get(Department, ghost_dept_id)
+        if d and getattr(d, "is_hr", False):
+            ghost_dept_id = None
     new_user = User(
         username=uname,
         full_name=req.worker_name or uname,
@@ -641,7 +649,7 @@ def _resolve_or_create_worker(
         roles=roles_to_json(["viewer"]),
         auth_type=AuthType.ldap,
         is_active=True,
-        department_id=req.department_id,
+        department_id=ghost_dept_id,
     )
     session.add(new_user); session.flush()   # nadaje id; commit robi wywołujący
     return new_user
@@ -1228,10 +1236,14 @@ def link_worker(
 
     Tylko dla wniosków BEZ dowiązanego konta (inaczej 409) — przepięcie
     zrealizowanych uprawnień na inne konto zmieniałoby rejestr uprawnień.
-    Istniejącemu kontu nie uzupełniamy komórki (to mogłoby nadać zdolność
-    HR, gdy komórka wniosku jest kadrowa).
+    Nie wolno dowiązać wniosku do własnego konta (403), a istniejące konto
+    musi należeć do komórki wniosku albo nie mieć komórki (inaczej 409).
+    Istniejącemu kontu nie uzupełniamy komórki, a nowe konto nie dostaje
+    komórki kadrowej (to mogłoby nadać zdolność HR). Dowiązanie do wniosku
+    zrealizowanego trafia do zdarzeń bezpieczeństwa (medium).
     """
     from services.audit import record_event
+    from services.ldap_service import normalize_login, find_user_by_login
 
     r = session.get(AccessRequest, request_id)
     if not r:
@@ -1240,7 +1252,21 @@ def link_worker(
     if r.worker_user_id:
         raise HTTPException(status.HTTP_409_CONFLICT,
             "Wniosek ma już dowiązane konto pracownika — dowiązania nie można zmienić.")
-    worker = _resolve_or_create_worker(session, data.ad_username, r, fill_department=False)
+    uname = normalize_login(data.ad_username or "")
+    existing = find_user_by_login(session, uname) if uname else None
+    if existing and existing.id == current_user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+            "Nie możesz dowiązać wniosku do własnego konta — uprawnienia nadane "
+            "na Twoje konto musi potwierdzić inna osoba z IT.")
+    if existing and existing.department_id and existing.department_id != r.department_id:
+        here = session.get(Department, existing.department_id)
+        raise HTTPException(status.HTTP_409_CONFLICT,
+            f'Konto „{existing.username}” należy do innej komórki '
+            f'(„{here.name if here else existing.department_id}”) niż wniosek — '
+            f'dowiązanie przepisałoby uprawnienia innej osobie. Sprawdź login '
+            f'pracownika albo najpierw popraw jego komórkę w kartotece.')
+    worker = _resolve_or_create_worker(session, data.ad_username, r, fill_department=False,
+                                       ghost_hr_department=False)
     old_worker = r.worker_user_id
     r.worker_user_id = worker.id
     session.add(r)
@@ -1256,6 +1282,21 @@ def link_worker(
         )
     except Exception:
         pass
+    if r.status == RequestStatus.completed:
+        # Zrealizowane uprawnienia trafiają w rejestrze na to konto — ślad
+        # w zdarzeniach bezpieczeństwa (do przejrzenia przez superadmina).
+        from models import SecuritySeverity
+        from services.security_events import emit as emit_security_event
+        emit_security_event(
+            session, event_type="request.worker_linked", source="requests",
+            severity=SecuritySeverity.medium,
+            summary=(f"Dowiązano konto {worker.username} do zrealizowanego wniosku "
+                     f"#{r.id} — przez {current_user.username}"),
+            details={"request_id": r.id, "worker_user_id": worker.id,
+                     "ad_username": worker.username,
+                     "created_account": existing is None},
+            user_id=current_user.id, commit=False,
+        )
     session.commit(); session.refresh(r)
     return _request_out(session, r, current_user)
 
@@ -1611,8 +1652,22 @@ def workflow_action(
         # Wysłanie kroku kierownika: uwagi z wysyłki zastępują notatkę z wersji
         # roboczej (IT nie może zobaczyć nieaktualnej notatki), a wersja robocza
         # przestaje obowiązywać — kolejny etap zaczyna się bez niej.
-        if data.action in ("select", "approve"):
-            r.manager_comment = (data.comment or "").strip() or None
+        sent_comment = (data.comment or "").strip() or None
+        if data.action == "select":
+            r.manager_comment = sent_comment
+        elif data.action == "approve":
+            # Akceptacja po kroku wyboru bez własnych uwag NIE kasuje uwag
+            # z wyboru — wracamy do nich (a nie do notatki roboczej, która mogła
+            # nadpisać pole w międzyczasie).
+            if sent_comment is None:
+                from services.workflow import _selector_step
+                sel = _selector_step(session, r)
+                sent_comment = ((sel.comment or "").strip() or None) if sel else None
+            r.manager_comment = sent_comment
+        elif data.action == "reject":
+            # Odrzucenie na etapie kierownika: notatka robocza nie może wyciec
+            # do IT/administratora — zostaje tylko uzasadnienie odrzucenia.
+            r.manager_comment = sent_comment
         r.draft_saved_at = None
         session.add(r)
 
@@ -1620,6 +1675,12 @@ def workflow_action(
                    payload=payload, comment=data.comment)
     if ntype in MANAGER_STAGE_TYPES:
         _ensure_taker_unchanged(session, r, observed_taker)
+        # Wyjście z etapu kierownika: przejęcie, które już wygasło, nie może
+        # dalej widnieć jako „Przejęty przez” (np. w IT).
+        from services.workflow import current_node_of, drop_expired_take_over
+        nxt = current_node_of(session, r)
+        if (nxt or {}).get("type") not in MANAGER_STAGE_TYPES:
+            drop_expired_take_over(session, r, _cur_dept)
     try:
         session.commit()
     except IntegrityError:
@@ -1852,9 +1913,13 @@ def release_request(
 ):
     """„Oddaj” — przejmujący (albo superadmin) zwalnia przejęcie wniosku.
     Wniosek wraca do kierownika komórki (z powiadomieniem o etapie); przełożeni
-    mogą go znowu przejąć. Tylko na etapie kierownika komórki."""
+    mogą go znowu przejąć. Tylko na etapie kierownika komórki.
+
+    Zapis jest warunkowy (jak przy „Przejmij”): gdy w międzyczasie ktoś wyżej
+    przejął wniosek ponownie albo obieg poszedł dalej → 409, bez historii
+    i bez powiadomień."""
     from services.workflow import (
-        is_manager_stage, clear_take_over, record_request_event, _notify_stage,
+        is_manager_stage, unclaim_take_over, record_request_event, _notify_stage,
     )
     from services.audit import record_event
 
@@ -1863,7 +1928,7 @@ def release_request(
         raise HTTPException(404, "Wniosek nie istnieje")
     _check_access(current_user, r, session)
 
-    _inst, node = _active_node(session, request_id)
+    inst, node = _active_node(session, request_id)
     if not r.taken_over_by_id:
         raise HTTPException(status.HTTP_409_CONFLICT, "Wniosek nie jest przejęty.")
     if r.taken_over_by_id != current_user.id and not has_role(current_user, "superadmin"):
@@ -1875,8 +1940,12 @@ def release_request(
             "Przejęcie można oddać tylko, gdy wniosek czeka na etapie kierownika komórki.")
 
     prev_id, prev_name = r.taken_over_by_id, r.taken_over_by_name
-    clear_take_over(r)
-    session.add(r)
+    if not unclaim_take_over(session, r, expected_taker_id=prev_id,
+                             expected_node_id=inst.current_node_id):
+        session.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT,
+            "Wniosek zmienił stan w międzyczasie (przejął go ktoś inny albo został "
+            "wysłany dalej). Odśwież wniosek.")
     # Superadmin zwalniający cudze przejęcie — w historii widać czyje.
     note = f"Zwolniono przejęcie: {prev_name}" if prev_id != current_user.id else None
     record_request_event(session, r.id, "release", actor_user=current_user, note=note)

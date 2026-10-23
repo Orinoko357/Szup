@@ -16,9 +16,26 @@ Zawartość bazy:
 - Zdarzenia bezpieczeństwa
 - Konfiguracja (SMTP, LDAP, szablony powiadomień) — hasła zaszyfrowane kluczem Fernet
 
-Obok bazy, w tym samym katalogu, leży `jwt_secret.key` (klucz podpisu sesji).
-Jego utrata wyloguje wszystkich użytkowników, ale nie powoduje utraty danych —
-przy starcie generuje się nowy.
+### Klucze — kopiujemy je razem z bazą
+
+Sama baza nie wystarczy do pełnego odtworzenia. W katalogu danych
+(`$SZUP_DATA_DIR`) albo w `/opt/szup/.env` leżą klucze, bez których część
+danych z kopii jest bezużyteczna:
+
+| Klucz | Skąd go bierze aplikacja | Do czego służy | Skutek utraty |
+|---|---|---|---|
+| sekret obiegu | `SZUP_WORKFLOW_SECRET` z `.env`, a gdy brak — plik `data/workflow_secret.key` | podpisy łańcuchowe kroków obiegu wniosków (weryfikacja integralności historii akceptacji) | **cała dotychczasowa historia obiegu przestaje się weryfikować** — łańcuchy podpisów wyglądają na naruszone, tracimy dowód nienaruszalności akceptacji |
+| klucz Fernet | `SZUP_SECRET_KEY` z `.env`, a gdy brak — plik `data/secret.key` | szyfrowanie haseł zapisanych w bazie (SMTP, konto usługowe LDAP) | zapisanych haseł nie da się odszyfrować — trzeba je ponownie wpisać w Ustawieniach |
+| klucz JWT | plik `data/jwt_secret.key` | podpis sesji (tokenów logowania) | wszyscy zostają wylogowani; danych nie tracimy — przy starcie generuje się nowy |
+
+Dlatego każda kopia bazy ma odpowiadającą jej kopię kluczy
+(`szup-keys-RRRR-MM-DD-GGMMSS.tar.gz`: pliki `*.key` z katalogu danych
+i `/opt/szup/.env`). Archiwum kluczy to **sekret**: uprawnienia `600`,
+a poza serwer kopiujemy je w inne, zaszyfrowane miejsce niż kopie bazy
+(sejf, zaszyfrowane archiwum, menedżer haseł) — kto ma bazę i klucz Fernet,
+odczyta hasła SMTP i LDAP.
+
+### Tryb WAL
 
 Gdy SQLite pracuje w trybie WAL, część ostatnich zmian może być jeszcze
 w plikach `szup.db-wal` i `szup.db-shm`. Dlatego **nie kopiujemy samego pliku
@@ -27,36 +44,69 @@ tworzy spójną kopię „na gorąco” razem z zawartością dziennika.
 
 ## Kopie zapasowe
 
-Wszystkie kopie trafiają do `/opt/szup/backups/` (katalog `700`, pliki `600`)
-pod nazwą `szup-RRRR-MM-DD-GGMMSS.db`. Nazwa sortuje się chronologicznie,
-więc retencję liczymy po nazwie, a nie po dacie modyfikacji pliku.
+Wszystkie kopie trafiają do `/opt/szup/backups/` (katalog `700`, pliki `600`).
+Nazwy sortują się chronologicznie, więc retencję liczymy po nazwie, a nie po
+dacie modyfikacji pliku. Dwa rodzaje kopii mają **różne prefiksy**, żeby
+retencja jednego nie kasowała drugiego:
+
+| Prefiks | Kto tworzy | Retencja |
+|---|---|---|
+| `szup-RRRR-MM-DD-GGMMSS.db` + `szup-keys-RRRR-MM-DD-GGMMSS.tar.gz` | codzienna kopia (cron) | 30 dni |
+| `szup-predeploy-RRRR-MM-DD-GGMMSS.db` | `deploy/deploy.sh` przed wdrożeniem | 10 najnowszych |
 
 ### Kopia przed każdym wdrożeniem
 
 `deploy/deploy.sh` robi kopię przed podmianą kodu (migracje uruchamiają się
-przy restarcie usługi) i zostawia 10 najnowszych. Nieudana albo pusta kopia
+przy restarcie usługi) i zostawia 10 najnowszych kopii z prefiksem
+`szup-predeploy-` — kopii z crona nie rusza. Nieudana albo pusta kopia
 przerywa wdrożenie. Brak bazy przy istniejącej instalacji (np. zła ścieżka
-`SZUP_DATA_DIR`) też przerywa wdrożenie.
+`SZUP_DATA_DIR` / `SZUP_DB_URL`) też przerywa wdrożenie, podobnie jak katalog
+danych wewnątrz `/opt/szup/backend` (synchronizacja kodu z `--delete` mogłaby
+go skasować). Katalog `data/`, pliki `.env*`, `*.db*` i `*.key` są przy
+synchronizacji backendu wykluczone i chronione — wdrożenie ich nie nadpisze
+ani nie usunie. Kluczy `deploy.sh` nie kopiuje (nie zmienia ich) — robi to
+kopia codzienna.
 
 ### Codzienna kopia (cron)
 
+Skrypt `/usr/local/sbin/szup-backup` (właściciel `root`, prawa `700`):
+
 ```bash
-# /etc/cron.d/szup-backup — codziennie o 2:15, kopie starsze niż 30 dni są usuwane
-15 2 * * * root sqlite3 /opt/szup/data/szup.db ".backup '/opt/szup/backups/szup-$(date +\%F-\%H\%M\%S).db'" && chmod 600 /opt/szup/backups/szup-*.db && find /opt/szup/backups/ -name 'szup-*.db' -mtime +30 -delete
+#!/usr/bin/env bash
+# Codzienna kopia SZUP: baza (sqlite3 .backup) + klucze (tar, prawa 600).
+set -euo pipefail
+umask 077                                   # nowe pliki tylko dla roota
+APP_DIR=/opt/szup
+DATA_DIR=/opt/szup/data                     # = SZUP_DATA_DIR usługi
+BACKUP_DIR=/opt/szup/backups
+STAMP="$(date +%F-%H%M%S)"
+
+mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
+sqlite3 "$DATA_DIR/szup.db" ".backup '$BACKUP_DIR/szup-$STAMP.db'"
+# Klucze: workflow_secret.key, secret.key, jwt_secret.key i .env (gdy klucze
+# są w zmiennych SZUP_WORKFLOW_SECRET / SZUP_SECRET_KEY). Brakujący plik
+# (np. klucz trzymany tylko w .env) tar pomija z ostrzeżeniem.
+tar -czf "$BACKUP_DIR/szup-keys-$STAMP.tar.gz" --ignore-failed-read \
+    -C / "${DATA_DIR#/}/workflow_secret.key" "${DATA_DIR#/}/secret.key" \
+         "${DATA_DIR#/}/jwt_secret.key" "${APP_DIR#/}/.env"
+chmod 600 "$BACKUP_DIR/szup-$STAMP.db" "$BACKUP_DIR/szup-keys-$STAMP.tar.gz"
+
+# Retencja 30 dni — tylko kopie codzienne (szup-<data>…); kopii
+# przedwdrożeniowych (szup-predeploy-…) nie ruszamy, mają własną retencję.
+find "$BACKUP_DIR" -maxdepth 1 -type f \
+    \( -name 'szup-[0-9]*.db' -o -name 'szup-keys-[0-9]*.tar.gz' \) \
+    -mtime +30 -delete
+```
+
+```bash
+# /etc/cron.d/szup-backup — codziennie o 2:15
+15 2 * * * root /usr/local/sbin/szup-backup
 ```
 
 Wymaga pakietu `sqlite3` (`apt install sqlite3`). Katalog
 `/opt/szup/backups/` warto dodatkowo kopiować poza serwer (kopia
-systemowa / NAS), bo sam serwer jest pojedynczym punktem awarii.
-
-### Backup klucza Fernet
-
-Klucz szyfrowania (`SZUP_SECRET_KEY` z `/opt/szup/.env`) jest niezbędny do
-odszyfrowania haseł SMTP i konta usługowego LDAP. Przechowuj go **osobno od
-kopii bazy** (sejf, zaszyfrowane archiwum, menedżer haseł).
-
-Utrata klucza = brak możliwości odszyfrowania sekretów; trzeba ponownie wpisać
-hasło SMTP i hasło konta usługowego LDAP w Ustawieniach.
+systemowa / NAS), bo sam serwer jest pojedynczym punktem awarii —
+archiwa `szup-keys-*` osobno i zaszyfrowane (patrz wyżej).
 
 ## Przywracanie
 
@@ -73,12 +123,19 @@ mv szup.db /opt/szup/backups/przed-przywroceniem/szup-$(date +%F-%H%M%S).db
 #    nałożone na przywróconą kopię i mogłyby ją uszkodzić.
 rm -f szup.db-wal szup.db-shm szup.db-journal
 
-# 4. Przywróć wybraną kopię i sprawdź jej spójność.
+# 4. Przywróć wybraną kopię (codzienną szup-… albo przedwdrożeniową
+#    szup-predeploy-…) i sprawdź jej spójność.
 cp /opt/szup/backups/szup-RRRR-MM-DD-GGMMSS.db szup.db
 chmod 600 szup.db
 sqlite3 szup.db "PRAGMA integrity_check;"     # oczekiwany wynik: ok
 
-# 5. Uruchom usługę i sprawdź, czy odpowiada.
+# 5. Klucze — gdy serwer jest nowy albo klucze zginęły / różnią się od tych
+#    z chwili wykonania kopii. Najpierw obejrzyj zawartość archiwum.
+tar -tzf /opt/szup/backups/szup-keys-RRRR-MM-DD-GGMMSS.tar.gz
+tar -xzpf /opt/szup/backups/szup-keys-RRRR-MM-DD-GGMMSS.tar.gz -C /
+chmod 600 /opt/szup/data/*.key /opt/szup/.env
+
+# 6. Uruchom usługę i sprawdź, czy odpowiada.
 systemctl start szup
 curl -fsS http://127.0.0.1:8003/api/health
 ```
@@ -90,7 +147,13 @@ Uwagi:
 - Po przywróceniu wszystko, co zapisano po wykonaniu kopii (wnioski, kroki
   obiegu, wpisy audytu), trzeba odtworzyć ręcznie. Wpisz przywrócenie do
   rejestru incydentów (`incident_response.md`).
-- Gdy przywracasz kopię z innego serwera, przenieś też `SZUP_SECRET_KEY`.
+- Gdy przywracasz kopię na innym serwerze, przenieś **wszystkie** klucze
+  (archiwum `szup-keys-*` albo wartości `SZUP_WORKFLOW_SECRET` /
+  `SZUP_SECRET_KEY` z `.env`). Nie uruchamiaj usługi bez nich: aplikacja
+  wygeneruje nowe `workflow_secret.key` / `secret.key`, a historia obiegu
+  przestanie się weryfikować, zaś hasła SMTP/LDAP — odszyfrowywać.
+- Po przywróceniu sprawdź weryfikację podpisów obiegu na kilku starszych
+  wnioskach — błąd weryfikacji wszystkich oznacza niewłaściwy sekret obiegu.
 
 ## RTO / RPO
 
@@ -104,7 +167,9 @@ Uwagi:
 2. W `/opt/szup/.env` ustaw stary klucz jako `SZUP_SECRET_KEY_OLD`, a nowy jako `SZUP_SECRET_KEY`.
 3. Uruchom w katalogu backendu, z tymi samymi zmiennymi:
    `cd /opt/szup/backend && set -a && . /opt/szup/.env && set +a && /opt/szup/venv/bin/python -m tools.rotate_fernet`
-4. Zrestartuj usługę, usuń `SZUP_SECRET_KEY_OLD` i zrób nową kopię klucza.
+4. Zrestartuj usługę, usuń `SZUP_SECRET_KEY_OLD` i zrób nową kopię kluczy
+   (`/usr/local/sbin/szup-backup`) — starsze archiwa `szup-keys-*` mają stary klucz,
+   pasujący tylko do kopii bazy z tego samego dnia.
 
 ## Podstawa prawna
 

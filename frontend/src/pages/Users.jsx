@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import {
   Plus, Trash2, KeyRound, Unlock, Ban, Building2, Check, X,
-  ChevronRight, ChevronDown, FolderTree, Users as UsersIcon, UserCog,
+  ChevronRight, ChevronDown, FolderTree, Users as UsersIcon, UserCog, Lock,
 } from 'lucide-react'
 import {
   listUsers, createUser, updateUser, deleteUser, resetUserPassword, unlockUser,
@@ -216,15 +216,20 @@ function DeptCombo({ depts = [], units = [], value, onChange, className = 'form-
 
 // Etykiety i kolory ról wprost ze wspólnego słownika (labels.js) — te same,
 // pisane tak samo jak w belce (bez lokalnej kopii ROLE_META).
+// Role administracyjne nadaje i odbiera wyłącznie superadmin (backend odrzuca
+// to samo — tu tylko nie pokazujemy opcji, których admin i tak nie zapisze).
+const ADMIN_ROLES = ['superadmin', 'admin']
 const ROLES = ['superadmin', 'admin', 'hr', 'manager', 'it_staff', 'viewer'].map(v => ({
   value: v, label: ROLE_LABEL[v] || v, badge: ROLE_META[v]?.badge || 'badge--neutral',
-  superadminOnly: v === 'superadmin',
+  superadminOnly: ADMIN_ROLES.includes(v),
 }))
 
 const isSuperadmin = () => getUserRoles().includes('superadmin')
 
 // Jakie role może przypisywać zalogowany użytkownik
 const assignableRoles = () => isSuperadmin() ? ROLES : ROLES.filter(r => !r.superadminOnly)
+
+const ADMIN_ROLES_HINT = 'Role administracyjne (Administrator, Superadmin) nadaje i odbiera wyłącznie superadmin.'
 
 /** Wyciąga czytelny komunikat błędu z odpowiedzi axiosa (FastAPI/Pydantic). */
 function extractErr(ex) {
@@ -637,6 +642,16 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
                 {r.label}
               </label>
             ))}
+            {/* Admin nie widzi ról administracyjnych — posiadane przez konto
+                zostają bez zmian (zapis wysyła je dalej w selectedRoles). */}
+            {!isSuperadmin() && selectedRoles.filter(rv => ADMIN_ROLES.includes(rv)).map(rv => (
+              <span key={rv} className={`badge ${ROLE_META[rv]?.badge || 'badge--neutral'}`}
+                    style={{ fontSize: 10, opacity: 0.85, display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                    title={ADMIN_ROLES_HINT}>
+                {ROLE_LABEL[rv] || rv} <Lock size={10} aria-hidden="true" />
+                <span className="sr-only">— {ADMIN_ROLES_HINT}</span>
+              </span>
+            ))}
             <button type="button" className="btn btn--primary btn--sm" onClick={saveRoles}
                     aria-label={`Zapisz role użytkownika ${u.username}`}>Zapisz</button>
             <button type="button" className="btn btn--ghost btn--sm" aria-label="Anuluj zmianę ról"
@@ -892,6 +907,7 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
                 </label>
               ))}
             </div>
+            {!isSuperadmin() && <div className="form-hint">{ADMIN_ROLES_HINT}</div>}
           </div>
         </div>
         <div className="form-row">

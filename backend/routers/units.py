@@ -59,6 +59,29 @@ def _audit_post_change(session: Session, request: Optional[Request], actor: User
         )
 
 
+def _stage_snapshot(session: Session, dept_ids) -> tuple[set[int], dict]:
+    """Stan wniosków w toku w komórkach `dept_ids` PRZED zmianą struktury —
+    dla `_resync_stage` (patrz services.workflow.resync_manager_stage)."""
+    from services.workflow import manager_stage_snapshot
+    ids = set(dept_ids or ())
+    return ids, manager_stage_snapshot(session, ids)
+
+
+def _resync_stage(session: Session, snap: tuple[set[int], dict], reason: str,
+                  dept_ids=None) -> None:
+    """Po zmianie struktury (już zatwierdzonej): zwolnij nieważne przejęcia
+    wniosków w toku i powiadom nowych adresatów kroku; commit."""
+    from services.workflow import resync_manager_stage
+    ids, before = snap
+    resync_manager_stage(session, ids if dept_ids is None else dept_ids,
+                         before=before, reason=reason)
+    session.commit()
+
+
+def _all_dept_ids(session: Session) -> set[int]:
+    return {int(x) for x in session.exec(select(Department.id)).all()}
+
+
 def _guard_self_hr(session: Session, current_user: User, dept: "Department") -> None:
     """Admin (nie superadmin) nie oznacza własnej komórki jako kadrowej (is_hr) —
     pracownik takiej komórki dostaje uprawnienia kadr."""
@@ -184,6 +207,11 @@ def update_unit(
         mgr = session.get(User, payload["manager_user_id"])
         if not mgr:
             raise HTTPException(400, "Wskazany kierownik jednostki nie istnieje")
+    director_changed = ("manager_user_id" in payload
+                        and payload["manager_user_id"] != prev_manager_id)
+    if director_changed:
+        from services.workflow import unit_dept_ids
+        snap = _stage_snapshot(session, unit_dept_ids(session, unit.id))
     for field, value in payload.items():
         setattr(unit, field, value)
     session.add(unit); session.commit(); session.refresh(unit)
@@ -193,6 +221,11 @@ def update_unit(
         from services.org_sync import sync_after_unit_manager_change
         sync_after_unit_manager_change(session, prev_manager_id, unit.manager_user_id)
         session.commit(); session.refresh(unit)
+        if director_changed:
+            # Dyrektor jednostki jest przełożonym we wszystkich jej komórkach —
+            # jego przejęcia tracą ważność, zmienia się adresat rezerwowy.
+            _resync_stage(session, snap, "Zmiana dyrektora jednostki")
+            session.refresh(unit)
         _audit_post_change(session, request, current_user, action="unit.manager_changed",
                            target_type="unit", target_id=unit.id, name=unit.name,
                            old_user_id=prev_manager_id, new_user_id=unit.manager_user_id)
@@ -431,6 +464,18 @@ def update_department(
                 raise HTTPException(400, "Wydział nadrzędny należy do innej jednostki")
         _validate_no_cycle(session, dept.id, new_parent)
 
+    # Zmiana kierownika / podległości / typu komórki zmienia osobę
+    # odpowiedzialną za wnioski w toku w całym jej poddrzewie (i ważność
+    # przejęć) — stan sprzed zmiany do porządków po zapisie.
+    structural = (
+        ("manager_user_id" in payload and payload["manager_user_id"] != prev_manager_id)
+        or ("parent_dept_id" in payload and payload["parent_dept_id"] != dept.parent_dept_id)
+        or ("kind" in payload and payload["kind"] != dept.kind)
+    )
+    if structural:
+        from services.workflow import subtree_dept_ids
+        snap = _stage_snapshot(session, subtree_dept_ids(session, {dept.id}))
+
     for field, value in payload.items():
         setattr(dept, field, value)
     # Samodzielne stanowisko nie ma kierownika — zdejmujemy go, gdy komórka
@@ -449,6 +494,9 @@ def update_department(
         _audit_post_change(session, request, current_user, action="department.manager_changed",
                            target_type="department", target_id=dept.id, name=dept.name,
                            old_user_id=prev_manager_id, new_user_id=dept.manager_user_id)
+    if structural:
+        _resync_stage(session, snap, f"Zmiana w strukturze komórki „{dept.name}”")
+        session.refresh(dept)
     return _enrich_dept(dept, session)
 
 
@@ -495,6 +543,7 @@ def auto_assign_managers(
         if u.department_id and title_indicates_manager(getattr(u, "title", None)):
             by_dept.setdefault(u.department_id, []).append(u)
 
+    snap = _stage_snapshot(session, _all_dept_ids(session))
     for dept in session.exec(select(Department).where(Department.is_active == True)).all():  # noqa: E712
         if dept.kind == "standalone":
             continue  # samodzielne stanowisko nie ma kierownika
@@ -525,6 +574,10 @@ def auto_assign_managers(
         details.append(f"„{dept.name}” → {who}{extra}")
 
     session.commit()
+    if changes:
+        from services.workflow import subtree_dept_ids
+        _resync_stage(session, snap, "Automatyczne przypisanie kierowników komórek",
+                      dept_ids=subtree_dept_ids(session, {d.id for d, _p, _n in changes}))
     for dept, prev, new in changes:
         _audit_post_change(session, request, current_user, action="department.manager_changed",
                            target_type="department", target_id=dept.id, name=dept.name,
@@ -766,6 +819,10 @@ def ldap_import(
         return m
 
     desc_by_dn = _build_desc_map()
+    # Przeniesienie komórki (zmiana podległości wg AD) zmienia przełożonych
+    # wniosków w toku w jej poddrzewie — stan sprzed importu do porządków.
+    stage_snap = _stage_snapshot(session, _all_dept_ids(session))
+    moved_dept_ids: set[int] = set()
 
     def _import_children(unit_id: int, parent_dept_id: Optional[int],
                          children: list[LdapImportDept], depth: int) -> None:
@@ -818,6 +875,7 @@ def ldap_import(
                 # Aktualizuj podległość i nazwę wg AD (bez tworzenia duplikatu).
                 if existing.parent_dept_id != parent_dept_id:
                     existing.parent_dept_id = parent_dept_id; changed.append("podległość")
+                    moved_dept_ids.add(existing.id)
                 if existing.name != child.name:
                     existing.name = child.name; changed.append("nazwa")
                 # Opis z AD — ustaw/odśwież (nie czyścimy, gdy w AD pusty).
@@ -889,6 +947,10 @@ def ldap_import(
         _import_children(unit.id, None, item.departments, 1)
 
     session.commit()
+    if moved_dept_ids:
+        from services.workflow import subtree_dept_ids
+        _resync_stage(session, stage_snap, "Import struktury z AD (zmiana podległości)",
+                      dept_ids=subtree_dept_ids(session, moved_dept_ids))
     units_created  = counters["units_created"]
     units_skipped  = counters["units_skipped"]
     depts_created  = counters["depts_created"]
@@ -1065,12 +1127,16 @@ def add_deputy(
     if existing:
         raise HTTPException(400, "Ta osoba jest już zastępcą w tej komórce")
 
+    from services.workflow import subtree_dept_ids
+    snap = _stage_snapshot(session, subtree_dept_ids(session, {department_id}))
     row = DepartmentDeputy(
         department_id=department_id,
         user_id=data.user_id,
         role_label=(data.role_label or "").strip() or None,
     )
     session.add(row); session.commit(); session.refresh(row)
+    _resync_stage(session, snap, f"Nowy zastępca kierownika komórki „{dept.name}”")
+    session.refresh(row)
     # Zastępca też działa w obiegu jak kierownik → potrzebuje roli „manager".
     from services.org_sync import grant_manager_role
     if grant_manager_role(session, data.user_id):
@@ -1109,11 +1175,16 @@ def delete_deputy(
     if not row:
         raise HTTPException(404, "Zastępca nie istnieje")
     ex_user_id = row.user_id
-    dept = session.get(Department, row.department_id)
+    dept_id = row.department_id
+    dept = session.get(Department, dept_id)
+    from services.workflow import subtree_dept_ids
+    snap = _stage_snapshot(session, subtree_dept_ids(session, {dept_id}))
     session.delete(row); session.commit()
+    _resync_stage(session, snap, "Usunięcie zastępcy kierownika komórki"
+                  + (f" „{dept.name}”" if dept else ""))
     _audit_post_change(session, request, current_user, action="department.deputy_removed",
-                       target_type="department", target_id=row.department_id,
-                       name=dept.name if dept else f"id={row.department_id}",
+                       target_type="department", target_id=dept_id,
+                       name=dept.name if dept else f"id={dept_id}",
                        old_user_id=ex_user_id, new_user_id=None)
     # Jeśli nie kieruje już niczym i nie jest gdzie indziej zastępcą — zdejmij rolę.
     from services.org_sync import revoke_manager_role_if_unused

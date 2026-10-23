@@ -74,12 +74,23 @@ def client_ip(request) -> Optional[str]:
     proxy (localhost). Apache DOPISUJE prawdziwy adres klienta NA KOŃCU nagłówka,
     więc bierzemy OSTATNI element — wcześniejsze może podać sam klient
     (podszycie pod inny adres, obejście limitu prób logowania).
+
+    Klient może też wysłać WŁASNY, osobny nagłówek X-Forwarded-For — wtedy
+    żądanie ma ich kilka, a `headers.get()` zwróciłby tylko pierwszy (podany
+    przez klienta). Dlatego łączymy wszystkie wystąpienia w kolejności
+    otrzymania i dopiero z całości bierzemy ostatni element.
     """
     if request is None:
         return None
     peer = request.client.host if getattr(request, "client", None) else None
     if peer in _TRUSTED_PROXIES:
-        xff = request.headers.get("x-forwarded-for") or ""
+        headers = request.headers
+        if hasattr(headers, "getlist"):
+            values = headers.getlist("x-forwarded-for")
+        else:
+            one = headers.get("x-forwarded-for")
+            values = [one] if one else []
+        xff = ",".join(v for v in values if v)
         parts = [p.strip() for p in xff.split(",") if p.strip()]
         if parts:
             return parts[-1]
