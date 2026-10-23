@@ -7,6 +7,7 @@ import { deptFull } from '../components/RequestView'
 import { workRoles, hasAnyRole } from '../roles'
 import { nodeLabel, daysSince, waitText, NODE_TONE, SEVERITY_LABEL } from '../labels'
 import AdminChecklist from '../components/AdminChecklist'
+import { LoadError } from '../components/ui/LoadState'
 
 /**
  * Pulpit (v3.0) — WYŁĄCZNIE sprawy czekające na reakcję użytkownika:
@@ -38,6 +39,7 @@ export default function Dashboard() {
   const canSeeSecurity  = hasAnyRole(roles, ['admin', 'superadmin'])
   const adminOnly = !hasAnyRole(roles, ['manager', 'it_staff'])
   const isAdmin = hasAnyRole(roles, ['admin', 'superadmin'])
+  const isSuperadmin = roles.includes('superadmin')
   // Kilka ról operacyjnych → przy każdej sprawie pokazujemy perspektywę.
   const multiRole = hasAnyRole(roles, ['manager']) && hasAnyRole(roles, ['it_staff'])
 
@@ -142,7 +144,7 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {err && <div className="alert alert--error mb-4">{err}</div>}
+      {err && <LoadError message={err} onRetry={load} busy={loading} style={{ marginBottom: 16 }} />}
 
       {/* Wymaga uwagi — pojawia się tylko, gdy coś jest nie tak. */}
       {alerts.length > 0 && (
@@ -269,8 +271,11 @@ export default function Dashboard() {
                           {w.text}
                         </td>
                         <td style={{ textAlign: 'right' }}>
+                          {/* Superadmin nie ma strony „Wnioski” — osobny widok wniosku
+                              (podgląd, akcje tylko przy can_act). */}
                           <Link className="btn btn--action btn--sm" style={{ minHeight: 36, fontSize: 13, fontWeight: 700 }}
-                                to={`/requests?tab=${tab}&open=${p.request_id}`}>
+                                to={isSuperadmin ? `/requests/view/${p.request_id}` : `/requests?tab=${tab}&open=${p.request_id}`}
+                                aria-label={`Otwórz wniosek #${p.request_id} — ${p.worker_name || 'pracownik'}`}>
                             Otwórz
                           </Link>
                         </td>
@@ -285,20 +290,33 @@ export default function Dashboard() {
             {(truncated || tileHidden) ? (
               <>
                 Pokazano {list.length} z {activeTile && filter !== 'names' ? activeTile.count : data.pending_approvals_count}
-                {' '}(najdłużej czekające) — pełna lista w{' '}
+                {' '}(najdłużej czekające){isSuperadmin ? '.' : <>
+                {' '}— pełna lista w{' '}
                 <Link to={`/requests?tab=${fullTab}`} style={{ color: 'var(--color-gold-dark)', fontWeight: 700 }}>
                   „Wnioskach”
-                </Link>.
+                </Link>.</>}
               </>
-            ) : 'Najdłużej czekające najpierw · pełne listy w „Wnioskach”.'}
+            ) : isSuperadmin
+              ? 'Najdłużej czekające najpierw · tylko wnioski, na których superadmin może działać awaryjnie.'
+              : 'Najdłużej czekające najpierw · pełne listy w „Wnioskach”.'}
           </div>
         </section>
       )}
 
       {adminOnly && !loading && (
         <div className="card" style={{ fontSize: 14, color: 'var(--color-text-muted)' }}>
-          Rola administratora konfiguruje system — wnioski obsługują kierownicy i IT.
-          Tu pojawiają się tylko sprawy wymagające reakcji administratora.
+          {isSuperadmin ? (
+            <>
+              Superadmin to konto awaryjne — konfiguruje system i nie obsługuje wniosków
+              (robią to kierownicy i IT). Wyjątek: akceptacja wyższa wniosku, którego nie ma
+              kto zatwierdzić — taki wniosek pojawi się powyżej i można go otworzyć.
+            </>
+          ) : (
+            <>
+              Administrator konfiguruje system — wnioski obsługują kierownicy i IT.
+              Tu pojawiają się tylko sprawy wymagające reakcji administratora.
+            </>
+          )}
         </div>
       )}
     </div>

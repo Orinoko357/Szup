@@ -6,6 +6,10 @@ import PurgeLogModal from '../components/PurgeLogModal'
 import { toast } from '../components/ui/feedback'
 import { fmtDateTime } from '../serverTime'
 import { LoadError } from '../components/ui/LoadState'
+import { countLabel } from '../labels'
+
+// Limit wierszy z serwera — przy pełnym wyniku pokazujemy „Pokazano 500 … — zawęź filtr”.
+const LIMIT = 500
 
 // Pole datetime-local podaje czas LOKALNY bez strefy, a dziennik trzyma UTC —
 // zamieniamy na ISO UTC z 'Z' (np. 2026-10-22T08:00:00.000Z). Pusta lub
@@ -29,7 +33,7 @@ export default function AuditLog() {
   async function load() {
     setLoading(true); setErr(null)
     try {
-      const params = { limit: 500 }
+      const params = { limit: LIMIT }
       if (filters.username) params.username = filters.username
       if (filters.action)   params.action   = filters.action
       const since = localToUtcIso(filters.since)
@@ -109,7 +113,7 @@ export default function AuditLog() {
       </div>
       {purgeOpen && (
         <PurgeLogModal title="Wyczyść dziennik zdarzeń" what="wpisy dziennika zdarzeń"
-                       purge={purgeAudit} onClose={() => setPurgeOpen(false)}
+                       purge={purgeAudit} stats={stats} onClose={() => setPurgeOpen(false)}
                        onDone={() => { setPurgeOpen(false); load() }} />
       )}
 
@@ -144,6 +148,13 @@ export default function AuditLog() {
 
       {err && <LoadError message={err} onRetry={load} busy={loading} style={{ marginBottom: 16 }} />}
 
+      {!loading && !err && rows.length >= LIMIT && (
+        <div className="alert alert--info" role="status" style={{ marginBottom: 12 }}>
+          Pokazano {LIMIT} najnowszych pasujących wpisów
+          {stats?.total_entries != null && ` (w dzienniku łącznie ${countLabel(stats.total_entries, 'wpis', 'wpisy', 'wpisów')})`}
+          {' '}— zawęź filtr (użytkownik, akcja, zakres dat), aby zobaczyć starsze.
+        </div>
+      )}
       <section aria-label="Wpisy" className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
           <table className="data-table" style={{ minWidth: 1080 }}>

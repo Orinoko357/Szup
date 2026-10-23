@@ -11,6 +11,11 @@ Rozdział obowiązków: rozpatruje wyłącznie pracownik IT (rola it_staff — s
 rola admin / superadmin nie wystarcza, bo administrator nie działa operacyjnie),
 nikt nie rozpatruje własnego wniosku, a loginu konta z rolą admin / superadmin
 w tym obiegu się nie zmienia (tylko nazwisko).
+
+Konto AD: nowy login musi w AD należeć do TEGO SAMEGO obiektu (objectGUID albo
+DN zapisany przy imporcie) — inaczej IT mogłoby przypiąć konto do cudzej
+tożsamości domenowej (H4/F7). Gdy AD nie da się zapytać, zmiana loginu jest
+odrzucana; samą zmianę nazwiska można zrealizować.
 """
 from __future__ import annotations
 
@@ -32,6 +37,10 @@ router = APIRouter()
 _log = logging.getLogger("szup.name_changes")
 
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,64}$")
+# Imię i nazwisko z wniosku (N2): krótkie, jedna linia.
+FULL_NAME_MAX = 100
+_LINE_BREAK_RE = re.compile(r"[\r\n\u2028\u2029]")
+COMMENT_MAX = 1000
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +93,12 @@ def create_name_change(
     new_name = (data.requested_full_name or "").strip()
     if len(new_name) < 3:
         raise HTTPException(400, "Podaj nowe imię i nazwisko (min. 3 znaki).")
+    if len(new_name) > FULL_NAME_MAX:
+        raise HTTPException(400, f"Imię i nazwisko może mieć najwyżej {FULL_NAME_MAX} znaków.")
+    if _LINE_BREAK_RE.search(new_name):
+        raise HTTPException(400, "Imię i nazwisko musi mieścić się w jednej linii.")
+    from services.auth_service import clean_text_field
+    new_name = clean_text_field(new_name, "imię i nazwisko", max_len=FULL_NAME_MAX)
     if new_name == (current_user.full_name or "").strip():
         raise HTTPException(400, "Nowe nazwisko jest takie samo jak obecne.")
 
@@ -176,6 +191,48 @@ def _login_taken(session: Session, login: str, user_id: int) -> bool:
         .where(User.id != user_id)).first() is not None
 
 
+def _verify_ad_login(session: Session, user: User, new_login: str) -> dict:
+    """Sprawdza w AD (konto usługowe), że `new_login` należy do tego samego
+    obiektu co konto SZUP: zgodny objectGUID (zapisany przy imporcie) albo DN
+    (`user.ldap_dn`). Zwraca dane dopasowania do zdarzenia; inaczej 403.
+
+    Brak konfiguracji AD, brak zapisanej tożsamości albo błąd połączenia
+    → odmowa zmiany loginu (zmianę nazwiska można zrealizować bez niej)."""
+    from models import LdapSettings
+    from services import ldap_service
+    hint = " Zrealizuj wniosek bez zmiany loginu albo spróbuj ponownie później."
+    cfg = session.exec(select(LdapSettings)).first()
+    if not cfg or not cfg.enabled or not cfg.host:
+        raise HTTPException(403, "Nie można zweryfikować nowego loginu w AD (logowanie "
+                                 "przez AD jest wyłączone)." + hint)
+    stored_guid = (getattr(user, "ldap_guid", None) or "").strip().lower() or None
+    stored_dn = ldap_service.normalize_dn(user.ldap_dn or "") or None
+    if not stored_guid and not stored_dn:
+        raise HTTPException(403, "Konto nie ma zapisanej tożsamości z AD (DN / objectGUID) — "
+                                 "najpierw zsynchronizuj je importem użytkowników z AD."
+                                 + hint)
+    status_, info = ldap_service.lookup_user(cfg, new_login)
+    if status_ == "error":
+        _log.warning("Weryfikacja loginu %s w AD nieudana: %s", new_login, info)
+        raise HTTPException(403, "Nie udało się sprawdzić nowego loginu w AD "
+                                 "(brak połączenia z serwerem)." + hint)
+    if status_ == "not_found":
+        raise HTTPException(400, f"Login „{new_login}” nie istnieje w AD — najpierw zmień "
+                                 "login w AD, potem zrealizuj wniosek.")
+    if status_ == "disabled":
+        raise HTTPException(403, f"Konto „{new_login}” jest wyłączone w AD.")
+    found_guid = (info.get("guid") or "").strip().lower() or None
+    found_dn = ldap_service.normalize_dn(info.get("dn") or "") or None
+    if stored_guid and found_guid:
+        matched = "guid" if found_guid == stored_guid else None
+    else:
+        matched = "dn" if stored_dn and found_dn == stored_dn else None
+    if not matched:
+        raise HTTPException(403, f"Login „{new_login}” należy w AD do innej osoby (innego "
+                                 "obiektu) niż to konto — zmiana loginu odrzucona.")
+    return {"ad_verified_by": matched, "ad_dn": info.get("dn")}
+
+
 def _notify_worker(session: Session, user: User, r: NameChangeRequest) -> None:
     """E-mail do pracownika o rozpatrzeniu wniosku (po commicie, w tle)."""
     to = (user.email or "").strip()
@@ -221,7 +278,12 @@ def resolve_name_change(
     if not user:
         raise HTTPException(400, "Konto pracownika nie istnieje.")
 
+    comment = (data.comment or "").strip()
+    if len(comment) > COMMENT_MAX:
+        raise HTTPException(400, f"Uwagi mogą mieć najwyżej {COMMENT_MAX} znaków.")
+
     login_change = None
+    ad_check: dict = {}
     if data.action == "reject":
         r.status = "rejected"
     elif data.action == "apply":
@@ -246,6 +308,8 @@ def resolve_name_change(
                     raise HTTPException(400, "Nieprawidłowy login konta AD.")
             if _login_taken(session, new_login, user.id):
                 raise HTTPException(400, f'Login „{new_login}" jest już zajęty.')
+            if new_login != user.username and user.auth_type == AuthType.ldap:
+                ad_check = _verify_ad_login(session, user, new_login)
             if new_login != user.username:
                 login_change = (user.username, new_login)
                 r.old_username = user.username
@@ -262,7 +326,7 @@ def resolve_name_change(
 
     r.resolved_at = datetime.utcnow()
     r.resolved_by_user_id = current_user.id
-    r.it_comment = (data.comment or "").strip() or None
+    r.it_comment = comment or None
     session.add(r)
     try:
         _notify_worker(session, user, r)
@@ -297,7 +361,8 @@ def resolve_name_change(
             summary=(f"Zmieniono login konta {login_change[0]} → {login_change[1]} "
                      f"przez {current_user.username}"),
             details={"target_user_id": user.id, "old_username": login_change[0],
-                     "new_username": login_change[1], "name_change_id": r.id},
+                     "new_username": login_change[1], "name_change_id": r.id,
+                     **ad_check},
             user_id=current_user.id, ip=meta["ip"],
         )
 

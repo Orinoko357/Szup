@@ -89,13 +89,23 @@ _NOT_ARCHIVED = Department.archived_at == None  # noqa: E711
 
 
 def _live_dept(session: Session, dept_id: Optional[int]) -> Optional[Department]:
-    """Komórka o danym id, o ile istnieje i NIE jest zarchiwizowana."""
-    if dept_id is None:
+    """Komórka o danym id, o ile istnieje i NIE jest zarchiwizowana (id spoza
+    zakresu bazy — jak nieistniejąca, bez OverflowError)."""
+    from services.structure import db_int_ok
+    if dept_id is None or not db_int_ok(dept_id):
         return None
     dept = session.get(Department, dept_id)
     if not dept or getattr(dept, "archived_at", None):
         return None
     return dept
+
+
+def _get_unit(session: Session, unit_id: Optional[int]) -> Optional[Unit]:
+    """Jednostka o danym id albo None (także dla id spoza zakresu bazy)."""
+    from services.structure import db_int_ok
+    if unit_id is None or not db_int_ok(unit_id):
+        return None
+    return session.get(Unit, unit_id)
 
 
 def _guard_self_hr(session: Session, current_user: User, dept: "Department") -> None:
@@ -201,7 +211,7 @@ def update_unit(
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin),
 ):
-    unit = session.get(Unit, unit_id)
+    unit = _get_unit(session, unit_id)
     if not unit:
         raise HTTPException(404, "Jednostka nie istnieje")
     prev_manager_id = unit.manager_user_id
@@ -220,6 +230,7 @@ def update_unit(
     if director_changed:
         from services.workflow import unit_dept_ids
         snap = _stage_snapshot(session, unit_dept_ids(session, unit.id))
+        orphans_before = _higher_orphan_ids(session, snap[0])
     for field, value in payload.items():
         setattr(unit, field, value)
     session.add(unit); session.commit(); session.refresh(unit)
@@ -233,6 +244,9 @@ def update_unit(
             # Dyrektor jednostki jest przełożonym we wszystkich jej komórkach —
             # jego przejęcia tracą ważność, zmienia się adresat rezerwowy.
             _resync_stage(session, snap, "Zmiana dyrektora jednostki")
+            if _report_higher_orphans(session, request, current_user, snap[0],
+                                      orphans_before, f"zmiana dyrektora jednostki „{unit.name}”"):
+                session.commit()
             session.refresh(unit)
         _audit_post_change(session, request, current_user, action="unit.manager_changed",
                            target_type="unit", target_id=unit.id, name=unit.name,
@@ -246,7 +260,7 @@ def delete_unit(
     session: Session = Depends(get_session),
     _: User = Depends(require_admin),
 ):
-    unit = session.get(Unit, unit_id)
+    unit = _get_unit(session, unit_id)
     if not unit:
         raise HTTPException(404, "Jednostka nie istnieje")
     # sprawdź czy ma wydziały
@@ -355,24 +369,64 @@ def _enrich_dept(dept: Department, session: Session) -> DepartmentRead:
     )
 
 
-def _validate_higher_approval(dept: Department, session: Session) -> None:
-    """
-    Gdy flag=True, wydział MUSI mieć rodzica z przypisanym kierownikiem — w przeciwnym
-    razie wnioski nie mają do kogo trafić na akceptację wyższego rzędu.
-    """
-    if not dept.requires_higher_approval:
+def _validate_higher_approval(dept: Department, session: Session, *, enabling: bool) -> None:
+    """Włączenie akceptacji wyższego rzędu wymaga osoby, która może ją wykonać:
+    aktywnego kierownika lub zastępcy komórki wyżej albo dyrektora jednostki
+    (`services.structure.higher_approvers`) — inaczej wnioski utknęłyby na tym
+    kroku.
+
+    Sprawdzamy WYŁĄCZNIE przy włączaniu flagi (`enabling`). Komórka, która
+    straciła taką osobę później (zmiana kierownika rodzica, usunięcie rodzica,
+    przeniesienie), zachowuje flagę i można ją dalej edytować — problem
+    zgłasza lista kontrolna (/settings/health)."""
+    if not enabling or not dept.requires_higher_approval:
+        return
+    from services.structure import higher_approvers
+    if higher_approvers(session, dept):
+        return
+    # Komórka nadrzędna MA kierownika, ale nie może on zatwierdzić (np. kieruje
+    # też tą komórką) — dopuszczamy jak dotąd; wnioski przejmie rezerwa
+    # superadmina, a lista kontrolna zgłasza problem.
+    parent = session.get(Department, dept.parent_dept_id) if dept.parent_dept_id else None
+    if parent is not None and parent.manager_user_id:
         return
     if not dept.parent_dept_id:
         raise HTTPException(
             400,
-            "Nie można włączyć akceptacji wyższego rzędu — wydział nie ma wydziału nadrzędnego."
-        )
-    parent = session.get(Department, dept.parent_dept_id)
-    if not parent or not parent.manager_user_id:
-        raise HTTPException(
-            400,
-            "Nie można włączyć akceptacji wyższego rzędu — wydział nadrzędny nie ma kierownika."
-        )
+            "Nie można włączyć akceptacji wyższego rzędu — komórka nie ma komórki nadrzędnej, "
+            "a jednostka nie ma dyrektora.")
+    raise HTTPException(
+        400,
+        "Nie można włączyć akceptacji wyższego rzędu — nad komórką nie ma nikogo, kto mógłby "
+        "ją wykonać (kierownika ani zastępcy komórki nadrzędnej, ani dyrektora jednostki).")
+
+
+def _higher_orphan_ids(session: Session, dept_ids) -> set[int]:
+    """Komórki z `dept_ids`, których akceptacji wyższej nie ma kto wykonać."""
+    from services.structure import higher_approval_orphans
+    return {d.id for d in higher_approval_orphans(session, dept_ids)}
+
+
+def _report_higher_orphans(session: Session, request: Optional[Request], actor: User,
+                           dept_ids, before: set[int], cause: str) -> list[int]:
+    """Po zmianie struktury: komórki z akceptacją wyższą, które przez tę zmianę
+    straciły osobę uprawnioną do jej wykonania — flaga zostaje (edycji komórki
+    to nie blokuje), wpis w dzienniku i ostrzeżenie w logu; lista kontrolna
+    pokazuje je jako błąd. Zwraca id takich komórek."""
+    new = sorted(_higher_orphan_ids(session, dept_ids) - set(before))
+    if not new:
+        return []
+    import logging
+    from services.audit import record_event, request_meta
+    names = [d.name for d in (session.get(Department, i) for i in new) if d]
+    logging.getLogger("szup.units").warning(
+        "Akceptacja wyższa bez osoby uprawnionej po zmianie (%s): %s", cause, ", ".join(names))
+    meta = request_meta(request)
+    record_event(session, action="department.higher_approval_unreachable",
+                 user_id=actor.id, username=actor.username, target_type="department",
+                 target_id=new[0], ip=meta["ip"], user_agent=meta["user_agent"],
+                 details={"department_ids": new, "names": names, "cause": cause})
+    return new
 
 
 @router.get("/departments/all", response_model=list[DepartmentRead])
@@ -430,7 +484,7 @@ def create_department(
         requires_higher_approval=data.requires_higher_approval,
         is_hr=data.is_hr,
     )
-    _validate_higher_approval(dept, session)
+    _validate_higher_approval(dept, session, enabling=bool(data.requires_higher_approval))
     session.add(dept); session.commit(); session.refresh(dept)
     # Struktura → rola: nowy kierownik dostaje rolę „manager".
     from services.org_sync import sync_after_manager_change
@@ -439,7 +493,25 @@ def create_department(
     _audit_post_change(session, request, current_user, action="department.manager_changed",
                        target_type="department", target_id=dept.id, name=dept.name,
                        old_user_id=None, new_user_id=dept.manager_user_id)
+    if dept.is_hr:
+        _emit_hr_flag_change(session, request, current_user, dept, True)
     return _enrich_dept(dept, session)
+
+
+def _emit_hr_flag_change(session: Session, request: Request, actor: User, dept: Department,
+                         enabled: bool) -> None:
+    """Zdarzenie bezpieczeństwa przy oznaczeniu komórki jako kadrowej (lub zdjęciu
+    oznaczenia) — członkowie zyskują/tracą zdolność kadrową dla wszystkich jednostek."""
+    from services.security_events import emit
+    from services.audit import request_meta
+    members = session.exec(select(User).where(User.department_id == dept.id)).all()
+    emit(session, event_type="department.hr_flag_changed", source="units",
+         severity=SecuritySeverity.medium,
+         summary=(f"Komórka „{dept.name}” {'oznaczona jako kadrowa' if enabled else 'nie jest już kadrowa'} "
+                  f"przez {actor.username} ({len(members)} os.)"),
+         details={"department_id": dept.id, "enabled": enabled,
+                  "member_user_ids": [u.id for u in members]},
+         user_id=actor.id, ip=request_meta(request)["ip"])
 
 
 @router.patch("/departments/{dept_id}", response_model=DepartmentRead)
@@ -485,10 +557,13 @@ def update_department(
         or ("parent_dept_id" in payload and payload["parent_dept_id"] != dept.parent_dept_id)
         or ("kind" in payload and payload["kind"] != dept.kind)
     )
+    enabling_higher = bool(payload.get("requires_higher_approval")) and not dept.requires_higher_approval
     if structural:
         from services.workflow import subtree_dept_ids
         snap = _stage_snapshot(session, subtree_dept_ids(session, {dept.id}))
+        orphans_before = _higher_orphan_ids(session, snap[0])
 
+    hr_flag_changed = "is_hr" in payload and bool(payload["is_hr"]) != bool(dept.is_hr)
     for field, value in payload.items():
         setattr(dept, field, value)
     # Samodzielne stanowisko nie ma kierownika — zdejmujemy go, gdy komórka
@@ -497,8 +572,10 @@ def update_department(
     if dept.kind == "standalone" and dept.manager_user_id:
         dept.manager_user_id = None
         manager_cleared = True
-    _validate_higher_approval(dept, session)
+    _validate_higher_approval(dept, session, enabling=enabling_higher)
     session.add(dept); session.commit(); session.refresh(dept)
+    if hr_flag_changed:
+        _emit_hr_flag_change(session, request, current_user, dept, bool(dept.is_hr))
     # Struktura → rola: nadaj rolę nowemu kierownikowi, posprzątaj po poprzednim.
     if "manager_user_id" in payload or manager_cleared:
         from services.org_sync import sync_after_manager_change
@@ -509,6 +586,9 @@ def update_department(
                            old_user_id=prev_manager_id, new_user_id=dept.manager_user_id)
     if structural:
         _resync_stage(session, snap, f"Zmiana w strukturze komórki „{dept.name}”")
+        if _report_higher_orphans(session, request, current_user, snap[0], orphans_before,
+                                  f"zmiana w strukturze komórki „{dept.name}”"):
+            session.commit()
         session.refresh(dept)
     return _enrich_dept(dept, session)
 
@@ -639,6 +719,9 @@ from models import RequestStatus as _RS  # noqa: E402
 _ACTIVE_REQUEST_STATUSES = (_RS.pending_selection, _RS.pending_manager, _RS.pending_it)
 
 
+FORCE_DELETE_REASON_MAX = 1000
+
+
 class DepartmentForceDeleteIn(BaseModel):
     reason: str                      # wymagany — trafia do audytu i odrzucanych wniosków
     password: str                    # potwierdzenie hasłem wykonującego
@@ -648,33 +731,53 @@ class DepartmentForceDeleteOut(BaseModel):
     mode: str                        # "deleted" (usunięta) | "archived" (zarchiwizowana)
     department_id: int
     detached_users: int
+    # Pracownicy odpięci od zarchiwizowanej komórki — kadry składają dla nich
+    # wnioski o ustanie (bez komórki) albo admin przypisuje ich do innej.
+    detached_user_ids: list[int] = []
     removed_deputies: int
     reparented_department_ids: list[int]
     rejected_request_ids: list[int]
+    # Wnioski w realizacji IT z częścią pozycji już zrealizowanych — nie są
+    # odrzucane: pozostałe pozycje odmówiono, a wniosek zamknięto, żeby
+    # nadane w systemach uprawnienia zostały w rejestrze.
+    completed_request_ids: list[int] = []
+    # Komórki z akceptacją wyższą, które przez usunięcie straciły osobę
+    # uprawnioną do jej wykonania (zgłasza je też lista kontrolna).
+    higher_approval_unreachable_ids: list[int] = []
+
+
+def _active_node(session: Session, inst) -> dict:
+    import json as _json
+    from services.workflow import find_node
+    node = None
+    try:
+        node = find_node(_json.loads(inst.template_snapshot), inst.current_node_id) \
+            if inst.current_node_id else None
+    except Exception:
+        node = None
+    return node or {"id": inst.current_node_id or "system", "type": "system"}
 
 
 def _system_reject_request(session: Session, req, actor: User, comment: str,
-                           dept_id: int) -> None:
+                           dept_id: int, extra_ids=()) -> None:
     """Odrzucenie wniosku w toku z powodu usunięcia komórki — poza `can_act`
     (superadmin nie jest uczestnikiem obiegu). Zapisuje podpisany krok
     `reject` z aktorem-superadminem w łańcuchu kroków, zamyka instancję,
-    zwalnia przejęcie i powiadamia twórcę wniosku (jak zwykłe odrzucenie)."""
-    import json as _json
+    zwalnia przejęcie i powiadamia twórcę wniosku (jak zwykłe odrzucenie).
+
+    Na etapie kierownika komórki wersja robocza przestaje obowiązywać: notatka
+    robocza (`manager_comment`) zostaje zastąpiona powodem odrzucenia — inaczej
+    po archiwizacji zobaczyliby ją IT i administrator. `extra_ids` — dodatkowi
+    adresaci powiadomienia (kierownik i zastępcy usuwanej komórki)."""
     from datetime import datetime as _dt
     from models import RequestStatus, WorkflowInstanceStatus, WorkflowStepAction
     from services.workflow import (
-        _notify_request_rejected, _record_step, _sync_request_status,
-        clear_take_over, find_node, instance_of,
+        MANAGER_STAGE_TYPES, _notify_request_rejected, _record_step,
+        _sync_request_status, clear_take_over, instance_of,
     )
     inst = instance_of(session, req)
     if inst and inst.status == WorkflowInstanceStatus.active:
-        node = None
-        try:
-            node = find_node(_json.loads(inst.template_snapshot), inst.current_node_id) \
-                if inst.current_node_id else None
-        except Exception:
-            node = None
-        node = node or {"id": inst.current_node_id or "system", "type": "system"}
+        node = _active_node(session, inst)
         _record_step(session, inst, node, action=WorkflowStepAction.reject,
                      actor_user=actor, comment=comment,
                      payload={"system": "department_deleted", "department_id": dept_id})
@@ -682,14 +785,85 @@ def _system_reject_request(session: Session, req, actor: User, comment: str,
         inst.completed_at = _dt.utcnow()
         session.add(inst)
         _sync_request_status(req, inst)
+        manager_stage = node.get("type") in MANAGER_STAGE_TYPES
     else:
         # Starszy wniosek bez obiegu — sam status.
+        manager_stage = req.status in (RequestStatus.pending_selection,
+                                       RequestStatus.pending_manager)
         req.status = RequestStatus.rejected
         req.rejected_at = req.rejected_at or _dt.utcnow()
         req.current_node_type = None
+    if manager_stage or getattr(req, "draft_saved_at", None):
+        req.manager_comment = comment
+        req.draft_saved_at = None
     clear_take_over(req)
     session.add(req)
-    _notify_request_rejected(session, req, actor, comment)
+    _notify_request_rejected(session, req, actor, comment,
+                             extra_ids=extra_ids if manager_stage else ())
+
+
+def _has_fulfilled_items(session: Session, req) -> bool:
+    from models import RequestItem
+    return session.exec(
+        select(RequestItem.id).where(RequestItem.request_id == req.id)
+        .where(RequestItem.fulfilled == True)  # noqa: E712
+    ).first() is not None
+
+
+def _system_complete_partial(session: Session, req, actor: User, comment: str,
+                             dept_id: int) -> list[int]:
+    """Wniosek w realizacji IT z pozycjami już odhaczonymi jako zrealizowane
+    (IT nadało je w systemach) przy usunięciu komórki: zamiast odrzucenia
+    (które zostawiłoby nadane uprawnienia poza rejestrem — reguła częściowej
+    realizacji) pozostałe pozycje NADANIA są odmawiane z powodem, a wniosek
+    zamykany jako zrealizowany. Pozycje odebrania nie podlegają odmowie i są
+    zamykane razem z wnioskiem. Zwraca id odmówionych pozycji."""
+    from datetime import datetime as _dt
+    from models import RequestItem, WorkflowInstanceStatus, WorkflowStepAction
+    from services.workflow import (
+        _notify_request_completed, _record_step, _sync_request_status,
+        clear_take_over, instance_of,
+    )
+    now = _dt.utcnow()
+    denied: list[int] = []
+    for it in session.exec(select(RequestItem).where(RequestItem.request_id == req.id)
+                           .order_by(RequestItem.id)).all():
+        if it.fulfilled or it.denied:
+            continue
+        if (it.kind or "grant") == "revoke":
+            it.fulfilled = True
+            it.fulfilled_by_user_id = actor.id
+            it.fulfilled_at = now
+        else:
+            it.denied = True
+            it.deny_comment = comment[:FORCE_DELETE_REASON_MAX + 40]
+            it.denied_by_user_id = actor.id
+            it.denied_at = now
+            denied.append(it.id)
+        session.add(it)
+    inst = instance_of(session, req)
+    if inst and inst.status == WorkflowInstanceStatus.active:
+        node = _active_node(session, inst)
+        _record_step(session, inst, node, action=WorkflowStepAction.execute,
+                     actor_user=actor, comment=comment,
+                     payload={"system": "department_deleted", "department_id": dept_id,
+                              "partial": True, "denied_item_ids": denied})
+        inst.status = WorkflowInstanceStatus.completed
+        inst.completed_at = now
+        session.add(inst)
+        _sync_request_status(req, inst)
+    else:
+        from models import RequestStatus
+        req.status = RequestStatus.completed
+        req.current_node_type = None
+    req.completed_at = req.completed_at or now
+    req.completed_by_id = actor.id
+    req.it_comment = comment
+    clear_take_over(req)
+    session.add(req)
+    session.flush()
+    _notify_request_completed(session, req, actor)
+    return denied
 
 
 @router.post("/departments/{dept_id}/force-delete", response_model=DepartmentForceDeleteOut)
@@ -706,8 +880,11 @@ def force_delete_department(
     Komórki podrzędne trafiają pod rodzica usuwanej komórki (nie są usuwane).
     Bez powiązań → usunięcie z bazy. Z powiązaniami → ARCHIWIZACJA: komórka
     zostaje dla historii (is_active=False, archived_at/archived_reason), znika
-    ze wszystkich list; pracownicy są odpinani, zastępcy i kierownik zdejmowani,
-    a wnioski w toku tej komórki odrzucane z podanym powodem.
+    ze wszystkich list; pracownicy są odpinani (lista w `detached_user_ids` —
+    kadry składają dla nich wnioski o ustanie), zastępcy i kierownik zdejmowani,
+    a wnioski w toku tej komórki odrzucane z podanym powodem. Wyjątek: wniosek
+    w realizacji IT z pozycjami już zrealizowanymi jest zamykany (pozostałe
+    pozycje odmówione), żeby nadane uprawnienia zostały w rejestrze.
     """
     from datetime import datetime as _dt
     from models import AccessRequest, PermissionDeclaration
@@ -719,6 +896,9 @@ def force_delete_department(
     reason = (data.reason or "").strip()
     if not reason:
         raise HTTPException(400, "Podaj powód usunięcia komórki")
+    if len(reason) > FORCE_DELETE_REASON_MAX:
+        raise HTTPException(400, f"Powód usunięcia komórki może mieć najwyżej "
+                                 f"{FORCE_DELETE_REASON_MAX} znaków")
     dept = _live_dept(session, dept_id)
     if not dept:
         raise HTTPException(404, "Wydział nie istnieje")
@@ -742,6 +922,7 @@ def force_delete_department(
     # odpowiedzialne za wnioski w toku w poddrzewie — stan sprzed zmiany.
     affected = subtree_dept_ids(session, {dept_id})
     snap = _stage_snapshot(session, affected)
+    orphans_before = _higher_orphan_ids(session, affected - {dept_id})
 
     dept_name = dept.name
     ex_manager_id = dept.manager_user_id
@@ -755,6 +936,8 @@ def force_delete_department(
         session.delete(d)
 
     rejected_ids: list[int] = []
+    completed_ids: list[int] = []
+    denied_items: dict[int, list[int]] = {}
     ex_dn = dept.ldap_dn
     if not referenced:
         session.flush()
@@ -772,15 +955,24 @@ def force_delete_department(
             .where(AccessRequest.status.in_(_ACTIVE_REQUEST_STATUSES))  # type: ignore[attr-defined]
             .order_by(AccessRequest.id)
         ).all()
+        # Kierownik i zastępcy likwidowanej komórki dowiadują się o odrzuceniu
+        # wniosków, które czekały u nich (wersje robocze).
+        stage_people = [x for x in (ex_manager_id, *ex_deputy_ids) if x]
         for req in active:
-            _system_reject_request(session, req, current_user, comment, dept_id)
+            if req.status == _RS.pending_it and _has_fulfilled_items(session, req):
+                denied_items[req.id] = _system_complete_partial(
+                    session, req, current_user, comment, dept_id)
+                completed_ids.append(req.id)
+                continue
+            _system_reject_request(session, req, current_user, comment, dept_id,
+                                   extra_ids=stage_people)
             rejected_ids.append(req.id)
         dept.manager_user_id = None
         dept.is_active = False
         dept.requires_higher_approval = False
         dept.is_hr = False
         dept.archived_at = _dt.utcnow()
-        dept.archived_reason = reason[:1000]
+        dept.archived_reason = reason
         # Bez DN synchronizacja z AD nie dopasuje (i nie ożywi) archiwum —
         # ewentualny nowy import utworzy świeżą komórkę.
         dept.ldap_dn = None
@@ -804,6 +996,9 @@ def force_delete_department(
         changed_roles = revoke_manager_role_if_unused(session, uid) or changed_roles
     if changed_roles:
         session.commit()
+    unreachable = _report_higher_orphans(
+        session, request, current_user, affected - {dept_id}, orphans_before,
+        f"usunięcie komórki „{dept_name}”")
 
     details = {
         "name": dept_name, "mode": mode, "reason": reason,
@@ -814,6 +1009,11 @@ def force_delete_department(
         "reparented_department_ids": reparented,
         "new_parent_dept_id": new_parent_id,
         "rejected_request_ids": rejected_ids,
+        # Wnioski zamknięte jako częściowo zrealizowane (pozycje odhaczone przez
+        # IT zostają nadane, pozostałe odmówione): {id wniosku: [id odmówionych pozycji]}.
+        "completed_request_ids": completed_ids,
+        "denied_item_ids": {str(k): v for k, v in denied_items.items()},
+        "higher_approval_unreachable_ids": unreachable,
     }
     if mode == "archived":
         details["ldap_dn"] = ex_dn
@@ -833,9 +1033,12 @@ def force_delete_department(
     return DepartmentForceDeleteOut(
         mode=mode, department_id=dept_id,
         detached_users=details["detached_users"],
+        detached_user_ids=details["detached_user_ids"],
         removed_deputies=len(ex_deputy_ids),
         reparented_department_ids=reparented,
         rejected_request_ids=rejected_ids,
+        completed_request_ids=completed_ids,
+        higher_approval_unreachable_ids=unreachable,
     )
 
 
@@ -1002,8 +1205,9 @@ def ldap_preview(
 @router.post("/ldap/import", response_model=LdapImportResult)
 def ldap_import(
     data: LdapImportRequest,
+    request: Request,
     session: Session = Depends(get_session),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
 ):
     """
     Importuje zaznaczone jednostki i wydziały z podglądu do bazy danych.
@@ -1046,6 +1250,7 @@ def ldap_import(
     # Przeniesienie komórki (zmiana podległości wg AD) zmienia przełożonych
     # wniosków w toku w jej poddrzewie — stan sprzed importu do porządków.
     stage_snap = _stage_snapshot(session, _all_dept_ids(session))
+    orphans_before = _higher_orphan_ids(session, stage_snap[0])
     moved_dept_ids: set[int] = set()
 
     def _import_children(unit_id: int, parent_dept_id: Optional[int],
@@ -1195,8 +1400,15 @@ def ldap_import(
     session.commit()
     if moved_dept_ids:
         from services.workflow import subtree_dept_ids
+        moved_tree = subtree_dept_ids(session, moved_dept_ids)
         _resync_stage(session, stage_snap, "Import struktury z AD (zmiana podległości)",
-                      dept_ids=subtree_dept_ids(session, moved_dept_ids))
+                      dept_ids=moved_tree)
+        for did in _report_higher_orphans(session, request, current_user, moved_tree,
+                                          orphans_before, "import struktury z AD"):
+            d = session.get(Department, did)
+            details.append(f"⚠ Komórka „{d.name if d else did}” ma akceptację wyższego rzędu, "
+                           f"ale po zmianie podległości nikt nie może jej wykonać — "
+                           f"popraw strukturę (lista kontrolna)")
     units_created  = counters["units_created"]
     units_skipped  = counters["units_skipped"]
     depts_created  = counters["depts_created"]

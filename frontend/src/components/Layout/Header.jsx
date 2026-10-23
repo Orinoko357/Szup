@@ -5,7 +5,7 @@ import { logout as apiLogout, changePassword, errorMessage } from '../../api'
 import { toast } from '../ui/feedback'
 import Modal from '../ui/Modal'
 import GlobalSearch from '../GlobalSearch'
-import { getCurrentUser, getUserRoles, clearSession } from '../../roles'
+import { getCurrentUser, getUserRoles, clearSession, workRoles, hasAnyRole } from '../../roles'
 import { ROLE_LABEL } from '../../labels'
 import { setNavOpen } from './Sidebar'
 
@@ -55,7 +55,14 @@ export default function Header() {
   }
 
   const avatar = initials(user?.full_name || user?.username)
-  const roleLabels = getUserRoles().map(r => ROLE_LABEL[r] || r).join(', ')
+  // Role w belce: bez operacyjnych u superadmina (workRoles — np. efektywne „kadry”
+  // z komórki kadrowej), a „przeglądający” tylko wtedy, gdy to jedyna rola
+  // (u kadrowej „przeglądający, kadry” było mylące).
+  const shownRoles = workRoles(getUserRoles())
+  const roleLabels = (shownRoles.length > 1 ? shownRoles.filter(r => r !== 'viewer') : shownRoles)
+    .map(r => ROLE_LABEL[r] || r).join(', ')
+  // Wyszukiwarka nic nie znajdzie samemu przeglądającemu — wtedy jej nie pokazujemy.
+  const canSearch = hasAnyRole(shownRoles, ['manager', 'it_staff', 'hr', 'admin', 'superadmin'])
 
   return (
     // Belka: [Menu — tylko wąskie ekrany] nazwa urzędu, wyszukiwarka,
@@ -70,14 +77,14 @@ export default function Header() {
         Urząd Miasta Wodzisławia Śląskiego
       </span>
       <div className="app-header__spacer" />
-      <GlobalSearch />
+      {canSearch && <GlobalSearch />}
       <div className="app-header__user">
         <span className="app-header__avatar" aria-hidden="true">{avatar}</span>
         {/* Role ucinane wielokropkiem, a poniżej 1200 px ukryte — pełna treść w podpowiedzi. */}
         <span className="app-header__who"
               title={roleLabels ? `${user?.username || 'Użytkownik'} · ${roleLabels}` : undefined}>
           <strong>{user?.username || 'Użytkownik'}</strong>
-          {roleLabels && <span> · {roleLabels}</span>}
+          {roleLabels && <span>· {roleLabels}</span>}
         </span>
       </div>
       {user?.auth_type === 'local' && (
@@ -122,6 +129,7 @@ function ChangePasswordModal({ onClose, forced = false }) {
 
   async function submit(e) {
     e.preventDefault()
+    if (busy) return
     setErr(null)
     if (next !== next2) { setErr('Hasła nie są identyczne'); return }
     setBusy(true)
@@ -164,7 +172,8 @@ function ChangePasswordModal({ onClose, forced = false }) {
           <button type="button" className="btn btn--ghost" onClick={onClose}
                   style={{ minHeight: 44, borderRadius: 8 }}>Anuluj</button>
         )}
-        <button type="submit" className="btn btn--primary" disabled={busy}
+        {/* aria-disabled zamiast disabled — po błędnym haśle fokus zostaje w oknie. */}
+        <button type="submit" className="btn btn--primary" aria-disabled={busy}
                 style={{ minHeight: 44, padding: '0 20px', borderRadius: 8, fontSize: 14, fontWeight: 700 }}>
           {busy ? 'Zapisywanie…' : 'Zmień hasło'}
         </button>

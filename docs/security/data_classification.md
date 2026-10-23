@@ -28,7 +28,8 @@
 2. **Szyfrowanie w spoczynku**: sekrety szyfrowane Fernet, baza SQLite na zaszyfrowanym systemie plików (jeśli wymagane)
 3. **Szyfrowanie w transmisji**: HTTPS (TLS) wymagane w produkcji (HSTS)
 4. **Kontrola dostępu**: dane pracownika widoczne tylko dla HR, kierownika wydziału i IT
-5. **Retencja audit logu**: 24 miesiące (wymóg KSC), tabela append-only
+5. **Retencja audit logu**: co najmniej 24 miesiące (wymóg KSC), tabela append-only;
+   czyszczenie (superadmin, hasło, powód) obejmuje tylko wpisy starsze niż 24 miesiące
 
 ## Prawa podmiotów danych
 

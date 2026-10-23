@@ -25,7 +25,9 @@ from services.auth_service import (
     hash_password, verify_password, create_access_token, get_current_user,
     validate_password_strength, is_password_expired, revoke_token_jti,
     get_current_token_payload, MAX_FAILED_LOGINS, LOCKOUT_MINUTES,
-    password_change_required,
+    password_change_required, invalidate_tokens_now, clean_text_field,
+    ensure_password_confirm_allowed, register_password_confirm_failure,
+    clear_password_confirm_failures,
 )
 
 router = APIRouter()
@@ -50,6 +52,8 @@ def test_mode_effective(app_cfg: Optional[AppSettings]) -> bool:
     return bool(app_cfg and app_cfg.test_mode) and test_mode_env_allowed()
 
 
+# Limit NIEUDANYCH prób logowania per adres IP (M10). Udane logowania się nie
+# liczą — wiele osób za jednym NAT-em (urząd) nie może blokować się nawzajem.
 _LOGIN_WINDOW_SECONDS = 60
 _LOGIN_MAX_PER_WINDOW = 10
 # Górny limit liczby śledzonych adresów — słownik żyje w pamięci procesu,
@@ -75,28 +79,44 @@ def _purge_ip_hits(now: float) -> None:
 
 
 def _check_ip_rate_limit(ip: Optional[str]) -> None:
+    """429, gdy z adresu było już _LOGIN_MAX_PER_WINDOW nieudanych prób
+    w oknie. Sama kontrola niczego nie zlicza — patrz `_register_failed_login`."""
     if not ip:
         return
     now = time.monotonic()
     with _ip_lock:
-        if now - _ip_last_purge > _LOGIN_WINDOW_SECONDS or len(_ip_hits) >= _IP_HITS_MAX_KEYS:
-            _purge_ip_hits(now)
-        dq = _ip_hits[ip]
+        dq = _ip_hits.get(ip)
+        if not dq:
+            return
         cutoff = now - _LOGIN_WINDOW_SECONDS
         while dq and dq[0] < cutoff:
             dq.popleft()
         if len(dq) >= _LOGIN_MAX_PER_WINDOW:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Zbyt wiele prób logowania z tego adresu. Spróbuj za chwilę.",
+                detail="Zbyt wiele nieudanych prób logowania z tego adresu. "
+                       "Spróbuj za chwilę.",
             )
-        dq.append(now)
+
+
+def _register_failed_login(ip: Optional[str]) -> None:
+    """Zlicza nieudaną próbę logowania z adresu `ip`."""
+    if not ip:
+        return
+    now = time.monotonic()
+    with _ip_lock:
+        if now - _ip_last_purge > _LOGIN_WINDOW_SECONDS or len(_ip_hits) >= _IP_HITS_MAX_KEYS:
+            _purge_ip_hits(now)
+        _ip_hits[ip].append(now)
 
 
 class SetupRequest(BaseModel):
     username: str
     password: str
     full_name: Optional[str] = None
+    # Adres superadmina — na niego idą powiadomienia awaryjne (wnioski bez osoby
+    # uprawnionej w strukturze).
+    email: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -140,7 +160,10 @@ def _effective_roles(session, user: User, user_roles: list[str]) -> list[str]:
         if "hr" not in user_roles and user_is_hr(session, user):
             return [*user_roles, "hr"]
     except Exception:
-        pass
+        # Front pokaże wtedy konto bez funkcji kadr (autoryzacja w backendzie
+        # i tak idzie przez user_is_hr) — ale błąd musi być widoczny w logu.
+        _log.warning("Nie ustalono zdolności kadrowej konta %s", user.username,
+                     exc_info=True)
     return user_roles
 
 
@@ -156,6 +179,7 @@ def _days_until_expiry(user: User) -> Optional[int]:
 def _handle_failed_login(session: Session, user: Optional[User], username: str,
                          request: Request, reason: str):
     meta = request_meta(request)
+    _register_failed_login(meta["ip"])
     if user and user.auth_type == AuthType.local:
         user.failed_login_count = (user.failed_login_count or 0) + 1
         if user.failed_login_count >= MAX_FAILED_LOGINS:
@@ -222,11 +246,15 @@ def setup(data: SetupRequest, request: Request, session: Session = Depends(get_s
     if users_with_role(session, "superadmin", active_only=False):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Konfiguracja już została ukończona")
 
+    username = clean_text_field(data.username, "login", required=True)
+    full_name = clean_text_field(data.full_name, "imię i nazwisko")
+    email = clean_text_field(data.email, "e-mail")
     validate_password_strength(data.password)
 
     user = User(
-        username=data.username,
-        full_name=data.full_name,
+        username=username,
+        full_name=full_name,
+        email=email or None,
         password_hash=hash_password(data.password),
         roles=roles_to_json(["superadmin"]),
         auth_type=AuthType.local,
@@ -256,6 +284,7 @@ def login(data: LoginRequest, request: Request, session: Session = Depends(get_s
         _handle_failed_login(session, user, data.username, request, "unknown_user_or_wrong_auth")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Nieprawidłowy login lub hasło")
     if _account_is_locked(user):
+        _register_failed_login(meta["ip"])
         record_event(session, action="login.blocked_locked",
                      user_id=user.id, username=user.username,
                      ip=meta["ip"], user_agent=meta["user_agent"])
@@ -311,6 +340,7 @@ def login_test(data: TestLoginRequest, request: Request, session: Session = Depe
 
     user = session.exec(select(User).where(User.username == data.username)).first()
     if not user:
+        _register_failed_login(meta["ip"])
         record_event(session, action="login.failed", username=data.username,
                      ip=meta["ip"], user_agent=meta["user_agent"],
                      details={"reason": "test_mode_unknown_user"})
@@ -385,6 +415,7 @@ def login_ldap(data: LoginRequest, request: Request, session: Session = Depends(
     username = normalize_login(data.username)
 
     if not username or not authenticate_ldap(ldap_settings, username, data.password):
+        _register_failed_login(meta["ip"])
         record_event(session, action="login.failed", username=username or data.username,
                      ip=meta["ip"], user_agent=meta["user_agent"],
                      details={"reason": "ldap_reject"})
@@ -392,6 +423,7 @@ def login_ldap(data: LoginRequest, request: Request, session: Session = Depends(
 
     user = find_user_by_login(session, username)
     if user and user.auth_type != AuthType.ldap:
+        _register_failed_login(meta["ip"])
         _reject_non_domain_account(session, user, request, "ldap")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Nieprawidłowy login lub hasło AD")
     if not user:
@@ -577,9 +609,21 @@ def change_password(
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Zmiana hasła dostępna tylko dla kont lokalnych")
 
+    meta = request_meta(request)
     if not current_user.must_change_password:
+        # Obecne hasło to potwierdzenie tożsamości z zalogowanej sesji — wspólny
+        # limit prób z operacjami superadmina (inaczej przejęta sesja mogłaby
+        # tędy zgadywać hasło bez ograniczeń, a potem użyć go do czyszczenia
+        # dzienników czy resetu fabrycznego).
+        ensure_password_confirm_allowed(session, current_user)
         if not data.current_password or not verify_password(data.current_password, current_user.password_hash):
+            privileged = bool({"admin", "superadmin"} & set(parse_roles(current_user.roles)))
+            register_password_confirm_failure(
+                session, current_user, operation="zmiana hasła",
+                event_type="auth.password_change_denied", source="auth", ip=meta["ip"],
+                severity=SecuritySeverity.high if privileged else SecuritySeverity.medium)
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Obecne hasło jest nieprawidłowe")
+        clear_password_confirm_failures(session, current_user)
 
     validate_password_strength(data.new_password)
     if data.current_password and data.current_password == data.new_password:
@@ -588,13 +632,10 @@ def change_password(
     current_user.password_hash = hash_password(data.new_password)
     current_user.password_changed_at = datetime.utcnow()
     current_user.must_change_password = False
-    # Unieważnij wcześniejsze tokeny. Pełna sekunda (bez mikrosekund i bez +1 s):
-    # iat w JWT ma rozdzielczość sekundy, więc token z ponownego logowania zaraz
-    # po wymuszonej zmianie hasła nie może zostać odrzucony jako „starszy”.
-    current_user.tokens_valid_from = datetime.utcnow().replace(microsecond=0)
+    # Unieważnij wcześniejsze tokeny (także bieżący) — ponowne logowanie.
+    invalidate_tokens_now(current_user)
     session.add(current_user); session.commit()
 
-    meta = request_meta(request)
     record_event(session, action="password.changed",
                  user_id=current_user.id, username=current_user.username,
                  ip=meta["ip"], user_agent=meta["user_agent"])

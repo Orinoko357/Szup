@@ -181,6 +181,8 @@ def notify_helpdesk_new_request(request_id: int, worker_name: str,
     (`{applicant_line}`) trafia wprost w treść — widoczny na helpdesku nawet gdy
     serwer SMTP przepisze nagłówek „Od".
     """
+    # Nazwisko trafia do tematu — bez znaków nowej linii (nagłówek e-mail).
+    worker_name = " ".join(str(worker_name or "").split())
     what = {
         "revoke": "odebranie uprawnień",
         "change": "zmianę uprawnień",
@@ -255,6 +257,20 @@ def notify_request_taken_over(to_address: str, request_id: int, worker_name: str
     """Przełożony przejął wniosek czekający u kierownika komórki — informacja
     dla kierownika (i zastępców), że krok kierowniczy wykona przejmujący."""
     _send_event("request_taken_over", to_address, {
+        "request_id": request_id, "worker_name": worker_name,
+        "dept_name": dept_name or "", "taker_name": taker_name,
+        "request_url": request_url(request_id),
+    }, from_name=from_name, from_email=from_email)
+
+
+def notify_request_held_by_superior(to_address: str, request_id: int, worker_name: str,
+                                    dept_name: str, taker_name: str,
+                                    from_name: str | None = None,
+                                    from_email: str | None = None) -> None:
+    """Przełożony złożył wniosek dla podległej komórki i od razu go prowadzi
+    (przejęcie przy składaniu) — informacja dla kierownika komórki, który
+    inaczej nie wiedziałby o wniosku."""
+    _send_event("request_held_by_superior", to_address, {
         "request_id": request_id, "worker_name": worker_name,
         "dept_name": dept_name or "", "taker_name": taker_name,
         "request_url": request_url(request_id),

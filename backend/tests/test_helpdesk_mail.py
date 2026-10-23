@@ -49,7 +49,7 @@ def test_helpdesk_mail_on_it_stage(api, monkeypatch):
     hd = [m for m in sent if m["to"] == "helpdesk@wodzislaw-slaski.pl"]
     assert len(hd) == 1, f"oczekiwano 1 maila na helpdesk, jest {len(hd)}"
     m = hd[0]
-    assert m["subject"] == "[SZUP] Nowy wniosek o nadanie uprawnień"
+    assert m["subject"] == f"[SZUP] Nowy wniosek #{w['rid']} o nadanie uprawnień — Agata Młot"
     assert "Jan Kierownik wystąpił z wnioskiem o nadanie uprawnień dla Agata Młot" in m["body"]
     assert "https://szup.intranet.wods.pl" in m["body"]
 
@@ -128,6 +128,8 @@ def test_completed_mail_goes_to_selecting_manager(api, monkeypatch):
     api.post(f"/requests/{rid}/workflow/action", token=api.login("it"),
              json={"action": "execute", "ad_username": "amlot"})
 
+    # Kierownik, który wybierał uprawnienia, oraz kadrowa, która zgłosiła
+    # zatrudnienie (3.10 — kadry też muszą wiedzieć, że dostęp nadano).
     done = [m for m in sent if "zrealizowany" in m["subject"]]
-    assert len(done) == 1, f"maile: {[(m['to'], m['subject']) for m in sent]}"
-    assert done[0]["to"] == "kier@t.local", done[0]["to"]
+    assert sorted(m["to"] for m in done) == ["hr@t.local", "kier@t.local"], \
+        f"maile: {[(m['to'], m['subject']) for m in sent]}"

@@ -110,6 +110,9 @@ class User(SQLModel, table=True):
     # AD binding
     department_id: Optional[int] = Field(default=None, foreign_key="department.id", index=True)
     ldap_dn: Optional[str] = Field(default=None, index=True)   # znormalizowany DN
+    # objectGUID obiektu w AD (stały przy zmianie nazwy i przeniesieniu OU) —
+    # zapisywany przy imporcie, służy do weryfikacji zmiany loginu (3.10).
+    ldap_guid: Optional[str] = Field(default=None, index=True)
     # Stanowisko (atrybut `title` z AD) — służy do podpowiadania/wykrywania
     # kierowników komórek (np. „Kierownik", „Dyrektor", „Naczelnik").
     title: Optional[str] = Field(default="")
@@ -162,8 +165,9 @@ class Department(SQLModel, table=True):
     # True → wnioski na ten wydział wymagają wyboru uprawnień przez kierownika
     # wydziału i osobnej akceptacji przez kierownika wydziału nadrzędnego (2-stopniowo).
     requires_higher_approval: bool = Field(default=False)
-    # True → komórka KADROWA. Jej pracownicy mogą zgłaszać nowych pracowników
-    # i ustania (rola HR z automatu, bez przydzielania roli per osoba).
+    # True → komórka KADROWA. Każdy jej członek ma zdolność kadrową (zgłasza
+    # nowych pracowników i ustania we wszystkich jednostkach) — roli „hr” nie
+    # nadaje się per osoba (zniesiona w 3.9).
     is_hr: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     ldap_dn: Optional[str] = Field(default=None, index=True)   # znormalizowany DN z AD
@@ -428,6 +432,10 @@ class RequestItem(SQLModel, table=True):
     fulfilled: bool = Field(default=False, index=True)
     fulfilled_by_user_id: Optional[int] = Field(default=None, foreign_key="user.id")
     fulfilled_at: Optional[datetime] = None
+    # Pozycja NADANIA, którą później odebrano systemowo (usunięcie grupy przez
+    # superadmina) — id systemowego wniosku o odebranie. Rejestr nadanych
+    # oznacza ją jako odebraną; dotyczy też posiadaczy bez dowiązanego konta.
+    revoked_by_request_id: Optional[int] = Field(default=None, index=True)
 
 
 class RequestEvent(SQLModel, table=True):
@@ -647,6 +655,16 @@ class RevokedToken(SQLModel, table=True):
     user_id: Optional[int] = Field(default=None, index=True)
     revoked_at: datetime = Field(default_factory=datetime.utcnow)
     expires_at: datetime
+
+
+class PasswordConfirmFailure(SQLModel, table=True):
+    """Nieudane potwierdzenie hasłem (zmiana hasła, operacje superadmina,
+    reset fabryczny) — wspólny, trwały licznik prób per konto (3.10).
+    Wiersze starsze niż okno limitu są sprzątane przy kolejnych próbach."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    operation: Optional[str] = Field(default=None)
 
 
 # ---------------------------------------------------------------------------

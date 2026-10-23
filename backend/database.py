@@ -294,6 +294,38 @@ def _seed_default_workflow():
 # Triggery wymuszające append-only na tabeli auditlog.
 AUDITLOG_TRIGGERS = ("auditlog_no_update", "auditlog_no_delete")
 
+# Triggery chroniące ślady czyszczeń w tabeli securityevent (3.10). Zwykłe
+# zdarzenia można zamykać i czyścić, ale wierszy-śladów (`audit.purged`,
+# `security.purged`, `settings.factory_reset`) nie da się usunąć ani zmienić —
+# wolno tylko je zamknąć (kolumny resolved_*).
+SECURITYEVENT_TRIGGERS = ("securityevent_trace_no_update", "securityevent_trace_no_delete")
+
+
+def _log_trigger_sql() -> dict[str, str]:
+    """{nazwa: CREATE TRIGGER} — triggery append-only dzienników."""
+    from services.audit import PURGE_TRACE_ACTIONS
+    traces = ", ".join("'" + t.replace("'", "''") + "'" for t in PURGE_TRACE_ACTIONS)
+    return {
+        "auditlog_no_update":
+            "CREATE TRIGGER auditlog_no_update "
+            "BEFORE UPDATE ON auditlog BEGIN "
+            "SELECT RAISE(ABORT, 'auditlog is append-only'); END",
+        "auditlog_no_delete":
+            "CREATE TRIGGER auditlog_no_delete "
+            "BEFORE DELETE ON auditlog BEGIN "
+            "SELECT RAISE(ABORT, 'auditlog is append-only'); END",
+        "securityevent_trace_no_update":
+            "CREATE TRIGGER securityevent_trace_no_update "
+            "BEFORE UPDATE OF created_at, event_type, severity, source, summary, "
+            "details, user_id, ip ON securityevent "
+            f"WHEN old.event_type IN ({traces}) BEGIN "
+            "SELECT RAISE(ABORT, 'securityevent purge traces are append-only'); END",
+        "securityevent_trace_no_delete":
+            "CREATE TRIGGER securityevent_trace_no_delete "
+            f"BEFORE DELETE ON securityevent WHEN old.event_type IN ({traces}) BEGIN "
+            "SELECT RAISE(ABORT, 'securityevent purge traces are append-only'); END",
+    }
+
 
 def drop_auditlog_triggers(conn) -> list[tuple[str, Exception]]:
     """Zdejmij triggery append-only z auditlog (przed czyszczeniem tabeli).
@@ -313,23 +345,29 @@ def drop_auditlog_triggers(conn) -> list[tuple[str, Exception]]:
 
 
 def _install_auditlog_triggers():
+    """Zakłada (albo odświeża) triggery append-only: auditlog oraz ochronę
+    śladów czyszczeń w securityevent. Trigger o innej treści niż oczekiwana
+    (np. po zmianie listy śladów w nowej wersji) jest zakładany od nowa.
+    Woła to `init_db()` przy każdym starcie, czyszczenie dzienników i reset
+    fabryczny. Błąd nie przechodzi po cichu — trafia do logu."""
+    import logging
     from sqlalchemy import text
-    triggers = [
-        "CREATE TRIGGER IF NOT EXISTS auditlog_no_update "
-        "BEFORE UPDATE ON auditlog BEGIN "
-        "SELECT RAISE(ABORT, 'auditlog is append-only'); END",
-
-        "CREATE TRIGGER IF NOT EXISTS auditlog_no_delete "
-        "BEFORE DELETE ON auditlog BEGIN "
-        "SELECT RAISE(ABORT, 'auditlog is append-only'); END",
-    ]
+    log = logging.getLogger("szup.migrations")
+    expected = _log_trigger_sql()
     with engine.connect() as conn:
-        for sql in triggers:
+        present = {r[0]: r[1] for r in conn.exec_driver_sql(
+            "SELECT name, sql FROM sqlite_master WHERE type='trigger'").fetchall()}
+        for name, sql in expected.items():
+            if present.get(name) == sql:
+                continue
             try:
+                if name in present:
+                    conn.execute(text(f'DROP TRIGGER IF EXISTS "{name}"'))
                 conn.execute(text(sql))
                 conn.commit()
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
+                log.error("Nie udało się założyć triggera append-only %s: %s", name, exc)
 
 
 def _run_migrations():
@@ -429,6 +467,10 @@ def _run_migrations():
         ("department",       "archived_reason",     "VARCHAR DEFAULT NULL"),
         ("systempermission", "deleted_at",          "DATETIME DEFAULT NULL"),
         ("systempermission", "deleted_reason",      "VARCHAR DEFAULT NULL"),
+        # objectGUID konta z AD — weryfikacja zmiany loginu (3.10)
+        ("user",             "ldap_guid",           "VARCHAR DEFAULT NULL"),
+        # Odebranie pozycji przy usunięciu grupy uprawnień (3.10)
+        ("requestitem",      "revoked_by_request_id", "INTEGER DEFAULT NULL"),
     ]
     from sqlalchemy import text
     with engine.connect() as conn:
@@ -440,10 +482,12 @@ def _run_migrations():
         for table, column, col_def in simple_migrations:
             _add_column(conn, table, column, col_def, _mlog)
         if ldap_cols_before and "tls_verify" not in ldap_cols_before:
-            conn.execute(text('UPDATE "ldapsettings" SET tls_verify = 0'))
+            res = conn.execute(text('UPDATE "ldapsettings" SET tls_verify = 0'))
             conn.commit()
-            _mlog.warning("LDAP: weryfikacja certyfikatu wyłączona dla istniejącej "
-                          "instalacji — włącz ją w Ustawieniach po wskazaniu pliku CA")
+            # Bez skonfigurowanego LDAP (pusta tabela) nie ma czego ostrzegać.
+            if res.rowcount:
+                _mlog.warning("LDAP: weryfikacja certyfikatu wyłączona dla istniejącej "
+                              "instalacji — włącz ją w Ustawieniach po wskazaniu pliku CA")
         if ldap_cols_before and "allow_insecure" not in ldap_cols_before:
             conn.execute(text('UPDATE "ldapsettings" SET allow_insecure = 1 '
                               'WHERE COALESCE(use_ssl, 0) = 0'))
@@ -474,6 +518,28 @@ def _run_migrations():
             conn.rollback()
             _mlog.warning("Nie udało się utworzyć ix_accessrequest_current_node_type: %s", exc)
 
+        try:
+            conn.execute(text(
+                'CREATE INDEX IF NOT EXISTS ix_user_ldap_guid ON "user" (ldap_guid)'))
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            _mlog.warning("Nie udało się utworzyć ix_user_ldap_guid: %s", exc)
+
+        # Indeksy kolumn dodanych migracją (świeża baza ma je z modelu) — 3.9/3.10.
+        for ix_name, table, column in (
+            ("ix_department_archived_at", "department", "archived_at"),
+            ("ix_systempermission_deleted_at", "systempermission", "deleted_at"),
+            ("ix_requestitem_revoked_by_request_id", "requestitem", "revoked_by_request_id"),
+        ):
+            try:
+                conn.execute(text(
+                    f'CREATE INDEX IF NOT EXISTS {ix_name} ON "{table}" ({column})'))
+                conn.commit()
+            except Exception as exc:
+                conn.rollback()
+                _mlog.warning("Nie udało się utworzyć %s: %s", ix_name, exc)
+
         _backfill_current_node_type(conn, _mlog)
 
         # Backfill: accessrequest.worker_user_id dla starych rekordów (best-effort).
@@ -497,8 +563,9 @@ def _run_migrations():
                    AND (SELECT COUNT(*) FROM "user" u WHERE {match_cond}) = 1
             """))
             conn.commit()
-        except Exception:
+        except Exception as exc:
             conn.rollback()
+            _mlog.warning("Uzupełnienie accessrequest.worker_user_id pominięte: %s", exc)
 
         # Migracja: single role → roles JSON array
         # Dodaj kolumnę roles jeśli nie istnieje

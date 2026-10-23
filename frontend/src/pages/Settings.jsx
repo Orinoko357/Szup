@@ -550,10 +550,13 @@ export default function Settings() {
               Szyfrowanie zwykłego połączenia (port 389). Nie łączy się z LDAPS.
             </div>
             {/* Szyfrowanie jest zalecane, nie wymagane — połączenie bez LDAPS/STARTTLS
-                jest dozwolone (lista kontrolna pokazuje je jako zalecenie). */}
-            <div className="form-hint" style={{ margin: '0 0 10px' }}>
-              Zalecane: LDAPS lub STARTTLS z weryfikacją certyfikatu
-            </div>
+                jest dozwolone (lista kontrolna pokazuje je jako zalecenie).
+                Podpowiedź tylko, gdy szyfrowanie jest wyłączone. */}
+            {!ldap.use_ssl && !ldap.use_starttls && (
+              <div className="form-hint" style={{ margin: '0 0 10px' }}>
+                Zalecane: LDAPS lub STARTTLS z weryfikacją certyfikatu
+              </div>
+            )}
             <label className="form-check" style={{ marginBottom: 8 }}>
               <input type="checkbox" checked={ldap.tls_verify ?? true}
                      onChange={e => setL('tls_verify', e.target.checked)} />
@@ -734,7 +737,7 @@ function FactoryResetSection() {
 
       <div style={{ marginBottom: 14 }}>
         {row('wipe_requests', 'Wnioski', 'Wnioski, pozycje uprawnień, instancje i kroki obiegu')}
-        {row('wipe_structure', 'Struktura organizacyjna', 'Jednostki, wydziały, zastępcy, przypisania jednostek HR')}
+        {row('wipe_structure', 'Struktura organizacyjna', 'Jednostki, wydziały (w tym komórka kadrowa), zastępcy')}
         {row('wipe_users', 'Użytkownicy', 'Wszystkie konta OPRÓCZ Twojego (wymaga czyszczenia wniosków)')}
         {row('wipe_software', 'Rejestr oprogramowania', 'Systemy i ich uprawnienia (wymaga czyszczenia wniosków)')}
         {row('wipe_audit', 'Dziennik zdarzeń i zdarzenia bezpieczeństwa', 'Historia audytowa — usuwaj tylko świadomie')}

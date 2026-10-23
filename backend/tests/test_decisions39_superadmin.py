@@ -26,14 +26,6 @@ from tests.conftest import PW
 REASON = "Porządki po migracji danych testowych"
 
 
-@pytest.fixture(autouse=True)
-def _reset_confirm_failures():
-    import services.audit as audit_service
-    audit_service._confirm_failures.clear()
-    yield
-    audit_service._confirm_failures.clear()
-
-
 # ---------------------------------------------------------------------------
 # Helpery
 # ---------------------------------------------------------------------------
@@ -94,7 +86,8 @@ def _base(api):
 
 
 def _purge(api, token, log="audit", **body):
-    payload = {"password": PW, "reason": REASON, "mode": "all", **body}
+    # Od 3.10 czyścić można tylko wpisy starsze niż 24 miesiące (bez trybu "all").
+    payload = {"password": PW, "reason": REASON, "before": "2020-01-01", **body}
     return api.post(f"/{log}/purge", token=token, json=payload)
 
 
@@ -110,7 +103,7 @@ def test_purge_superadmin_only_and_validation(api):
 
     r = _purge(api, b["sup"], reason="za krótko")
     assert r.status_code == 400
-    r = _purge(api, b["sup"], mode="before")
+    r = _purge(api, b["sup"], before="")
     assert r.status_code == 400 and "datę" in r.json()["detail"]
     r = _purge(api, b["sup"], mode="before", before="wczoraj")
     assert r.status_code == 400
@@ -133,7 +126,7 @@ def test_purge_password_attempts_limited(api):
     assert any(e.severity == "critical" for e in _events("superadmin.confirm_denied"))
 
 
-def test_purge_all_restores_triggers_and_keeps_trace(api):
+def test_purge_restores_triggers_and_keeps_trace(api):
     b = _base(api)
     _add_old_entries()
     assert set(AUDITLOG_TRIGGERS) <= _triggers()
@@ -146,7 +139,7 @@ def test_purge_all_restores_triggers_and_keeps_trace(api):
     traces = _audit("audit.purged")
     assert len(traces) == 1
     details = json.loads(traces[0].details)
-    assert details["reason"] == REASON and details["mode"] == "all"
+    assert details["reason"] == REASON and details["mode"] == "before"
     assert details["deleted"] == r.json()["deleted"]
     assert any(e.severity == "critical" for e in _events("audit.purged"))
     with Session(engine) as s:
@@ -180,7 +173,8 @@ def test_purge_before_date_deletes_only_older(api):
         left = {e.id for e in s.exec(select(AuditLog)).all()}
     assert recent_ids <= left
     details = json.loads(_audit("audit.purged")[0].details)
-    assert details["mode"] == "before" and details["before"].startswith("2020-01-01")
+    # Data bez strefy = północ czasu polskiego (zimą UTC+1), zapis w UTC.
+    assert details["mode"] == "before" and details["before"].startswith("2019-12-31T23:00")
 
 
 def test_security_purge_keeps_trace_events(api):
@@ -407,7 +401,7 @@ def test_held_group_delete_revokes_from_holders(api):
     g = _group_setup(api)
     reason = "Moduł wycofany z użycia"
     r = api.post(f"/systems/{g['sid']}/permissions/group-delete", token=g["sup"],
-                 json={"group_name": "G", "reason": reason})
+                 json={"group_name": "G", "reason": reason, "password": PW})
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["affected_user_ids"] == [g["worker"]]
@@ -463,7 +457,7 @@ def test_unheld_group_delete_still_allowed_for_it(api):
         "group_name": "G", "items": [{"permission_name": "Odczyt"}]})
     usage = api.get(f"/systems/{sid}/permissions/group-usage", token=b["it"],
                     params={"group_name": "G"}).json()
-    assert usage == {"holders": [], "in_progress_requests": []}
+    assert usage == {"holders": [], "unlinked_holders": [], "in_progress_requests": []}
     r = api.post(f"/systems/{sid}/permissions/group-delete", token=b["it"],
                  json={"group_name": "G"})
     assert r.status_code == 200, r.text

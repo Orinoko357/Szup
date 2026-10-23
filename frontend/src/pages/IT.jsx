@@ -223,11 +223,13 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
                   </td>
                   <td>
                     {r.status === 'pending_it' ? (
-                      <button className="btn btn--success btn--sm" onClick={() => setOpenReq(r)} data-return-focus={r.id}>
-                        <CheckCircle size={13} /> {r.kind === 'revoke' ? 'Odbierz' : 'Zrealizuj'}
+                      <button type="button" className="btn btn--success btn--sm" onClick={() => setOpenReq(r)} data-return-focus={r.id}
+                              aria-label={`${r.kind === 'revoke' ? 'Odbierz uprawnienia' : 'Zrealizuj wniosek'} #${r.id} — ${r.worker_name || 'pracownik'}`}>
+                        <CheckCircle size={13} aria-hidden="true" /> {r.kind === 'revoke' ? 'Odbierz' : 'Zrealizuj'}
                       </button>
                     ) : (
-                      <button className="btn btn--ghost btn--sm" onClick={() => setOpenReq(r)} data-return-focus={r.id}>Podgląd</button>
+                      <button type="button" className="btn btn--ghost btn--sm" onClick={() => setOpenReq(r)} data-return-focus={r.id}
+                              aria-label={`Podgląd wniosku #${r.id} — ${r.worker_name || 'pracownik'}`}>Podgląd</button>
                     )}
                   </td>
                 </tr>

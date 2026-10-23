@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from database import get_session
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from models import (AppSettings, EmailSettings, LdapSettings, NotificationTemplate,
                     SecuritySeverity, User)
@@ -599,7 +599,10 @@ def update_app_settings(
             from services import scheduler
             scheduler.reconfigure()
         except Exception:
-            pass
+            # Migawki mogłyby przestać się planować bez śladu — musi to być w logu.
+            import logging
+            logging.getLogger("szup.settings").exception(
+                "Nie udało się przeplanować migawek po zmianie ustawień")
 
     if prev != cfg.test_mode:
         # Włączenie/wyłączenie trybu testowego ZAWSZE leci jako security event — kluczowa operacja.
@@ -650,22 +653,9 @@ def test_ldap(
 # Reset do ustawień fabrycznych — WYŁĄCZNIE superadmin
 # ---------------------------------------------------------------------------
 
-# Limit nieudanych potwierdzeń hasłem przy resecie fabrycznym — per konto,
-# w pamięci procesu (jeden worker uvicorn). Chroni przed zgadywaniem hasła
-# z przejętej sesji superadmina; restart usługi zeruje licznik.
-FACTORY_RESET_MAX_FAILURES = 5
-FACTORY_RESET_WINDOW = timedelta(minutes=15)
-_factory_reset_failures: dict[int, list[datetime]] = {}
-
-
-def _recent_reset_failures(user_id: int) -> list[datetime]:
-    cutoff = datetime.utcnow() - FACTORY_RESET_WINDOW
-    hits = [t for t in _factory_reset_failures.get(user_id, []) if t > cutoff]
-    if hits:
-        _factory_reset_failures[user_id] = hits
-    else:
-        _factory_reset_failures.pop(user_id, None)
-    return hits
+# Potwierdzenie hasłem resetu korzysta ze wspólnego, trwałego licznika prób
+# konta (`services.auth_service`, ten sam co zmiana hasła i inne operacje
+# superadmina) — zgadywanie hasła jedną ścieżką blokuje wszystkie.
 
 
 def _auditlog_triggers_present(session: Session) -> bool:
@@ -681,10 +671,11 @@ class FactoryResetRequest(BaseModel):
     password: str                    # potwierdzenie hasłem wykonującego
     confirm: str                     # musi być dokładnie "RESET"
     wipe_requests: bool = True       # wnioski + pozycje + instancje obiegu
-    wipe_structure: bool = True      # jednostki, wydziały, zastępcy, przypisania HR
+    wipe_structure: bool = True      # jednostki, wydziały, zastępcy
     wipe_users: bool = True          # wszyscy użytkownicy PRÓCZ wykonującego
     wipe_software: bool = False      # rejestr oprogramowania (systemy + uprawnienia)
     wipe_audit: bool = False         # audit log + zdarzenia bezpieczeństwa
+                                     # (bez śladów czyszczeń i resetów)
 
 
 class FactoryResetResult(BaseModel):
@@ -712,51 +703,29 @@ def factory_reset(
     Operacja NIEODWRACALNA — dostępna wyłącznie dla superadmina i wymagająca
     potwierdzenia hasłem oraz frazą „RESET". Konto wykonującego jest ZAWSZE
     zachowywane (inaczej nikt nie mógłby się zalogować po resecie).
+    `wipe_audit` nie usuwa śladów czyszczeń dzienników ani wcześniejszych
+    resetów (`PURGE_TRACE_ACTIONS`); ślad tego resetu powstaje w tej samej
+    transakcji co czyszczenie.
     Domyślne szablony obiegu i typy wniosków odtworzy `init_db()` przy starcie.
     """
+    import logging
     from sqlalchemy import text
-    from models import AuthType
-    from services.auth_service import verify_password
-    from services.audit import record_event, request_meta
+    from services.audit import (
+        PURGE_TRACE_ACTIONS, confirm_password, record_event, request_meta,
+    )
     from services.security_events import emit as emit_security_event
 
+    _slog = logging.getLogger("szup.settings")
     if data.confirm.strip() != "RESET":
         raise HTTPException(400, 'Potwierdź operację wpisując dokładnie: RESET')
 
     meta = request_meta(request)
-    if len(_recent_reset_failures(current_user.id)) >= FACTORY_RESET_MAX_FAILURES:
-        raise HTTPException(429,
-            "Zbyt wiele nieudanych prób potwierdzenia hasłem. "
-            f"Spróbuj ponownie za {int(FACTORY_RESET_WINDOW.total_seconds() // 60)} minut.")
-
-    # Weryfikacja tożsamości wykonującego — hasłem lokalnym albo przez AD.
-    ok = False
-    if current_user.auth_type == AuthType.ldap:
-        from services.ldap_service import authenticate_ldap
-        cfg = session.exec(select(LdapSettings)).first()
-        if cfg and cfg.enabled:
-            try:
-                ok = bool(authenticate_ldap(cfg, current_user.username, data.password))
-            except Exception:
-                ok = False
-    else:
-        ok = bool(current_user.password_hash) and verify_password(
-            data.password, current_user.password_hash)
-    if not ok:
-        failures = _factory_reset_failures.setdefault(current_user.id, [])
-        failures.append(datetime.utcnow())
-        blocked = len(failures) >= FACTORY_RESET_MAX_FAILURES
-        emit_security_event(
-            session, event_type="settings.factory_reset_denied", source="settings",
-            severity=SecuritySeverity.critical if blocked else SecuritySeverity.high,
-            summary=(f"Nieudane potwierdzenie hasłem resetu fabrycznego przez "
-                     f"{current_user.username}"
-                     + (" — próby zablokowane na 15 minut" if blocked else "")),
-            details={"failures_in_window": len(failures)},
-            user_id=current_user.id, ip=meta["ip"],
-        )
-        raise HTTPException(403, "Nieprawidłowe hasło — reset przerwany")
-    _factory_reset_failures.pop(current_user.id, None)
+    # Weryfikacja tożsamości wykonującego — hasłem lokalnym albo przez AD,
+    # ze wspólnym limitem prób (429 po wyczerpaniu).
+    confirm_password(session, current_user, data.password,
+                     operation="reset fabryczny", ip=meta["ip"],
+                     event_type="settings.factory_reset_denied", source="settings",
+                     denied_detail="Nieprawidłowe hasło — reset przerwany")
     deleted: dict[str, int] = {}
     details: list[str] = []
 
@@ -764,7 +733,8 @@ def factory_reset(
         try:
             row = session.exec(text(f'SELECT COUNT(*) FROM "{table}"')).first()
             return int(row[0]) if row else 0
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — np. tabela nieobecna w starej bazie
+            _slog.warning("Factory reset: nie policzono wierszy %s: %s", table, exc)
             return 0
 
     def _wipe(table: str, where: str = "") -> None:
@@ -857,6 +827,7 @@ def factory_reset(
             _wipe("userunit", f"user_id <> {int(current_user.id)}")
             _wipe("departmentdeputy", f"user_id <> {int(current_user.id)}")
             _wipe("revokedtoken")
+            _wipe("passwordconfirmfailure", f"user_id <> {int(current_user.id)}")
             _wipe("user", f"id <> {int(current_user.id)}")
 
         # 4) Struktura organizacyjna.
@@ -868,14 +839,34 @@ def factory_reset(
             _wipe("department")
             _wipe("unit")
 
-        # 5) Audyt / zdarzenia bezpieczeństwa (append-only triggery trzeba zdjąć;
-        #    odtwarzamy je zaraz po commicie, niżej).
+        # 5) Audyt / zdarzenia bezpieczeństwa (append-only triggery auditlog
+        #    trzeba zdjąć; odtwarzamy je zaraz po commicie, niżej). Ślady
+        #    czyszczeń i wcześniejszych resetów zostają — chronią je też
+        #    triggery securityevent.
         if data.wipe_audit:
             from database import drop_auditlog_triggers
             drop_auditlog_triggers(session)
             audit_triggers_dropped = True
-            _wipe("auditlog")
-            _wipe("securityevent")
+            keep = ", ".join("'" + a.replace("'", "''") + "'" for a in PURGE_TRACE_ACTIONS)
+            _wipe("auditlog", f"COALESCE(action, '') NOT IN ({keep})")
+            _wipe("securityevent", f"COALESCE(event_type, '') NOT IN ({keep})")
+
+        # 6) Ślad resetu — w tej samej transakcji co czyszczenie: nie ma resetu
+        #    bez śladu. (record_event / emit z commit=False — zatwierdza commit niżej.)
+        trace = {"deleted": dict(deleted),
+                 "scope": {k: bool(getattr(data, k)) for k in (
+                     "wipe_requests", "wipe_structure", "wipe_users",
+                     "wipe_software", "wipe_audit")}}
+        record_event(session, action="settings.factory_reset",
+                     user_id=current_user.id, username=current_user.username,
+                     ip=meta["ip"], user_agent=meta["user_agent"],
+                     details=trace, commit=False)
+        emit_security_event(
+            session, event_type="settings.factory_reset", source="settings",
+            severity=SecuritySeverity.critical,
+            summary=f"PRZYWRÓCENIE USTAWIEŃ FABRYCZNYCH przez {current_user.username}",
+            details=trace, user_id=current_user.id, ip=meta["ip"], commit=False,
+        )
 
     except _ResetAborted as exc:
         session.rollback()
@@ -883,9 +874,7 @@ def factory_reset(
             # DDL w SQLite może nie podlegać wycofaniu — przywróć ochronę dziennika.
             from database import _install_auditlog_triggers
             _install_auditlog_triggers()
-        import logging
-        logging.getLogger("szup.settings").error(
-            "Factory reset przerwany na tabeli %s: %s", exc.table, exc.error)
+        _slog.error("Factory reset przerwany na tabeli %s: %s", exc.table, exc.error)
         raise HTTPException(500,
             f"Reset przerwany — nie udało się wyczyścić tabeli „{exc.table}” "
             f"({exc.error}). Żadne dane nie zostały usunięte.")
@@ -904,36 +893,16 @@ def factory_reset(
         except Exception as exc:  # noqa: BLE001
             triggers_error = f"{type(exc).__name__}: {exc}"
         if triggers_error:
-            import logging
-            logging.getLogger("szup.settings").error(
-                "Factory reset: nie odtworzono triggerów append-only auditlog: %s",
-                triggers_error)
+            _slog.error("Factory reset: nie odtworzono triggerów append-only: %s",
+                        triggers_error)
             details.append("⚠ Nie udało się odtworzyć ochrony dziennika zdarzeń "
                            "(append-only). Zrestartuj usługę i sprawdź logi.")
-
-    # Ślad operacji (po czystce, żeby nie został skasowany).
-    try:
-        record_event(session, action="settings.factory_reset",
-                     user_id=current_user.id, username=current_user.username,
-                     ip=meta["ip"], user_agent=meta["user_agent"],
-                     details={"deleted": deleted})
-        emit_security_event(
-            session, event_type="settings.factory_reset", source="settings",
-            severity=SecuritySeverity.critical,
-            summary=f"PRZYWRÓCENIE USTAWIEŃ FABRYCZNYCH przez {current_user.username}",
-            details={"deleted": deleted}, user_id=current_user.id, ip=meta["ip"],
-        )
-        if triggers_error:
             emit_security_event(
                 session, event_type="audit.triggers_missing", source="settings",
                 severity=SecuritySeverity.critical,
                 summary="Dziennik zdarzeń bez ochrony append-only po resecie fabrycznym",
                 details={"error": triggers_error}, user_id=current_user.id, ip=meta["ip"],
             )
-    except Exception:
-        import logging
-        logging.getLogger("szup.settings").exception(
-            "Factory reset: nie zapisano śladu operacji w audycie")
 
     if not details:
         details.append("Brak danych do usunięcia — system był już pusty.")
@@ -992,7 +961,6 @@ def config_health(
             cur = dept_by_id.get(cur.parent_dept_id) if cur.parent_dept_id else None
         return None
 
-    unit_mgr_ok = {u.id for u in units if _active_mgr(u.manager_user_id)}
     # Komórka bez kierownika jest problemem tylko wtedy, gdy NIKT wyżej za nią
     # nie odpowiada — inaczej obieg przejmuje najbliższy kierownik wyżej.
     # Bez BEZPOŚREDNIEGO kierownika (to pokazuje filtr /units?filter=no_manager).
@@ -1006,12 +974,16 @@ def config_health(
     standalone_orphans = [d for d in active_depts
                           if getattr(d, "kind", None) == "standalone"
                           and _responsible_active(d) is None]
-    # Komórki najwyższego poziomu z akceptacją wyższego rzędu: krok „kierownik
-    # wyższego rzędu” obsłuży tylko dyrektor jednostki — gdy go brak (lub jest
-    # nieaktywny), krok nie ma adresata i wniosek utknie.
-    higher_no_addressee = [d for d in active_depts
-                           if d.requires_higher_approval and not d.parent_dept_id
-                           and d.unit_id not in unit_mgr_ok]
+    # Komórki z akceptacją wyższego rzędu, której nikt nie może wykonać (brak
+    # aktywnego kierownika / zastępcy wyżej i dyrektora jednostki, albo ta sama
+    # osoba kieruje komórką i jej nadrzędną) — wnioski utkną na tym kroku.
+    # Te same reguły co adresaci kroku w obiegu (services.structure).
+    from services.structure import higher_approval_orphans
+    active_dept_ids = {d.id for d in active_depts}
+    higher_no_addressee = [d for d in higher_approval_orphans(session)
+                           if d.id in active_dept_ids]
+    hr_check = _hr_department_check(session, active_depts, inactive_user_ids)
+    hr_lost = _hr_capability_lost(session)
     inactive_mgr = [d for d in active_depts
                     if d.manager_user_id and d.manager_user_id in inactive_user_ids]
 
@@ -1063,13 +1035,20 @@ def config_health(
                     else "Bez przełożonego: " + ", ".join(d.name for d in standalone_orphans[:5])
                     + (f" (+{len(standalone_orphans) - 5})" if len(standalone_orphans) > 5 else "")),
          "link": "/units"},
-        {"key": "higher_approval", "label": "Akceptacja wyższego rzędu ma adresata",
+        {"key": "higher_approval",
+         "label": ("Akceptacja wyższa bez osoby uprawnionej" if higher_no_addressee
+                   else "Akceptacja wyższego rzędu ma osobę uprawnioną"),
          "ok": not higher_no_addressee,
-         "detail": ("Każda komórka z akceptacją wyższego rzędu ma przełożonego" if not higher_no_addressee
-                    else "Komórki najwyższego poziomu bez dyrektora jednostki: "
+         "detail": ("Każda komórka z akceptacją wyższego rzędu ma przełożonego, który może ją wykonać"
+                    if not higher_no_addressee
+                    else "Nikt nie może wykonać akceptacji wyższej w komórkach: "
                     + ", ".join(d.name for d in higher_no_addressee[:5])
-                    + (f" (+{len(higher_no_addressee) - 5})" if len(higher_no_addressee) > 5 else "")),
+                    + (f" (+{len(higher_no_addressee) - 5})" if len(higher_no_addressee) > 5 else "")
+                    + " — przypisz kierownika komórki nadrzędnej lub dyrektora jednostki, "
+                      "albo wyłącz akceptację wyższego rzędu"),
+         "departments": [{"id": d.id, "name": d.name} for d in higher_no_addressee],
          "link": "/units"},
+        hr_check,
         {"key": "helpdesk", "label": "Adres helpdesku IT",
          "ok": bool(helpdesk or HELPDESK_EMAIL),
          "detail": (f"{helpdesk} (ustawiony)" if helpdesk
@@ -1146,9 +1125,11 @@ def config_health(
     })
 
     # Domyślny poziom elementu listy kontrolnej: "required" (warunek gotowości).
-    # "warning" i "recommendation" nie blokują pracy systemu.
+    # "warning" i "recommendation" nie blokują pracy systemu — `blocking` mówi
+    # wprost, czy niespełniony element liczy się do „Gotowe X z Y”.
     for c in checks:
         c.setdefault("level", "required")
+        c["blocking"] = c["level"] == "required"
 
     # Użytkownicy bez komórki — pomijamy nieaktywnych i konta czysto administracyjne.
     admin_only = {"admin", "superadmin"}
@@ -1185,5 +1166,69 @@ def config_health(
          "link": None},
         {"key": "inactive_managers", "label": "Nieaktywni kierownicy na stanowisku", "count": len(inactive_mgr), "link": "/units"},
         {"key": "security_open", "label": "Otwarte zdarzenia bezpieczeństwa", "count": open_sec, "link": "/security"},
+        {"key": "hr_capability_lost",
+         "label": "Osoby, które straciły funkcję kadr przy aktualizacji do 3.9",
+         "count": len(hr_lost),
+         "detail": (("Przenieś je do komórki kadrowej albo oznacz ich komórkę jako kadrową: "
+                     + ", ".join(hr_lost)) if hr_lost else None),
+         "usernames": hr_lost,
+         "link": "/units"},
     ]
     return {"checks": checks, "issues": issues}
+
+
+def _hr_department_check(session: Session, active_depts: list, inactive_user_ids: set) -> dict:
+    """Wymagany element listy kontrolnej: co najmniej jedna aktywna komórka
+    kadrowa z aktywnym członkiem — bez niej nikt nie złoży wniosku o nowego
+    pracownika ani o ustanie stosunku pracy (zdolność kadrową daje wyłącznie
+    przynależność do komórki kadrowej)."""
+    from sqlalchemy import func
+    hr_depts = [d for d in active_depts if getattr(d, "is_hr", False)]
+    staffed: list = []
+    for d in hr_depts:
+        members = session.exec(
+            select(func.count()).select_from(User)
+            .where(User.department_id == d.id)
+            .where(User.is_active == True)  # noqa: E712
+        ).one()
+        if members:
+            staffed.append(d)
+    if staffed:
+        detail = "Komórki kadrowe: " + ", ".join(d.name for d in staffed[:5]) \
+            + (f" (+{len(staffed) - 5})" if len(staffed) > 5 else "")
+    elif hr_depts:
+        detail = ("Komórka kadrowa nie ma aktywnych pracowników: "
+                  + ", ".join(d.name for d in hr_depts[:5])
+                  + " — przypisz do niej pracowników kadr")
+    else:
+        detail = ("Żadna komórka nie jest oznaczona jako kadrowa — oznacz komórkę kadr "
+                  "w strukturze (bez niej nikt nie złoży wniosku o nowego pracownika)")
+    return {"key": "hr_department", "label": "Komórka kadrowa wyznaczona i ma pracowników",
+            "ok": bool(staffed), "detail": detail, "link": "/units"}
+
+
+def _hr_capability_lost(session: Session) -> list[str]:
+    """Loginy osób, które przy aktualizacji do 3.9 straciły funkcję kadr
+    (wpis `user.hr_role_removed`, pole `lost_hr_capability`) i nadal nie należą
+    do komórki kadrowej. Konta nieaktywne i usunięte pomijamy."""
+    import json as _json
+    from models import AuditLog
+    from services.permissions import user_is_hr
+    names: set[str] = set()
+    for raw in session.exec(
+        select(AuditLog.details).where(AuditLog.action == "user.hr_role_removed")
+    ).all():
+        try:
+            data = _json.loads(raw or "{}")
+        except (ValueError, TypeError):
+            continue
+        lost = data.get("lost_hr_capability") if isinstance(data, dict) else None
+        if isinstance(lost, list):
+            names.update(str(x) for x in lost if x)
+    if not names:
+        return []
+    out: list[str] = []
+    for u in session.exec(select(User).where(User.username.in_(sorted(names)))).all():  # type: ignore[attr-defined]
+        if u.is_active and not user_is_hr(session, u):
+            out.append(u.username)
+    return sorted(out)

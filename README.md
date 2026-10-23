@@ -156,6 +156,32 @@ i kończy się błędem (ze ścieżką kopii bazy), gdy usługa nie odpowiada (b
   pokazuje to jako rekomendację, a nie błąd. Elementy listy mają pole `level`:
   `required`, `warning` albo `recommendation`.
 
+**Aktualizacja do 3.10 — uwagi dla administratora:**
+- czyszczenie dziennika zdarzeń i zdarzeń bezpieczeństwa obejmuje wyłącznie
+  wpisy starsze niż 24 miesiące (retencja); trybu „wszystko” nie ma, data
+  późniejsza niż dziś minus 24 miesiące albo z przyszłości daje błąd 400.
+  Ślad czyszczenia powstaje w tej samej transakcji, a ślady czyszczeń
+  i resetów fabrycznych są nieusuwalne (także przy resecie fabrycznym
+  z czyszczeniem dziennika). Zdarzenie o własnym czyszczeniu, usunięciu
+  komórki lub grupy albo resecie zamyka **inny** superadmin — warto mieć
+  drugie konto superadmina;
+- wspólny limit prób potwierdzenia hasłem (zmiana hasła, operacje superadmina,
+  reset fabryczny): 5 nieudanych prób w 15 minut blokuje je wszystkie (429);
+  licznik jest w bazie i przetrwa restart;
+- zmiana loginu konta AD przy zmianie nazwiska jest sprawdzana w AD (login
+  musi należeć do tego samego obiektu). Najpierw zmień login w AD, potem
+  zrealizuj wniosek w SZUP. Po wdrożeniu **uruchom import użytkowników z AD**
+  — zapisze `objectGUID` kont (bez niego weryfikacja opiera się na DN, który
+  zmienia się, gdy w AD zmieniono też CN);
+- import z AD przenosi osoby między komórkami razem ze stanowiskami (kierownik
+  przeniesiony do innej komórki przestaje kierować dawną), nie zmienia komórki
+  konta, które go uruchamia, i pomija OU przypisane kilku komórkom;
+- wejście konta do komórki kadrowej i reset hasła jej członka trafiają do
+  zdarzeń bezpieczeństwa;
+- limit logowań z jednego adresu liczy tylko nieudane próby;
+- login, imię i nazwisko, e-mail: najwyżej 200 znaków, bez znaków sterujących;
+  nazwisko we wniosku o zmianę — najwyżej 100 znaków, jedna linia.
+
 Nowe tabele tworzą się przy starcie (`create_all`); nowe kolumny dokładane są
 idempotentnie w `database.py` (migracje ręczne, bez Alembica). Po wdrożeniu z
 migracją **wymagany restart** usługi (`systemctl restart szup`).
@@ -204,8 +230,10 @@ panele operacyjne nie są dostępne dla samego admina.
 
 ## Bezpieczeństwo i zgodność
 
-- **Audyt append‑only** (`auditlog`, triggery `BEFORE UPDATE/DELETE`), retencja ≥ 24 mies.
-- **Logowanie**: rate‑limit (10/60 s/IP), lockout (5 prób → 15 min), polityka haseł,
+- **Audyt append‑only** (`auditlog`, triggery `BEFORE UPDATE/DELETE`), retencja ≥ 24 mies.:
+  superadmin może usunąć tylko starsze wpisy, ślady czyszczeń są nieusuwalne
+  (także w `securityevent`).
+- **Logowanie**: rate‑limit nieudanych prób (10/60 s/IP), lockout (5 prób → 15 min), polityka haseł,
   sesja JWT wskazująca konto po ID, rewokacja JWT (jti + `tokens_valid_from`),
   wymuszona zmiana hasła; AD/LDAP zalecane przez LDAPS/STARTTLS z weryfikacją certyfikatu
   (zwykły LDAP działa, lista kontrolna rekomenduje szyfrowanie).

@@ -156,13 +156,22 @@ def test_old_token_does_not_map_to_new_account_with_reused_login(api):
     assert api.get("/auth/me", token=old).status_code == 401
 
 
-def test_name_change_ldap_account_login_normalized(api):
+def test_name_change_ldap_account_login_normalized(api, monkeypatch):
     w = _world(api)
     nc = _name_change(api, api.login("kier"))
+    from models import LdapSettings
     with Session(engine) as s:
         u = s.exec(select(User).where(User.username == "kier")).first()
         u.auth_type = AuthType.ldap
-        s.add(u); s.commit()
+        u.ldap_dn = "cn=kier,ou=a,dc=t,dc=l"
+        s.add(u)
+        cfg = s.exec(select(LdapSettings)).first() or LdapSettings()
+        cfg.enabled = True; cfg.host = "ad.test"; cfg.base_dn = "DC=t,DC=l"
+        s.add(cfg); s.commit()
+    # 3.10: nowy login konta AD musi w AD należeć do tego samego obiektu.
+    import services.ldap_service as ls
+    monkeypatch.setattr(ls, "lookup_user", lambda cfg, login: (
+        "ok", {"dn": "CN=kier,OU=A,DC=t,DC=l", "guid": None}))
     r = _resolve(api, nc, api.login("it"), new_username="Jan.Nowak")
     assert r.status_code == 200, r.text
     assert r.json()["new_username"] == "jan.nowak"

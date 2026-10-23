@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useState } from 'react'
+import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import {
   Package, Plus, Trash2, RefreshCw, Edit2, Save, X,
   Building2, ShieldCheck, KeyRound, Copy, Truck, FileSpreadsheet, ListPlus,
@@ -20,7 +20,9 @@ import PermissionGroupModal from '../components/PermissionGroupModal'
 import CopyGroupModal from '../components/CopyGroupModal'
 import { groupPerms, subgroupPerms, subgroupNames } from '../components/ItemFields'
 import { toast, ask } from '../components/ui/feedback'
-import { ErrorAlert } from '../components/ui/LoadState'
+import { ErrorAlert, LoadError } from '../components/ui/LoadState'
+import { focusTarget } from '../components/ui/focus'
+import { countLabel } from '../labels'
 
 
 /**
@@ -657,14 +659,14 @@ export default function SoftwareRegistry() {
               </span>
             )}
           </label>
-          {!(filterUnit || onlyUnconfigured || onlyNoVendor) && !loading && (
+          {!(filterUnit || onlyUnconfigured || onlyNoVendor) && !loading && !loadErr && (
             <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
               Pokazano {visibleSystems.length} z {systems.length}
             </span>
           )}
       </section>
 
-      {(filterUnit || onlyUnconfigured || onlyNoVendor) && !loading && (
+      {(filterUnit || onlyUnconfigured || onlyNoVendor) && !loading && !loadErr && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8,
           fontSize: 13, color: 'var(--color-text-muted)', marginBottom: 12, flexWrap: 'wrap',
@@ -789,7 +791,7 @@ export default function SoftwareRegistry() {
         </section>
       )}
 
-      {loadErr && <div className="alert alert--error mb-4" role="alert">{loadErr}</div>}
+      {loadErr && <LoadError message={loadErr} onRetry={load} busy={loading} style={{ marginBottom: 16 }} />}
       {loading ? (
         <div className="card" style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
       ) : loadErr && systems.length === 0 ? null : systems.length === 0 ? (
@@ -1431,28 +1433,44 @@ function revokedCount(data, fallback) {
   return fallback
 }
 
+/** Nazwa posiadacza grupy — także pozycji bez konta (realizacja bez loginu AD). */
+function holderName(h) {
+  return h.full_name || h.worker_name || h.name || h.username || '—'
+}
+function holderKey(h, i) {
+  if (h.user_id != null) return `u${h.user_id}`
+  if (h.request_id != null) return `r${h.request_id}-${i}`
+  return `i${i}`
+}
+
 /** Superadmin: usunięcie grupy uprawnień przyznanej konkretnym osobom —
- *  lista posiadaczy, obowiązkowy powód; uprawnienia zostaną im odebrane. */
+ *  lista posiadaczy (także bez konta), obowiązkowy powód i hasło; uprawnienia
+ *  zostaną im odebrane. */
 function GroupForceDeleteModal({ system: s, group, count, usage, onClose, onDone }) {
   const [reason, setReason] = useState('')
+  const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
   const fid = useId()
+  const pwRef = useRef(null)
   const holders = usage.holders || []
   const inProgress = usage.in_progress_requests || []
+  const canSubmit = !busy && reason.trim().length > 0 && password.length > 0
 
   async function submit(e) {
     e?.preventDefault()
-    if (!reason.trim() || busy) return
+    if (!canSubmit) return
     setBusy(true); setErr(null)
     try {
-      const r = await deletePermissionGroup(s.id, group, reason.trim())
+      const r = await deletePermissionGroup(s.id, group, reason.trim(), password)
       const n = revokedCount(r.data, holders.length)
       toast(`Usunięto grupę „${group}”. Odebrano uprawnienia ${n} ${n === 1 ? 'osobie' : 'osobom'}.`)
       onDone()
     } catch (ex) {
       setErr(errorMessage(ex, 'Nie udało się usunąć grupy'))
       setBusy(false)
+      // Fokus zostaje w oknie — na polu hasła, zaznaczonym do poprawy.
+      requestAnimationFrame(() => { pwRef.current?.focus(); pwRef.current?.select() })
     }
   }
 
@@ -1461,12 +1479,13 @@ function GroupForceDeleteModal({ system: s, group, count, usage, onClose, onDone
            onSubmit={submit}
            footer={<>
              <button type="button" className="btn btn--ghost" onClick={onClose} disabled={busy}>Anuluj</button>
-             <button type="submit" className="btn btn--danger" disabled={busy || !reason.trim()}>
+             {/* aria-disabled zamiast disabled — przycisk nie gubi fokusu podczas wysyłki. */}
+             <button type="submit" className="btn btn--danger" aria-disabled={!canSubmit}>
                <Trash2 size={14} aria-hidden="true" /> {busy ? 'Usuwanie…' : 'Usuń grupę i odbierz uprawnienia'}
              </button>
            </>}>
       <div className="alert alert--warning" style={{ marginTop: 0 }}>
-        Grupa ({count} pozycji) jest przyznana <strong>{holders.length}</strong>{' '}
+        Grupa ({countLabel(count, 'pozycja', 'pozycje', 'pozycji')}) jest przyznana <strong>{holders.length}</strong>{' '}
         {holders.length === 1 ? 'osobie' : 'osobom'}. Po usunięciu uprawnienia z tej grupy
         zostaną im odebrane (z wpisem w rejestrze i dzienniku zdarzeń).
         {inProgress.length > 0 && <> Grupy dotyczą też wnioski w toku: <strong>{inProgress.length}</strong>{' '}
@@ -1477,10 +1496,16 @@ function GroupForceDeleteModal({ system: s, group, count, usage, onClose, onDone
         <table className="data-table" style={{ margin: 0 }}>
           <thead><tr><th>Osoba</th><th>Login</th><th>Uprawnienia z grupy</th></tr></thead>
           <tbody>
-            {holders.map(h => (
-              <tr key={h.user_id}>
-                <td style={{ fontWeight: 600 }}>{h.full_name || '—'}</td>
-                <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{h.username}</td>
+            {holders.map((h, i) => (
+              <tr key={holderKey(h, i)}>
+                <td style={{ fontWeight: 600 }}>{holderName(h)}</td>
+                <td style={{ fontFamily: h.username ? 'var(--font-mono)' : undefined, fontSize: 12 }}>
+                  {h.username || (
+                    <span style={{ color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+                      bez konta{h.request_id != null ? ` (wniosek #${h.request_id})` : ''}
+                    </span>
+                  )}
+                </td>
                 <td style={{ fontSize: 12 }}>
                   {Array.isArray(h.permissions)
                     ? h.permissions.map(p => (typeof p === 'string' ? p : p?.permission_name || p?.name || '')).filter(Boolean).join(', ')
@@ -1496,6 +1521,12 @@ function GroupForceDeleteModal({ system: s, group, count, usage, onClose, onDone
         <textarea id={`${fid}-reason`} className="form-control" rows={3} required data-autofocus
                   value={reason} onChange={e => setReason(e.target.value)}
                   placeholder="np. wycofanie modułu z eksploatacji" />
+      </div>
+      <div className="form-group">
+        <label className="form-label" htmlFor={`${fid}-pw`}>Twoje hasło *</label>
+        <input id={`${fid}-pw`} ref={pwRef} className="form-control" type="password" required
+               autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} />
+        <div className="form-hint">Operacja zostanie zapisana w dzienniku zdarzeń.</div>
       </div>
       {err && <div className="alert alert--error" role="alert">{err}</div>}
     </Modal>
@@ -1522,11 +1553,16 @@ function PermissionsPanel({ system: s }) {
   const clearSel = () => setSelPerms(new Set())
 
   const [loadErr, setLoadErr] = useState(null)
+  // Cel fokusu po usunięciu grupy (przycisk „Usuń grupę” znika razem z grupą).
+  const panelRef = useRef(null)
   async function load() {
     setLoading(true); setLoadErr(null)
     try { const r = await listPermissions(s.id); setPerms(r.data) }
     catch (ex) { setLoadErr(errorMessage(ex, 'Nie udało się wczytać listy uprawnień')) }
     finally { setLoading(false) }
+  }
+  async function afterGroupRemoved() {
+    try { await load() } finally { requestAnimationFrame(() => focusTarget(panelRef)) }
   }
   useEffect(() => { load() }, [s.id])
 
@@ -1617,7 +1653,7 @@ function PermissionsPanel({ system: s }) {
       return
     }
     if (!await ask(
-      `Usunąć grupę „${group}" (${count} pozycji)?\n\n`
+      `Usunąć grupę „${group}" (${countLabel(count, 'pozycja', 'pozycje', 'pozycji')})?\n\n`
       + 'Uprawnienia użyte już we wnioskach nie zostaną usunięte — '
       + 'zostaną wygaszone, żeby nie zerwać ewidencji.'
       + (inProgress.length ? `\n\nGrupy dotyczą wnioski w toku: ${inProgress.length}.` : ''),
@@ -1625,7 +1661,7 @@ function PermissionsPanel({ system: s }) {
     )) return
     try {
       const r = await deletePermissionGroup(s.id, group)
-      load()
+      afterGroupRemoved()
       if (r.data.skipped > 0) {
         toast(`Usunięto: ${r.data.deactivated}\n`
               + `Zachowano (użyte we wnioskach): ${r.data.skipped}`, { tone: 'info' })
@@ -1637,11 +1673,13 @@ function PermissionsPanel({ system: s }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {loadErr && <div className="alert alert--error" role="alert">{loadErr}</div>}
+      {/* Nagłówek panelu (dla czytników i jako cel fokusu po usunięciu grupy). */}
+      <h3 ref={panelRef} className="sr-only">Uprawnienia programu {s.name}</h3>
+      {loadErr && <LoadError message={loadErr} onRetry={load} busy={loading} focusAfter={panelRef} />}
       {groupDel && (
         <GroupForceDeleteModal system={s} {...groupDel}
                                onClose={() => setGroupDel(null)}
-                               onDone={() => { setGroupDel(null); load() }} />
+                               onDone={() => { setGroupDel(null); afterGroupRemoved() }} />
       )}
       {loading ? (
         <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
@@ -1747,12 +1785,12 @@ function PermissionsPanel({ system: s }) {
                           )}
                           {namedGroups.length > 1 && (
                             <>
-                              <button className="btn btn--ghost btn--sm" title="W górę" aria-label="W górę"
+                              <button className="btn btn--ghost btn--sm" title="W górę" aria-label={`Przesuń grupę ${group} w górę`}
                                       disabled={gi <= 0}
                                       onClick={() => moveGroup(group, -1)}>
                                 <ArrowUp size={13} />
                               </button>
-                              <button className="btn btn--ghost btn--sm" title="W dół" aria-label="W dół"
+                              <button className="btn btn--ghost btn--sm" title="W dół" aria-label={`Przesuń grupę ${group} w dół`}
                                       disabled={gi >= namedGroups.length - 1}
                                       onClick={() => moveGroup(group, 1)}>
                                 <ArrowDown size={13} />
@@ -1760,16 +1798,18 @@ function PermissionsPanel({ system: s }) {
                             </>
                           )}
                           <span style={{ flex: 1 }} />
-                          <button className="btn btn--ghost btn--sm"
+                          <button className="btn btn--ghost btn--sm" aria-label={`Zmień nazwę grupy ${group}`}
                                   onClick={() => { setRenaming(group); setRenameValue(group) }}>
                             <Edit2 size={12} /> Zmień nazwę
                           </button>
                           <button className="btn btn--ghost btn--sm"
+                                  aria-label={`${activeCount === 0 ? 'Przywróć grupę' : 'Wygaś grupę'} ${group}`}
                                   onClick={() => toggleGroup(group, activeCount === 0)}>
                             {activeCount === 0 ? 'Przywróć grupę' : 'Wygaś grupę'}
                           </button>
                           <button className="btn btn--ghost btn--sm"
                                   style={{ color: 'var(--color-error-text)', borderColor: 'var(--color-error)' }}
+                                  aria-label={`Usuń grupę ${group}`}
                                   onClick={() => removeGroup(group, items.length)}>
                             <Trash2 size={12} /> Usuń grupę
                           </button>

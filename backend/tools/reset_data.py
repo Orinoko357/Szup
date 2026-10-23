@@ -11,15 +11,21 @@ Co JEST USUWANE:
                                (accessrequest, requestitem, workflowinstance,
                                 workflowstep, requestevent, permissiondeclaration)
   - zmiany nazwiska i migawki  (namechangerequest, permissionsnapshot)
-  - jednostki i wydziały       (unit, department, zastępcy, przypisania HR)
+  - jednostki i wydziały       (unit, department, zastępcy, dawne przypisania
+                                jednostek kadr — userunit)
   - systemy, uprawnienia i dostawcy
                                (permissionsystem, systempermission,
                                 permissionsystemunit, softwarevendor, vendorcontract)
   - konfiguracja SMTP / LDAP   (emailsettings, ldapsettings)
   - audit log                  (auditlog — triggery są ściągane, założą się
                                 ponownie przy starcie backendu)
-  - tokeny unieważnione        (revokedtoken)
+  - tokeny unieważnione        (revokedtoken) i licznik prób potwierdzenia
+                               hasłem (passwordconfirmfailure)
   - zdarzenia bezpieczeństwa   (securityevent)
+
+  WYJĄTEK: ślady czyszczeń dzienników i resetów fabrycznych (audit.purged,
+  security.purged, settings.factory_reset) zostają w auditlog i securityevent —
+  są nieusuwalne (tak samo jak w resecie fabrycznym z aplikacji).
 
 Użycie:
   cd /opt/szup/backend
@@ -70,8 +76,12 @@ TABLES_TO_WIPE = [
     "ldapsettings",
     "auditlog",
     "revokedtoken",
+    "passwordconfirmfailure",
     "securityevent",
 ]
+
+# Tabele dzienników: ślady czyszczeń zostają (kolumna klucza → warunek).
+LOG_KEY_COLUMNS = {"auditlog": "action", "securityevent": "event_type"}
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -85,6 +95,7 @@ def main() -> None:
 
     # ------------------------------------------------------------------ import
     from database import _DB_URL, drop_auditlog_triggers, engine
+    from services.audit import PURGE_TRACE_ACTIONS
     from sqlalchemy import text
 
     print(f"Baza danych : {_DB_URL}")
@@ -162,12 +173,21 @@ def main() -> None:
                 if table not in existing:
                     print(f"[i] Tabela {table} nie istnieje — pominięta.")
                     continue
-                conn.execute(text(f'DELETE FROM "{table}"'))
+                if table in LOG_KEY_COLUMNS:
+                    keep = ", ".join("'" + a.replace("'", "''") + "'"
+                                     for a in PURGE_TRACE_ACTIONS)
+                    conn.execute(text(
+                        f'DELETE FROM "{table}" '
+                        f"WHERE COALESCE({LOG_KEY_COLUMNS[table]}, '') NOT IN ({keep})"))
+                else:
+                    conn.execute(text(f'DELETE FROM "{table}"'))
 
             # 4) Zresetuj sekwencje (autoincrement) dla wyczyszczonych tabel.
             #    sqlite_sequence istnieje tylko przy AUTOINCREMENT.
             if "sqlite_sequence" in existing:
-                placeholders = ", ".join(f"'{t}'" for t in TABLES_TO_WIPE)
+                # Bez dzienników — zachowane ślady mają swoje id.
+                placeholders = ", ".join(f"'{t}'" for t in TABLES_TO_WIPE
+                                         if t not in LOG_KEY_COLUMNS)
                 conn.execute(text(
                     f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})"))
     except Exception as exc:

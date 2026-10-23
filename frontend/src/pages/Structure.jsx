@@ -6,6 +6,7 @@ import {
 import { getMySubtree, errorMessage } from '../api'
 import { fmtDate } from '../serverTime'
 import { DeptKindBadge, kindMeta } from './Units'
+import { LoadError } from '../components/ui/LoadState'
 
 // Zakładka „Struktura” strony „Moi pracownicy” — nagłówek i zakładki dostarcza
 // strona-rodzic przez `renderHeader(onRefresh, loading)` (wymagane).
@@ -33,11 +34,12 @@ export default function Structure({ renderHeader }) {
     <div>
       {renderHeader(load, loading)}
 
-      {err && <div className="alert alert--error mb-4">{err}</div>}
-
-      <section aria-label="Struktura" className="card" style={{ padding: 12 }}>
+      <section aria-label="Struktura" className="card" style={{ padding: err ? 0 : 12, overflow: 'hidden' }}>
         {loading ? (
-          <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
+          <div style={{ color: 'var(--color-text-muted)', padding: err ? 12 : 0 }}>Ładowanie…</div>
+        ) : err ? (
+          // Błąd zamiast „Brak wydziałów” — pusta lista po błędzie wprowadzałaby w błąd.
+          <LoadError message={err} onRetry={load} busy={loading} />
         ) : roots.length === 0 ? (
           <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>
             <Network size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />

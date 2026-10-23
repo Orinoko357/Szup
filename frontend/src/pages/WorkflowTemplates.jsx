@@ -63,7 +63,7 @@ function labelFor(type, fallback) {
   return CATALOG_BY_TYPE[type]?.label || fallback || type
 }
 
-// Domyślny obieg — zgodny z opisem: HR zgłasza → kierownik wybiera uprawnienia
+// Domyślny obieg — zgodny z opisem: kadry zgłaszają → kierownik wybiera uprawnienia
 // (to zarazem zatwierdzenie) → (ew.) kierownik wyższego rzędu → realizacja IT → koniec.
 // Bez podpisu papierowego.
 const DEFAULT_MIDDLE = [
@@ -107,7 +107,7 @@ function linearizeGraph(graph) {
 
 function buildGraph(middle) {
   const steps = [
-    { type: 'start', label: 'Zgłoszenie pracownika (HR)', props: {} },
+    { type: 'start', label: 'Zgłoszenie pracownika (kadry)', props: {} },
     ...middle,
     { type: 'end', label: 'Zakończenie procesu', props: {} },
   ]
@@ -421,7 +421,7 @@ function LinearEditor({ mode, templateId, onCancel, onSaved }) {
 
       {/* Lista kroków */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 0, maxWidth: 760, margin: '0 auto' }}>
-        <StepTile fixed type="start" label="Zgłoszenie pracownika (HR)"
+        <StepTile fixed type="start" label="Zgłoszenie pracownika (kadry)"
                   sub="Dział kadr zgłasza pracownika i wskazuje komórkę organizacyjną." />
         <Arrow />
 

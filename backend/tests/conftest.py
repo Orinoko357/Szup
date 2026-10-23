@@ -71,15 +71,12 @@ def _template_db():
 def _reset_module_state() -> None:
     """Wyzeruj stan modułowy (poza bazą), który przeciekałby między testami."""
     from routers import auth as _auth
-    from routers import settings as _settings
     # Limiter prób logowania per-IP — inaczej po ~10 logowaniach kolejne
     # testy dostają 429/403.
     _auth._ip_hits.clear()
     _auth._sso_codes.clear()
-    _settings._factory_reset_failures.clear()
-    from services import audit as _audit_svc
-    if hasattr(_audit_svc, "_confirm_failures"):
-        _audit_svc._confirm_failures.clear()
+    # Licznik prób potwierdzenia hasłem jest w bazie (od 3.10) — świeża baza
+    # każdego testu zeruje go sama.
 
 
 @pytest.fixture(autouse=True)

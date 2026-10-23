@@ -103,7 +103,8 @@ EVENTS: dict[str, dict] = {
         "label": "Zgłoszenie na helpdesk IT (realizacja)",
         "description": "Trafia na skrzynkę helpdesku, gdy wniosek wchodzi w krok realizacji.",
         "macros": _COMMON + ["{manager_name}", "{what}", "{applicant}"],
-        "subject": "[SZUP] Nowy wniosek o {what}",
+        # Numer i pracownik w temacie — helpdesk rozróżnia zgłoszenia już na liście.
+        "subject": "[SZUP] Nowy wniosek #{request_id} o {what} — {worker_name}",
         "body": (
             "{manager_name} wystąpił z wnioskiem o {what} dla {worker_name}.\n\n"
             "{applicant_line}"
@@ -170,6 +171,24 @@ EVENTS: dict[str, dict] = {
             "Wydział:     {dept_name}\n\n"
             "Dalsze kroki na etapie kierownika komórki wykona przełożony — "
             "Ty możesz jedynie podejrzeć wniosek.\n\n"
+            "Podgląd wniosku: {request_url}\n\n"
+            "-- SZUP {datetime}"
+        ),
+    },
+    "request_held_by_superior": {
+        "label": "Wniosek złożony i prowadzony przez przełożonego (do kierownika komórki)",
+        "description": "Trafia do kierownika komórki, gdy przełożony złoży wniosek dla jego "
+                       "komórki — wniosek jest od razu przejęty i krok kierownika wykona przełożony.",
+        "macros": _COMMON + ["{taker_name}"],
+        "subject": "[SZUP] Wniosek #{request_id} prowadzi przełożony — {taker_name}",
+        "body": (
+            "{taker_name} złożył(a) wniosek o uprawnienia dla Twojej komórki "
+            "i sam(a) go prowadzi.\n\n"
+            "Nr wniosku:  #{request_id}\n"
+            "Pracownik:   {worker_name}\n"
+            "Wydział:     {dept_name}\n\n"
+            "Krok kierownika komórki wykona przełożony — Ty możesz jedynie "
+            "podejrzeć wniosek.\n\n"
             "Podgląd wniosku: {request_url}\n\n"
             "-- SZUP {datetime}"
         ),

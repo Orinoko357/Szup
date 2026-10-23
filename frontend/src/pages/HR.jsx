@@ -14,6 +14,15 @@ const FIELD_GRID  = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, mi
 const FIELD_INPUT = { minHeight: 44, borderRadius: 8, fontSize: 14 }
 // Bez typu wniosku backend odrzuca zgłoszenie (400) — blokujemy wysłanie od razu.
 const NO_TYPE_MSG = 'Brak aktywnego typu wniosku — wysłanie jest zablokowane. Poproś administratora o włączenie typu wniosku.'
+const NO_REVOKE_TYPE_MSG = 'Brak aktywnego typu wniosku „Cofnięcie uprawnień” (kod REVOKE) — wysłanie jest zablokowane. '
+  + 'Poproś administratora o włączenie tego typu wniosku.'
+/** Fragment podtytułu o akceptacji wyższej: true — „potem do kierownika nadrzędnego”,
+ *  null (komórka jeszcze niewybrana) — „zależnie od komórki”, false — nic. */
+function higherRoute(higher) {
+  if (higher === true) return 'następnie do kierownika nadrzędnego (akceptacja wyższa), '
+  if (higher == null) return 'gdy komórka tego wymaga — także do kierownika nadrzędnego, '
+  return ''
+}
 const NOTE_BOX = {
   display: 'flex', alignItems: 'flex-start', gap: 10, marginTop: 14, padding: '12px 14px',
   borderRadius: 8, background: 'var(--bg-secondary)', border: '1px solid var(--color-border)',
@@ -328,10 +337,8 @@ function RequestFormView({ onCancel, onCreated }) {
   }
 
   const workerName = `${firstName.trim()} ${lastName.trim()}`.trim()
-  const steps = buildWorkflowSteps({
-    sent: false, kind: 'grant',
-    requiresHigher: !!selectedDept?.requires_higher_approval,
-  })
+  const higher = selectedDept ? !!selectedDept.requires_higher_approval : null
+  const steps = buildWorkflowSteps({ sent: false, kind: 'grant', requiresHigher: higher })
   const summary = [
     { label: 'Pracownik', value: workerName || '—' },
     { label: 'Stanowisko', value: position.trim() || '—' },
@@ -342,7 +349,7 @@ function RequestFormView({ onCancel, onCreated }) {
   return (
     <RequestViewShell icon={FilePlus} kind="grant" kindLabel={kindLabel('grant')}
                       statusText="Nowy wniosek · nie wysłany" title="Nowy pracownik"
-                      subtitle="Zgłoszenie zatrudnienia — po wysłaniu trafi do kierownika komórki, a potem do IT."
+                      subtitle={`Zgłoszenie zatrudnienia — po wysłaniu trafi do kierownika komórki, ${higherRoute(higher)}a potem do IT.`}
                       backLabel="← Wróć do kartoteki" onBack={leave}
                       steps={steps} summary={summary} history={[]}
                       footerLeft="* pola wymagane"
@@ -433,7 +440,10 @@ function TerminationFormView({ onCancel, onCreated }) {
     Promise.all([listActiveUnits(), listActiveDepts(), listRequestTypes({ is_active: true })])
       .then(([u, d, t]) => {
         setUnits(u.data); setDepts(d.data)
-        if (t.data.length > 0) setRequestTypeId(t.data[0].id)
+        // Ustanie = typ „Cofnięcie uprawnień” (kod REVOKE) — nie pierwszy z listy
+        // (pierwszym bywa „Nowy pracownik”, co dawało zły typ wniosku).
+        const rev = t.data.find(x => x.code === 'REVOKE')
+        if (rev) setRequestTypeId(rev.id)
         setTypesLoaded(true)
       })
       .catch(ex => setErr(errorMessage(ex,
@@ -511,7 +521,7 @@ function TerminationFormView({ onCancel, onCreated }) {
     setErr(null)
     if (!effWorker) { setErr('Wskaż pracownika (wyszukaj po nazwisku albo wybierz z komórki)'); return }
     if (!effWorker.department_id) { setErr('Nie udało się ustalić komórki pracownika'); return }
-    if (!requestTypeId) { setErr(NO_TYPE_MSG); return }
+    if (!requestTypeId) { setErr(NO_REVOKE_TYPE_MSG); return }
 
     setBusy(true)
     try {
@@ -538,15 +548,16 @@ function TerminationFormView({ onCancel, onCreated }) {
     { label: 'Komórka', value: effWorker ? `${effWorker.unit_name || '?'} · ${effWorker.department_name || '—'}` : '—' },
     { label: 'Ostatni dzień', value: workUntil || '—' },
   ]
-  const steps = buildWorkflowSteps({
-    sent: false, kind: 'revoke',
-    requiresHigher: !!selectedDept?.requires_higher_approval,
-  })
+  // Akceptacja wyższa zależy od RZECZYWISTEJ komórki pracownika (także z wyszukiwarki);
+  // przed wskazaniem pracownika — „zależnie od komórki”.
+  const effDept = effWorker ? depts.find(d => d.id === effWorker.department_id) || null : null
+  const higher = effDept ? !!effDept.requires_higher_approval : null
+  const steps = buildWorkflowSteps({ sent: false, kind: 'revoke', requiresHigher: higher })
 
   return (
     <RequestViewShell icon={UserMinus} kind="revoke" kindLabel={kindLabel('revoke')}
                       statusText="Nowy wniosek · nie wysłany" title="Ustanie stosunku pracy"
-                      subtitle="Zgłoszenie odejścia — trafi do kierownika komórki, potem do IT."
+                      subtitle={`Zgłoszenie odejścia — trafi do kierownika komórki, ${higherRoute(higher)}potem do IT.`}
                       backLabel="← Wróć do kartoteki" onBack={leave}
                       steps={steps} summary={summary} history={[]}
                       footerLeft="* pola wymagane"
@@ -554,7 +565,7 @@ function TerminationFormView({ onCancel, onCreated }) {
                         <button type="button" className="btn btn--ghost" onClick={leave}>Anuluj</button>
                         <button type="button" className="btn btn--action" onClick={submit}
                                 disabled={busy || !effWorker || !requestTypeId}
-                                title={!requestTypeId ? (typesLoaded ? NO_TYPE_MSG : 'Wczytywanie typów wniosków…') : undefined}>
+                                title={!requestTypeId ? (typesLoaded ? NO_REVOKE_TYPE_MSG : 'Wczytywanie typów wniosków…') : undefined}>
                           {busy ? 'Zapisywanie…' : 'Wyślij do kierownika →'}
                         </button>
                       </>}>
@@ -724,7 +735,7 @@ function TerminationFormView({ onCancel, onCreated }) {
             </div>
           </div>
 
-          {typesLoaded && !requestTypeId && <div className="alert alert--error mt-4" role="alert">{NO_TYPE_MSG}</div>}
+          {typesLoaded && !requestTypeId && <div className="alert alert--error mt-4" role="alert">{NO_REVOKE_TYPE_MSG}</div>}
           <ErrorAlert className="mt-4">{err}</ErrorAlert>
       </Section>
 
@@ -836,7 +847,9 @@ function DeptSearchSelect({ units, depts, value, onChange, inputId = 'dept-searc
       }}>
         <Check size={14} style={{ color: 'var(--color-success)' }} aria-hidden="true" />
         <span>{pathStr(selected)}</span>
-        <button type="button" ref={changeRef} className="btn btn--ghost btn--sm" style={{ marginLeft: 'auto' }}
+        {/* id = inputId: <label htmlFor> wskazuje istniejący element także wtedy,
+            gdy zamiast pola widać chip (klik w etykietę otwiera zmianę). */}
+        <button type="button" id={inputId} ref={changeRef} className="btn btn--ghost btn--sm" style={{ marginLeft: 'auto' }}
                 aria-label={`Zmień komórkę organizacyjną (wybrana: ${pathStr(selected)})`}
                 onClick={() => { setOpen(true); setQuery(''); setActive(-1); focusNext.current = 'input' }}>Zmień</button>
       </div>
@@ -886,7 +899,9 @@ function DeptSearchSelect({ units, depts, value, onChange, inputId = 'dept-searc
             const isSel = d.id === value
             const isActive = i === active
             return (
-              <div key={d.id} id={optId(d)} role="option" aria-selected={isSel}
+              // ARIA 1.2: opcja wskazana przez aria-activedescendant ma aria-selected="true";
+              // bez aktywnej — zaznaczona jest bieżąca wartość.
+              <div key={d.id} id={optId(d)} role="option" aria-selected={active >= 0 ? isActive : isSel}
                    onClick={() => choose(d)}
                    onMouseEnter={() => setActive(i)}
                    style={{

@@ -1,4 +1,6 @@
+import { useEffect, useRef } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { focusIfLost, PAGE_HEADING } from './focus'
 
 /**
  * Wspólne komunikaty błędów (v3.8).
@@ -13,6 +15,9 @@ import { AlertTriangle, RefreshCw } from 'lucide-react'
  *    — nie udało się wczytać listy/strony. Pokazujemy ją ZAMIAST stanu pustej
  *      listy („Brak …”), który po błędzie wprowadzałby w błąd (np. zachęcał do
  *      utworzenia duplikatu). Z przyciskiem „Spróbuj ponownie”.
+ *      v3.10: gdy po „Spróbuj ponownie” karta znika (razem z przyciskiem, na
+ *      którym był fokus), fokus przechodzi na `focusAfter` (ref / element /
+ *      selektor) — domyślnie h1 strony — zamiast spaść na <body> (WCAG 2.4.3).
  */
 export function ErrorAlert({ children, className = '', style, id }) {
   if (children == null || children === false || children === '') return null
@@ -24,7 +29,23 @@ export function ErrorAlert({ children, className = '', style, id }) {
 }
 
 export function LoadError({ message, onRetry, busy = false, title = 'Nie udało się wczytać danych',
-                            card = false, style }) {
+                            card = false, style, focusAfter = PAGE_HEADING }) {
+  const retried = useRef(false)
+  const target = useRef(focusAfter)
+  target.current = focusAfter
+  useEffect(() => () => {
+    if (retried.current) focusIfLost(target.current)
+  }, [])
+  // Ponowienie nieudane (karta została, przycisk był chwilowo wyłączony) —
+  // fokus wraca na „Spróbuj ponownie”.
+  const btn = useRef(null)
+  useEffect(() => {
+    if (!busy && retried.current) focusIfLost(btn, null)
+  }, [busy])
+  function retry() {
+    retried.current = true
+    onRetry?.()
+  }
   const body = (
     <div role="alert" className="load-error" style={style}>
       <span aria-hidden="true" className="load-error__icon"><AlertTriangle size={18} /></span>
@@ -36,7 +57,7 @@ export function LoadError({ message, onRetry, busy = false, title = 'Nie udało 
         </div>
       </div>
       {onRetry && (
-        <button type="button" className="btn btn--ghost btn--sm" onClick={onRetry} disabled={busy}
+        <button ref={btn} type="button" className="btn btn--ghost btn--sm" onClick={retry} disabled={busy}
                 style={{ flexShrink: 0 }}>
           <RefreshCw size={14} aria-hidden="true" /> Spróbuj ponownie
         </button>

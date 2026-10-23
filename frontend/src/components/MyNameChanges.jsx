@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { UserPen, Check } from 'lucide-react'
 import { myNameChanges, createNameChange, errorMessage } from '../api'
 import { getCurrentUser } from '../roles'
@@ -6,7 +6,8 @@ import Modal from './ui/Modal'
 import { fmtDate } from '../serverTime'
 import { NAME_CHANGE_STATUS } from '../labels'
 import { toast } from './ui/feedback'
-import { ErrorAlert } from './ui/LoadState'
+import { ErrorAlert, LoadError } from './ui/LoadState'
+import { focusTarget } from './ui/focus'
 
 /**
  * Samoobsługowe zgłoszenie zmiany nazwiska (pracownik → IT). Widoczne w
@@ -23,6 +24,7 @@ export default function MyNameChanges() {
   const me = getCurrentUser()
   const currentName = me.full_name || me.username || ''
   const [loadErr, setLoadErr] = useState(null)
+  const headRef = useRef(null)
 
   async function load() {
     setLoadErr(null)
@@ -40,7 +42,10 @@ export default function MyNameChanges() {
       await createNameChange({ requested_full_name: name.trim() })
       setOpen(false); setName('')
       toast('Wysłano zgłoszenie zmiany nazwiska do IT.')
-      load()
+      await load()
+      // „Zgłoś zmianę nazwiska” (cel zwrotu fokusu z okna) jest teraz nieaktywny —
+      // fokus na nagłówek sekcji, pod którym widać status zgłoszenia.
+      requestAnimationFrame(() => focusTarget(headRef))
     } catch (ex) {
       setErr(errorMessage(ex, 'Nie udało się wysłać zgłoszenia'))
     } finally { setBusy(false) }
@@ -55,7 +60,7 @@ export default function MyNameChanges() {
           <UserPen size={16} />
         </span>
         <div style={{ flex: '1 1 240px' }}>
-          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: 'var(--color-heading)' }}>Zmiana nazwiska</h2>
+          <h2 ref={headRef} style={{ margin: 0, fontSize: 16, fontWeight: 800, color: 'var(--color-heading)' }}>Zmiana nazwiska</h2>
           <p style={{ margin: '2px 0 0', fontSize: 13, color: 'var(--color-text-muted)' }}>
             Obecnie: <strong style={{ color: 'var(--color-text)' }}>{currentName}</strong>
           </p>
@@ -69,7 +74,7 @@ export default function MyNameChanges() {
       </div>
 
       {loadErr && (
-        <div className="alert alert--error" role="alert" style={{ margin: 14 }}>{loadErr}</div>
+        <LoadError message={loadErr} onRetry={load} focusAfter={headRef} style={{ margin: 14 }} />
       )}
       {rows.length > 0 && (
         <div style={{ overflowX: 'auto' }}>

@@ -9,6 +9,10 @@ import { getAdminHealth } from '../api'
  *   { checks: [{key, label, ok, detail, link, level?}], issues: [{key, label, count, link}] }
  * level: "recommendation" — zalecenie (np. szyfrowanie LDAP): łagodniejszy styl,
  * NIE liczy się do „Gotowe X z Y” ani nie blokuje stanu „Konfiguracja kompletna”.
+ * level: "warning" (v3.10) — ostrzeżenie (np. superadmin z rolami operacyjnymi):
+ * wyróżnione kolorem ostrzeżenia, ale — jak w backendzie — NIE jest wymagane
+ * i nie blokuje „Konfiguracja kompletna”. Pozostałe pozycje (np. hr_department —
+ * komórka kadrowa wyznaczona i ma członków) są wymagane.
  * Gdy wszystko gotowe i brak problemów — jedna kompaktowa linia z „Pokaż szczegóły”.
  * Błąd/ładowanie → nic nie renderujemy (pulpit ma działać bez tej karty).
  */
@@ -32,10 +36,12 @@ export default function AdminChecklist() {
   const checks = Array.isArray(data.checks) ? data.checks : []
   const issues = (Array.isArray(data.issues) ? data.issues : []).filter(i => (i.count || 0) > 0)
   const isRec = c => c.level === 'recommendation'
-  const required = checks.filter(c => !isRec(c))
+  const isWarn = c => c.level === 'warning'
+  const required = checks.filter(c => !isRec(c) && !isWarn(c))
   const done = required.filter(c => c.ok).length
   const allGood = done === required.length && issues.length === 0
   const recPending = checks.filter(c => isRec(c) && !c.ok).length
+  const warnPending = checks.filter(c => isWarn(c) && !c.ok).length
   const expanded = !allGood || open
 
   return (
@@ -53,6 +59,12 @@ export default function AdminChecklist() {
         ) : (
           <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
             Gotowe <strong style={{ color: 'var(--color-text)' }}>{done}</strong> z {required.length}
+          </span>
+        )}
+        {warnPending > 0 && (
+          <span className="badge badge--warning" style={{ fontSize: 11 }}
+                title="Ostrzeżenia nie blokują pracy systemu, ale warto je przejrzeć">
+            ostrzeżenia: {warnPending}
           </span>
         )}
         {recPending > 0 && (
@@ -86,6 +98,7 @@ export default function AdminChecklist() {
               <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
                 {checks.map((c, i) => {
                   const rec = isRec(c) && !c.ok
+                  const warn = isWarn(c) && !c.ok
                   return (
                   <li key={c.key || i} style={{
                     display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, minHeight: 44, padding: '6px 0',
@@ -98,8 +111,12 @@ export default function AdminChecklist() {
                       color: c.ok ? 'var(--color-success)' : rec ? 'var(--color-info)' : 'var(--color-warning-text)',
                     }}>{c.ok ? <Check size={14} /> : rec ? <Info size={14} /> : '!'}</span>
                     <span style={{ flex: '1 1 240px', fontSize: 14 }}>
-                      <span style={SR_ONLY}>{c.ok ? 'Gotowe: ' : rec ? 'Zalecenie: ' : 'Do zrobienia: '}</span>
-                      <strong style={{ fontWeight: c.ok || rec ? 600 : 700 }}>{c.label}</strong>
+                      <span style={SR_ONLY}>{c.ok ? 'Gotowe: ' : rec ? 'Zalecenie: ' : warn ? 'Ostrzeżenie: ' : 'Do zrobienia: '}</span>
+                      <strong style={{ fontWeight: c.ok || rec || warn ? 600 : 700 }}>{c.label}</strong>
+                      {warn && (
+                        <span className="badge badge--warning" aria-hidden="true"
+                              style={{ fontSize: 10, marginLeft: 6, verticalAlign: 'middle' }}>ostrzeżenie</span>
+                      )}
                       {rec && (
                         <span className="badge badge--info" aria-hidden="true"
                               style={{ fontSize: 10, marginLeft: 6, verticalAlign: 'middle' }}>zalecenie</span>
@@ -107,9 +124,10 @@ export default function AdminChecklist() {
                       {c.detail && <span style={{ color: 'var(--color-text-muted)' }}> — {c.detail}</span>}
                     </span>
                     {!c.ok && c.link && (
-                      <Link to={c.link} style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-gold-dark)',
-                                                 textDecoration: 'none', whiteSpace: 'nowrap' }}>
-                        Przejdź →
+                      <Link to={c.link} aria-label={`Przejdź: ${c.label}`}
+                            style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-gold-dark)',
+                                     textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                        Przejdź <span aria-hidden="true">→</span>
                       </Link>
                     )}
                   </li>
@@ -130,9 +148,10 @@ export default function AdminChecklist() {
                     <span style={{ flex: '1 1 240px' }}>{it.label}</span>
                     <span className="badge badge--warning">{it.count}</span>
                     {it.link && (
-                      <Link to={it.link} style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-gold-dark)',
-                                                  textDecoration: 'none', whiteSpace: 'nowrap' }}>
-                        Przejdź →
+                      <Link to={it.link} aria-label={`Przejdź: ${it.label}`}
+                            style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-gold-dark)',
+                                     textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                        Przejdź <span aria-hidden="true">→</span>
                       </Link>
                     )}
                   </li>

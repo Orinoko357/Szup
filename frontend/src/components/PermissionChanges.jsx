@@ -9,6 +9,7 @@
  *   posiada    → szary badge „posiada” (bez zmian)
  */
 
+import { Check } from 'lucide-react'
 import { fmtDateTimeShort as fmtDT } from '../serverTime'
 
 // Tekst tooltipa badge'a: „Osoba — 12.10.2026, 14:30".
@@ -139,20 +140,22 @@ function PermRow({ it, isRevoke, deny, fulfill, crumb, focused }) {
         {persistedFulfilled && (
           <span className="badge" style={{ background: 'var(--color-success)', color: '#fff' }}
                 title={actorTitle(it.fulfilled_by_name, it.fulfilled_at)}>
-            ✓ zrealizowano
+            <Check size={11} aria-hidden="true" style={{ verticalAlign: '-1px', marginRight: 3 }} />zrealizowano
           </span>
         )}
         {/* Przyciski akcji — po prawej. */}
         {persistedFulfilled && canFulfill && (
           <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
-                  style={btn} onClick={() => fulfill.set(it.id, false)}>
+                  style={btn} onClick={() => fulfill.set(it.id, false)}
+                  aria-label={`Cofnij realizację: ${it.permission_name}`}>
             {busy ? 'Cofam…' : 'Cofnij'}
           </button>
         )}
         {undecided && (
           <button type="button" className="btn btn--success btn--sm" disabled={busy}
-                  style={btn} onClick={() => fulfill.set(it.id, true)}>
-            {busy ? 'Zapisuję…' : '✓ Zrobione'}
+                  style={btn} onClick={() => fulfill.set(it.id, true)}
+                  aria-label={`Oznacz jako zrobione: ${it.permission_name}`}>
+            {busy ? 'Zapisuję…' : <><Check size={14} aria-hidden="true" /> Zrobione</>}
           </button>
         )}
         {persistedDenied && canUndo && (

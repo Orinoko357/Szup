@@ -3,7 +3,10 @@ Router: Security events — superadmin/admin only.
 
 Przegląd: admin i superadmin. Zamykanie: zdarzenia high/critical wyłącznie
 superadmin; admin zamyka low/medium, z wyjątkiem dotyczących jego konta.
-Czyszczenie (POST /purge) — wyłącznie superadmin, z hasłem i powodem.
+Zdarzenia o własnych operacjach superadmina (czyszczenie dzienników, usunięcie
+komórki lub posiadanej grupy, reset fabryczny) zamyka INNY superadmin.
+Czyszczenie (POST /purge) — wyłącznie superadmin, z hasłem i powodem,
+tylko wpisy starsze niż 24 miesiące.
 """
 from __future__ import annotations
 
@@ -89,36 +92,67 @@ def summary(
 SUPERADMIN_ONLY_SEVERITIES = {SecuritySeverity.high, SecuritySeverity.critical}
 
 
-def _target_user_id(ev: SecurityEvent) -> Optional[int]:
-    """`details.target_user_id` zdarzenia (konto, którego zdarzenie dotyczy)."""
+# Zdarzenia będące śladem nieodwracalnej operacji superadmina. Wykonawca nie
+# zamyka ich sam — inaczej jednym ruchem usuwa dane i „wycisza” ślad.
+SELF_RESOLVE_FORBIDDEN_TYPES = frozenset({
+    "audit.purged", "security.purged", "settings.factory_reset",
+    "department.force_deleted", "permission_group.deleted_held",
+})
+
+
+def _details(ev: SecurityEvent) -> dict:
     details = ev.details
     if isinstance(details, str):
         try:
             details = json.loads(details)
         except ValueError:
-            return None
-    if not isinstance(details, dict):
+            return {}
+    return details if isinstance(details, dict) else {}
+
+
+def _detail_user_id(ev: SecurityEvent, key: str) -> Optional[int]:
+    """`details.<key>` zdarzenia jako ID konta (np. target_user_id, new_user_id)."""
+    raw = _details(ev).get(key)
+    if raw is None or isinstance(raw, bool):
         return None
     try:
-        raw = details.get("target_user_id")
-        return int(raw) if raw is not None else None
+        return int(raw)
     except (TypeError, ValueError):
         return None
 
 
+def _target_user_id(ev: SecurityEvent) -> Optional[int]:
+    """`details.target_user_id` zdarzenia (konto, którego zdarzenie dotyczy)."""
+    return _detail_user_id(ev, "target_user_id")
+
+
+def _involved_user_ids(ev: SecurityEvent) -> set[int]:
+    """Konta, których dotyczy zdarzenie: sprawca (`user_id`), konto docelowe
+    (`target_user_id`) i nowo powołana osoba (`new_user_id`, np. mianowanie
+    na stanowisko kierownika)."""
+    ids = {ev.user_id, _target_user_id(ev), _detail_user_id(ev, "new_user_id")}
+    return {i for i in ids if i is not None}
+
+
 def _guard_resolve(ev: SecurityEvent, current_user: User) -> None:
-    """Kto może zamknąć zdarzenie. Superadmin — każde; admin — tylko low/medium
-    i nie te, które dotyczą jego własnego konta."""
+    """Kto może zamknąć zdarzenie. Superadmin — każde poza śladem własnej
+    nieodwracalnej operacji; admin — tylko low/medium i nie te, które dotyczą
+    jego własnego konta."""
+    involved = current_user.id in _involved_user_ids(ev)
     if has_role(current_user, "superadmin"):
+        if involved and ev.event_type in SELF_RESOLVE_FORBIDDEN_TYPES:
+            raise HTTPException(403,
+                "To zdarzenie jest śladem Twojej własnej operacji — zamknąć je może "
+                "tylko inny superadmin")
         return
     severity = getattr(ev.severity, "value", ev.severity)
     if severity in {s.value for s in SUPERADMIN_ONLY_SEVERITIES}:
         raise HTTPException(403,
             "Zdarzenie o wadze wysokiej lub krytycznej może zamknąć tylko superadmin")
     # Zdarzenie dotyczące samego admina (np. jego nieudane logowania, zmiany
-    # wprowadzone przez niego albo nadanie mu roli) zamyka ktoś inny — inaczej
-    # mógłby zacierać ślady.
-    if current_user.id in (ev.user_id, _target_user_id(ev)):
+    # wprowadzone przez niego albo powołanie go na stanowisko) zamyka ktoś
+    # inny — inaczej mógłby zacierać ślady.
+    if involved:
         raise HTTPException(403,
             "Nie możesz zamknąć zdarzenia, które dotyczy Twojego konta — "
             "zrobi to inny administrator lub superadmin")
@@ -146,9 +180,11 @@ def resolve(
 
 class PurgeRequest(BaseModel):
     password: str                    # potwierdzenie hasłem wykonującego
-    reason: str                      # wymagany, co najmniej 10 znaków
-    mode: str                        # "before" | "all"
-    before: Optional[str] = None     # data ISO (RRRR-MM-DD) — dla mode="before"
+    reason: str                      # wymagany, 10–1000 znaków
+    before: Optional[str] = None     # data ISO (RRRR-MM-DD, północ czasu polskiego);
+                                     # najpóźniej dziś minus 24 miesiące
+    # Zgodność wstecz: jedyny tryb to "before" (trybu "all" nie ma od 3.10).
+    mode: Optional[str] = "before"
 
 
 @router.post("/purge")
@@ -160,9 +196,10 @@ def purge_events(
 ):
     """Czyszczenie zdarzeń bezpieczeństwa — WYŁĄCZNIE superadmin.
 
-    Jak POST /api/audit/purge: hasło + powód, tryb „wszystko” albo „przed
-    datą”, ślady czyszczeń są nieusuwalne. Po operacji powstaje wpis audytu
-    `security.purged` i zdarzenie krytyczne o tym samym typie.
+    Jak POST /api/audit/purge: hasło + powód, wyłącznie wpisy starsze niż
+    `before` (najpóźniej dziś minus 24 miesiące), ślady czyszczeń są
+    nieusuwalne. W tej samej transakcji powstaje wpis audytu `security.purged`
+    i zdarzenie krytyczne o tym samym typie.
     """
     from services.audit import run_log_purge
     return run_log_purge(session, request, current_user, log="security",

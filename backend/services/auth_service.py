@@ -69,6 +69,127 @@ def invalidate_tokens_now(user) -> None:
     user.tokens_valid_from = datetime.utcnow().replace(microsecond=0)
 
 
+# ---------------------------------------------------------------------------
+# Wspólny limit nieudanych potwierdzeń hasłem (3.10)
+#
+# Jeden licznik per konto dla WSZYSTKICH miejsc, w których zalogowana sesja
+# potwierdza tożsamość hasłem: zmiana hasła (obecne hasło), operacje superadmina
+# (czyszczenie dzienników, usunięcie komórki, usunięcie posiadanej grupy) i reset
+# fabryczny. Osobne liczniki pozwalały zgadywać hasło z przejętej sesji przez
+# ścieżkę bez limitu (/auth/change-password). Licznik jest w bazie, więc restart
+# usługi go nie zeruje. Po CONFIRM_MAX_FAILURES próbach w oknie
+# CONFIRM_WINDOW_MINUTES minut każda kolejna próba dostaje 429.
+# ---------------------------------------------------------------------------
+
+CONFIRM_MAX_FAILURES = 5
+CONFIRM_WINDOW_MINUTES = 15
+
+
+def _confirm_window_start() -> datetime:
+    return datetime.utcnow() - timedelta(minutes=CONFIRM_WINDOW_MINUTES)
+
+
+def password_confirm_failures(session, user_id: int) -> int:
+    """Liczba nieudanych potwierdzeń hasłem konta w bieżącym oknie."""
+    from sqlalchemy import func
+    from sqlmodel import select
+    from models import PasswordConfirmFailure
+    return int(session.exec(
+        select(func.count()).select_from(PasswordConfirmFailure)
+        .where(PasswordConfirmFailure.user_id == user_id)
+        .where(PasswordConfirmFailure.created_at > _confirm_window_start())
+    ).one() or 0)
+
+
+def ensure_password_confirm_allowed(session, user) -> None:
+    """429, gdy konto wyczerpało limit prób potwierdzenia hasłem."""
+    if password_confirm_failures(session, user.id) >= CONFIRM_MAX_FAILURES:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Zbyt wiele nieudanych prób potwierdzenia hasłem. "
+            f"Spróbuj ponownie za {CONFIRM_WINDOW_MINUTES} minut.")
+
+
+def register_password_confirm_failure(session, user, *, operation: str, event_type: str,
+                                      source: str, ip: Optional[str] = None,
+                                      severity=None) -> bool:
+    """Zapisuje nieudane potwierdzenie hasłem i zdarzenie bezpieczeństwa.
+
+    `severity` — waga pojedynczej nieudanej próby (domyślnie high); próba,
+    która wyczerpuje limit, dostaje wagę o stopień wyższą (high → critical,
+    medium → high). Zwraca True, gdy konto zostało właśnie zablokowane.
+    Zapis jest zatwierdzany od razu (wywołujący zwykle rzuca potem błąd)."""
+    from sqlalchemy import delete
+    from models import PasswordConfirmFailure, SecuritySeverity
+    from services.security_events import emit as emit_security_event
+
+    severity = severity or SecuritySeverity.high
+    # Sprzątanie wpisów spoza okna — tabela nie rośnie bez końca.
+    session.execute(delete(PasswordConfirmFailure)
+                    .where(PasswordConfirmFailure.user_id == user.id)
+                    .where(PasswordConfirmFailure.created_at <= _confirm_window_start()))
+    session.add(PasswordConfirmFailure(user_id=user.id, operation=operation[:200]))
+    session.commit()
+    failures = password_confirm_failures(session, user.id)
+    blocked = failures >= CONFIRM_MAX_FAILURES
+    if blocked:
+        severity = (SecuritySeverity.critical if severity == SecuritySeverity.high
+                    else SecuritySeverity.high)
+    emit_security_event(
+        session, event_type=event_type, source=source, severity=severity,
+        summary=(f"Nieudane potwierdzenie hasłem ({operation}) przez {user.username}"
+                 + (f" — kolejne próby zablokowane na {CONFIRM_WINDOW_MINUTES} minut"
+                    if blocked else "")),
+        details={"operation": operation, "failures_in_window": failures,
+                 "target_user_id": user.id},
+        user_id=user.id, ip=ip,
+    )
+    return blocked
+
+
+def clear_password_confirm_failures(session, user) -> int:
+    """Udane potwierdzenie zeruje licznik konta. Zwraca liczbę usuniętych
+    wpisów (commit robi wywołujący)."""
+    from sqlalchemy import delete
+    from models import PasswordConfirmFailure
+    res = session.execute(delete(PasswordConfirmFailure)
+                          .where(PasswordConfirmFailure.user_id == user.id))
+    return int(res.rowcount or 0)
+
+
+# ---------------------------------------------------------------------------
+# Pola tekstowe kont (login, imię i nazwisko, e-mail) — limity (3.10, N2)
+# ---------------------------------------------------------------------------
+
+IDENTITY_FIELD_MAX = 200
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+def clean_text_field(value: Optional[str], label: str, *,
+                     max_len: int = IDENTITY_FIELD_MAX,
+                     required: bool = False) -> Optional[str]:
+    """Przycina spacje i sprawdza pole tekstowe: długość ≤ `max_len`, bez znaków
+    sterujących (NUL, CR/LF, tabulator…). Puste → None (albo 400, gdy
+    `required`). Błąd = HTTPException 400 z polskim komunikatem."""
+    if value is None:
+        if required:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Pole „{label}” jest wymagane")
+        return None
+    text = str(value).strip()
+    if not text:
+        if required:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Pole „{label}” jest wymagane")
+        return None
+    if len(text) > max_len:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            f"Pole „{label}” może mieć najwyżej {max_len} znaków")
+    if _CONTROL_CHARS_RE.search(text):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            f"Pole „{label}” zawiera niedozwolone znaki sterujące "
+                            "(np. znak nowej linii)")
+    return text
+
+
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 

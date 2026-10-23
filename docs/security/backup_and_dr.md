@@ -12,7 +12,8 @@ Zawartość bazy:
 - Systemy IT i słownik uprawnień
 - Wnioski o uprawnienia (historia, kroki obiegu, oświadczenia)
 - Nocne migawki uprawnień
-- Audit log (retencja 24 miesiące)
+- Audit log (retencja co najmniej 24 miesiące: superadmin może usunąć tylko
+  wpisy starsze niż 24 miesiące; ślady czyszczeń i resetów są nieusuwalne)
 - Zdarzenia bezpieczeństwa
 - Konfiguracja (SMTP, LDAP, szablony powiadomień) — hasła zaszyfrowane kluczem Fernet
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { RefreshCw, UserPen } from 'lucide-react'
 import { listNameChanges, resolveNameChange, errorMessage } from '../api'
 import { fmtDate } from '../serverTime'
@@ -6,6 +6,8 @@ import { NAME_CHANGE_STATUS } from '../labels'
 import { toast } from './ui/feedback'
 import Segmented from './ui/Segmented'
 import Modal from './ui/Modal'
+import { LoadError } from './ui/LoadState'
+import { focusIfLost } from './ui/focus'
 
 // Wspólny słownik statusów zmian nazwiska (labels.js).
 const STATUS = Object.fromEntries(Object.entries(NAME_CHANGE_STATUS).map(([k, v]) => [k, [v.badge, v.label]]))
@@ -16,12 +18,20 @@ export default function NameChangeQueue({ onChanged } = {}) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(null)     // wniosek do realizacji
+  const [err, setErr] = useState(null)
+  const listRef = useRef(null)
 
   async function load() {
-    setLoading(true)
+    setLoading(true); setErr(null)
     try { setRows((await listNameChanges(filter === 'all' ? '' : filter)).data) }
-    catch (ex) { setRows([]); toast(errorMessage(ex, 'Nie udało się pobrać zgłoszeń'), { tone: 'error' }) }
+    catch (ex) { setRows([]); setErr(errorMessage(ex, 'Nie udało się pobrać zgłoszeń')) }
     finally { setLoading(false) }
+  }
+  // Po rozpatrzeniu wiersz znika z listy „Oczekujące” (razem z przyciskiem
+  // „Rozpatrz”, na który wraca fokus z okna) — fokus na region listy.
+  async function afterResolve() {
+    await load()
+    focusIfLost(listRef)
   }
   useEffect(() => { load() }, [filter])  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -35,9 +45,12 @@ export default function NameChangeQueue({ onChanged } = {}) {
           <RefreshCw size={14} /> Odśwież
         </button>
       </div>
-      <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
+      <section ref={listRef} tabIndex={-1} aria-label="Zgłoszenia zmiany nazwiska" className="card"
+               style={{ padding: 0, overflowX: 'auto' }}>
         {loading ? (
           <div style={{ color: 'var(--color-text-muted)', padding: 18 }}>Ładowanie…</div>
+        ) : err ? (
+          <LoadError message={err} onRetry={load} busy={loading} focusAfter={listRef} />
         ) : rows.length === 0 ? (
           <div style={{ padding: 18 }}>
             <div style={{ fontWeight: 700 }}>{filter === 'pending' ? 'Brak zgłoszeń do rozpatrzenia.' : 'Brak zgłoszeń.'}</div>
@@ -70,8 +83,9 @@ export default function NameChangeQueue({ onChanged } = {}) {
                   </td>
                   <td>
                     {r.status === 'pending' ? (
-                      <button className="btn btn--success btn--sm" onClick={() => setOpen(r)}>
-                        <UserPen size={13} /> Rozpatrz
+                      <button type="button" className="btn btn--success btn--sm" onClick={() => setOpen(r)}
+                              aria-label={`Rozpatrz zmianę nazwiska: ${r.username} → ${r.requested_full_name}`}>
+                        <UserPen size={13} aria-hidden="true" /> Rozpatrz
                       </button>
                     ) : (
                       <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
@@ -84,11 +98,11 @@ export default function NameChangeQueue({ onChanged } = {}) {
             </tbody>
           </table>
         )}
-      </div>
+      </section>
 
       {open && (
         <ResolveModal req={open} onClose={() => setOpen(null)}
-                      onDone={() => { setOpen(null); load(); onChanged?.() }} />
+                      onDone={() => { setOpen(null); afterResolve(); onChanged?.() }} />
       )}
     </>
   )

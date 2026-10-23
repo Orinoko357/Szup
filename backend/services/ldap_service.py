@@ -135,10 +135,35 @@ def login_realm_ok(settings, raw: str) -> bool:
     return True
 
 
+def entry_guid(entry) -> str | None:
+    """objectGUID wpisu ldap3 jako tekst UUID (małe litery, bez nawiasów).
+
+    ldap3 zwraca GUID jako tekst „{…}”, gdy zna schemat serwera, a jako surowe
+    16 bajtów (little-endian, format AD) — gdy nie zna. Brak atrybutu → None."""
+    import uuid
+    try:
+        attr = getattr(entry, "objectGUID", None)
+        if attr is None:
+            return None
+        raw = (attr.raw_values or [None])[0] if hasattr(attr, "raw_values") else None
+        if isinstance(raw, (bytes, bytearray)) and len(raw) == 16:
+            return str(uuid.UUID(bytes_le=bytes(raw)))
+        value = attr.value
+        if isinstance(value, (bytes, bytearray)) and len(value) == 16:
+            return str(uuid.UUID(bytes_le=bytes(value)))
+        if value:
+            return str(uuid.UUID(str(value).strip("{} ")))
+    except (ValueError, TypeError, AttributeError) as exc:
+        logger.warning("LDAP: nieczytelny objectGUID (%s): %s",
+                       getattr(entry, "entry_dn", "?"), exc)
+    return None
+
+
 def lookup_user(settings, username: str) -> tuple[str, dict]:
-    """Wyszukanie konta w AD kontem usługowym (bez hasła użytkownika) — dla SSO,
-    gdzie tożsamość potwierdził już Kerberos w Apache. Zwraca (status, dane):
-    "ok" + {display_name}, "not_found", "disabled", albo "error" + {message}."""
+    """Wyszukanie konta w AD kontem usługowym (bez hasła użytkownika) — dla SSO
+    (tożsamość potwierdził już Kerberos w Apache) i weryfikacji zmiany loginu.
+    Zwraca (status, dane): "ok" + {display_name, dn, guid}, "not_found",
+    "disabled" + {dn, guid}, albo "error" + {message}."""
     if not is_valid_login(username or ""):
         return "not_found", {}
     from ldap3 import SUBTREE
@@ -153,15 +178,16 @@ def lookup_user(settings, username: str) -> tuple[str, dict]:
         with open_connection(settings, server, service_bind_user(settings),
                              bind_password) as conn:
             conn.search(search_base, search_filter, search_scope=SUBTREE,
-                        attributes=["displayName", "userAccountControl"])
+                        attributes=["displayName", "userAccountControl", "objectGUID"])
             if not conn.entries:
                 return "not_found", {}
             e = conn.entries[0]
+            ident = {"dn": e.entry_dn, "guid": entry_guid(e)}
             uac = int(e.userAccountControl.value or 0) if "userAccountControl" in e else 0
             if uac & 2:                       # ACCOUNTDISABLE
-                return "disabled", {}
+                return "disabled", ident
             name = str(e.displayName.value) if "displayName" in e and e.displayName.value else None
-            return "ok", {"display_name": name}
+            return "ok", {"display_name": name, **ident}
     except Exception as exc:  # noqa: BLE001
         logger.error("LDAP lookup for SSO failed: %s", exc)
         return "error", {"message": str(exc)}
@@ -262,7 +288,7 @@ def fetch_ldap_users(settings, search_base: str) -> list[dict]:
     Pobiera użytkowników z AD pod `search_base` (rekurencyjnie).
 
     Zwraca listę słowników z kluczami:
-        dn, parent_dn, username, full_name, email, is_enabled_in_ad
+        dn, parent_dn, username, full_name, email, title, guid, is_enabled_in_ad
     """
     from ldap3 import ALL, SUBTREE
     from services.crypto import decrypt
@@ -286,7 +312,8 @@ def fetch_ldap_users(settings, search_base: str) -> list[dict]:
             search_base,
             "(&(objectCategory=person)(objectClass=user))",
             search_scope=SUBTREE,
-            attributes=["sAMAccountName", "displayName", "cn", "mail", "userAccountControl", "title"],
+            attributes=["sAMAccountName", "displayName", "cn", "mail", "userAccountControl",
+                        "title", "objectGUID"],
         )
         for e in conn.entries:
             dn = e.entry_dn
@@ -310,6 +337,7 @@ def fetch_ldap_users(settings, search_base: str) -> list[dict]:
                 "full_name": full_name,
                 "email": email,
                 "title": title,
+                "guid": entry_guid(e),
                 "is_enabled_in_ad": is_enabled,
             })
 

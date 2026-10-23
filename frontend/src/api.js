@@ -180,9 +180,10 @@ export const renamePermissionGroup = (systemId, groupName, newName) =>
   api.post(`/systems/${systemId}/permissions/group-rename`,
            { group_name: groupName, new_name: newName })
 // reason — wymagany przez backend, gdy grupa jest komuś przyznana (tylko superadmin).
-export const deletePermissionGroup = (systemId, groupName, reason) =>
+// v3.10: usunięcie grupy przyznanej komuś (superadmin) wymaga też hasła.
+export const deletePermissionGroup = (systemId, groupName, reason, password) =>
   api.post(`/systems/${systemId}/permissions/group-delete`,
-           { group_name: groupName, ...(reason ? { reason } : {}) })
+           { group_name: groupName, ...(reason ? { reason } : {}), ...(password ? { password } : {}) })
 // Kto ma przyznane uprawnienia z grupy + wnioski w toku, które jej dotyczą.
 export const getPermissionGroupUsage = (systemId, groupName) =>
   api.get(`/systems/${systemId}/permissions/group-usage`, { params: { group_name: groupName } })

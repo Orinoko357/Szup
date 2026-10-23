@@ -1,12 +1,17 @@
 """
-Audit logging — append-only, 24-month retention (NIS2/KSC).
+Audit logging — append-only, retencja co najmniej 24 miesiące (NIS2/KSC).
+
+Dziennik zdarzeń (auditlog) jest append-only (triggery). Wyjątek: czyszczenie
+przez superadmina (`run_log_purge`) — wyłącznie wpisów starszych niż
+RETENTION_MONTHS miesięcy, z hasłem i powodem, ze śladem zapisanym w tej samej
+transakcji. Ślady czyszczeń i resetu fabrycznego są nieusuwalne.
 """
 from __future__ import annotations
 
 import json
 import logging
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import Request
 from sqlmodel import Session
@@ -105,82 +110,71 @@ def request_meta(request: Request) -> dict[str, Optional[str]]:
 
 # ---------------------------------------------------------------------------
 # Potwierdzenie hasłem operacji superadmina (czyszczenie dzienników, usuwanie
-# komórek) — ten sam wzorzec co reset fabryczny w routers/settings.py.
+# komórek i posiadanych grup, reset fabryczny).
 # ---------------------------------------------------------------------------
 
-# Limit nieudanych potwierdzeń — per konto, w pamięci procesu (jeden worker
-# uvicorn). Chroni przed zgadywaniem hasła z przejętej sesji superadmina;
-# restart usługi zeruje licznik.
-CONFIRM_MAX_FAILURES = 5
-CONFIRM_WINDOW_MINUTES = 15
-_confirm_failures: dict[int, list[datetime]] = {}
-
-
-def _recent_confirm_failures(user_id: int) -> list[datetime]:
-    from datetime import timedelta
-    cutoff = datetime.utcnow() - timedelta(minutes=CONFIRM_WINDOW_MINUTES)
-    hits = [t for t in _confirm_failures.get(user_id, []) if t > cutoff]
-    if hits:
-        _confirm_failures[user_id] = hits
-    else:
-        _confirm_failures.pop(user_id, None)
-    return hits
+def verify_user_password(session: Session, user, password: str) -> bool:
+    """Czy `password` jest hasłem konta: lokalnym (bcrypt) albo w AD (bind).
+    Błąd połączenia z AD = brak potwierdzenia (zapisany w logu)."""
+    from sqlmodel import select
+    from models import AuthType, LdapSettings
+    from services.auth_service import verify_password
+    if not password:
+        return False
+    if user.auth_type == AuthType.ldap:
+        from services.ldap_service import authenticate_ldap
+        cfg = session.exec(select(LdapSettings)).first()
+        if not cfg or not cfg.enabled:
+            return False
+        try:
+            return bool(authenticate_ldap(cfg, user.username, password))
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Potwierdzenie hasłem w AD nieudane (%s): %s", user.username, exc)
+            return False
+    return bool(user.password_hash) and verify_password(password, user.password_hash)
 
 
 def confirm_password(session: Session, user, password: str, *,
-                     operation: str, ip: Optional[str] = None) -> None:
+                     operation: str, ip: Optional[str] = None,
+                     event_type: str = "superadmin.confirm_denied",
+                     source: str = "audit",
+                     denied_detail: str = "Nieprawidłowe hasło — operacja przerwana") -> None:
     """Weryfikuje hasło wykonującego (lokalne albo bind do AD) przed operacją
-    nieodwracalną. Po CONFIRM_MAX_FAILURES nieudanych próbach w oknie
-    CONFIRM_WINDOW_MINUTES minut → 429. Nieudana próba = zdarzenie
-    bezpieczeństwa (high; critical przy blokadzie). Rzuca HTTPException."""
+    nieodwracalną. Korzysta ze WSPÓLNEGO, trwałego licznika prób konta
+    (`services.auth_service`, ten sam co zmiana hasła): po
+    CONFIRM_MAX_FAILURES nieudanych próbach w oknie → 429. Nieudana próba =
+    zdarzenie bezpieczeństwa high (critical przy blokadzie) i 403."""
     from fastapi import HTTPException
-    from sqlmodel import select
-    from models import AuthType, LdapSettings, SecuritySeverity
-    from services.auth_service import verify_password
-    from services.security_events import emit as emit_security_event
-
-    if len(_recent_confirm_failures(user.id)) >= CONFIRM_MAX_FAILURES:
-        raise HTTPException(429,
-            "Zbyt wiele nieudanych prób potwierdzenia hasłem. "
-            f"Spróbuj ponownie za {CONFIRM_WINDOW_MINUTES} minut.")
-
-    ok = False
-    if password:
-        if user.auth_type == AuthType.ldap:
-            from services.ldap_service import authenticate_ldap
-            cfg = session.exec(select(LdapSettings)).first()
-            if cfg and cfg.enabled:
-                try:
-                    ok = bool(authenticate_ldap(cfg, user.username, password))
-                except Exception:
-                    ok = False
-        else:
-            ok = bool(user.password_hash) and verify_password(password, user.password_hash)
-    if ok:
-        _confirm_failures.pop(user.id, None)
-        return
-
-    failures = _confirm_failures.setdefault(user.id, [])
-    failures.append(datetime.utcnow())
-    blocked = len(failures) >= CONFIRM_MAX_FAILURES
-    emit_security_event(
-        session, event_type="superadmin.confirm_denied", source="audit",
-        severity=SecuritySeverity.critical if blocked else SecuritySeverity.high,
-        summary=(f"Nieudane potwierdzenie hasłem ({operation}) przez {user.username}"
-                 + (f" — próby zablokowane na {CONFIRM_WINDOW_MINUTES} minut"
-                    if blocked else "")),
-        details={"operation": operation, "failures_in_window": len(failures)},
-        user_id=user.id, ip=ip,
+    from services.auth_service import (
+        clear_password_confirm_failures, ensure_password_confirm_allowed,
+        register_password_confirm_failure,
     )
-    raise HTTPException(403, "Nieprawidłowe hasło — operacja przerwana")
+
+    ensure_password_confirm_allowed(session, user)
+    if verify_user_password(session, user, password):
+        if clear_password_confirm_failures(session, user):
+            session.commit()
+        return
+    register_password_confirm_failure(session, user, operation=operation,
+                                      event_type=event_type, source=source, ip=ip)
+    raise HTTPException(403, denied_detail)
 
 
 # ---------------------------------------------------------------------------
 # Czyszczenie dzienników (audit log, zdarzenia bezpieczeństwa) — superadmin
 # ---------------------------------------------------------------------------
 
-# Ślady czyszczenia nie podlegają usunięciu — żadne czyszczenie ich nie obejmie.
-PURGE_TRACE_ACTIONS = ("audit.purged", "security.purged")
+# Ślady czyszczeń dzienników — nieusuwalne. Żadne czyszczenie (ani reset
+# fabryczny) ich nie obejmuje, a w securityevent chronią je dodatkowo triggery
+# (`database.SECURITYEVENT_TRIGGERS`; auditlog jest w całości append-only).
+PURGE_TRACE_ACTIONS = ("audit.purged", "security.purged", "settings.factory_reset")
+
+# Minimalna retencja dzienników (NIS2/KSC): czyścić wolno wyłącznie wpisy
+# starsze niż RETENTION_MONTHS miesięcy.
+RETENTION_MONTHS = 24
+
+# Data „przed” bez strefy (np. RRRR-MM-DD z formularza) to północ czasu polskiego.
+_LOCAL_TZ_NAME = "Europe/Warsaw"
 
 
 class PurgeError(RuntimeError):
@@ -195,17 +189,24 @@ def table_triggers(conn, table: str) -> dict[str, str]:
     return {r[0]: r[1] for r in rows if r[1]}
 
 
+def _db_time(value: datetime) -> str:
+    """Format daty, w jakim SQLAlchemy zapisuje DateTime w SQLite."""
+    return value.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
 def purge_log_table(table: str, *, time_column: str, key_column: str,
-                    protected: tuple[str, ...], cutoff: Optional[datetime]) -> int:
+                    protected: tuple[str, ...], cutoff: Optional[datetime],
+                    trace: Optional[Callable[[Any, int, dict[str, int]], None]] = None) -> int:
     """Usuwa wpisy z tabeli dziennika — atomowo, na JEDNYM połączeniu.
 
     W jednej transakcji (BEGIN IMMEDIATE): zdjęcie triggerów append-only,
     DELETE (z pominięciem wpisów, których `key_column` jest w `protected`,
     i — gdy `cutoff` — tylko starszych niż `cutoff`), ponowne założenie
-    triggerów, COMMIT. DDL w SQLite podlega transakcji, więc błąd na
-    dowolnym etapie wycofuje WSZYSTKO, łącznie ze zdjęciem triggerów; mimo to
-    po wycofaniu dodatkowo odtwarzamy ochronę auditlog. Zwraca liczbę
-    usuniętych wierszy; przy błędzie rzuca PurgeError.
+    triggerów, zapis śladu (`trace(kursor, usunięte, {typ: liczba})`), COMMIT.
+    DDL w SQLite podlega transakcji, więc błąd na dowolnym etapie — także przy
+    zapisie śladu — wycofuje WSZYSTKO: nie ma czyszczenia bez śladu. Po
+    wycofaniu dodatkowo odtwarzamy triggery. Zwraca liczbę usuniętych
+    wierszy; przy błędzie rzuca PurgeError.
     """
     from database import engine as db_engine, _install_auditlog_triggers
 
@@ -213,8 +214,8 @@ def purge_log_table(table: str, *, time_column: str, key_column: str,
     params: list[Any] = list(protected)
     if cutoff is not None:
         where.append(f'"{time_column}" < ?')
-        params.append(cutoff.strftime("%Y-%m-%d %H:%M:%S.%f"))
-    sql = f'DELETE FROM "{table}" WHERE ' + " AND ".join(where)
+        params.append(_db_time(cutoff))
+    where_sql = " AND ".join(where)
 
     raw = db_engine.raw_connection()
     dbapi = raw.driver_connection
@@ -228,39 +229,46 @@ def purge_log_table(table: str, *, time_column: str, key_column: str,
         cur.execute("BEGIN IMMEDIATE")
         try:
             triggers = table_triggers(cur, table)
+            # Co usuwamy — liczba wpisów każdego typu trafia do śladu.
+            by_type = {str(k or ""): int(n) for k, n in cur.execute(
+                f'SELECT "{key_column}", COUNT(*) FROM "{table}" WHERE {where_sql} '
+                f'GROUP BY "{key_column}"', params).fetchall()}
             for name in triggers:
                 cur.execute(f'DROP TRIGGER IF EXISTS "{name}"')
-            cur.execute(sql, params)
+            cur.execute(f'DELETE FROM "{table}" WHERE {where_sql}', params)
             deleted = cur.rowcount if cur.rowcount is not None else 0
             for name, trg_sql in triggers.items():
                 cur.execute(trg_sql)
             missing = set(triggers) - set(table_triggers(cur, table))
             if missing:
                 raise PurgeError(f"triggery nie zostały odtworzone: {sorted(missing)}")
+            if trace is not None:
+                trace(cur, int(deleted), by_type)
             cur.execute("COMMIT")
             return int(deleted)
         except Exception as exc:
             try:
                 cur.execute("ROLLBACK")
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as rb_exc:  # noqa: BLE001
+                _log.error("ROLLBACK czyszczenia %s nieudany: %s", table, rb_exc)
             _log.error("Czyszczenie %s wycofane: %s", table, exc)
             raise PurgeError(f"{type(exc).__name__}: {exc}") from exc
     finally:
         dbapi.isolation_level = prev_isolation
         raw.close()
-        if table == "auditlog":
-            # Asekuracja: ochrona dziennika ma istnieć niezależnie od wyniku.
-            try:
-                _install_auditlog_triggers()
-            except Exception as exc:  # noqa: BLE001
-                _log.error("Nie odtworzono triggerów auditlog po czyszczeniu: %s", exc)
+        # Asekuracja: ochrona dzienników ma istnieć niezależnie od wyniku.
+        try:
+            _install_auditlog_triggers()
+        except Exception as exc:  # noqa: BLE001
+            _log.error("Nie odtworzono triggerów append-only po czyszczeniu %s: %s",
+                       table, exc)
 
 
 def missing_log_triggers(table: str) -> list[str]:
     """Triggery append-only, których brakuje na tabeli dziennika (pusta = OK)."""
-    from database import engine as db_engine, AUDITLOG_TRIGGERS
-    expected = set(AUDITLOG_TRIGGERS) if table == "auditlog" else set()
+    from database import engine as db_engine, AUDITLOG_TRIGGERS, SECURITYEVENT_TRIGGERS
+    expected = {"auditlog": set(AUDITLOG_TRIGGERS),
+                "securityevent": set(SECURITYEVENT_TRIGGERS)}.get(table, set())
     if not expected:
         return []
     raw = db_engine.raw_connection()
@@ -271,7 +279,7 @@ def missing_log_triggers(table: str) -> list[str]:
     return sorted(expected - present)
 
 
-PURGE_MODES = ("before", "all")
+PURGE_MODES = ("before",)
 PURGE_REASON_MIN = 10
 
 # Dziennik → (tabela, kolumna czasu, kolumna klucza, akcja śladu, nazwa do komunikatów)
@@ -282,14 +290,45 @@ _PURGE_TARGETS = {
 }
 
 
-def parse_purge_cutoff(mode: str, before: Optional[str]) -> Optional[datetime]:
-    """Walidacja trybu czyszczenia → granica czasu (naiwny UTC) albo None (wszystko)."""
+def _local_tz():
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(_LOCAL_TZ_NAME)
+    except Exception as exc:  # noqa: BLE001 — brak bazy stref (tzdata)
+        _log.warning("Brak strefy %s (%s) — daty czyszczenia liczone w UTC",
+                     _LOCAL_TZ_NAME, exc)
+        from datetime import timezone
+        return timezone.utc
+
+
+def retention_limit(now: Optional[datetime] = None) -> datetime:
+    """Najpóźniejsza dopuszczalna granica czyszczenia (naiwny UTC): teraz minus
+    RETENTION_MONTHS miesięcy (29 lutego → 28 lutego)."""
+    now = now or datetime.utcnow()
+    month_index = now.year * 12 + (now.month - 1) - RETENTION_MONTHS
+    year, month = divmod(month_index, 12)
+    month += 1
+    import calendar
+    day = min(now.day, calendar.monthrange(year, month)[1])
+    return now.replace(year=year, month=month, day=day)
+
+
+def parse_purge_cutoff(mode: Optional[str], before: Optional[str]) -> datetime:
+    """Walidacja czyszczenia → granica czasu (naiwny UTC).
+
+    Czyścić można wyłącznie wpisy starsze niż RETENTION_MONTHS miesięcy —
+    trybu „wszystko” nie ma (od 3.10). Data bez strefy (RRRR-MM-DD) oznacza
+    północ czasu polskiego."""
     from datetime import timezone
     from fastapi import HTTPException
-    if mode not in PURGE_MODES:
-        raise HTTPException(400, "Nieznany tryb czyszczenia — dozwolone: before, all")
+    mode = (mode or "before").strip()
     if mode == "all":
-        return None
+        raise HTTPException(400,
+            f"Czyszczenie całego dziennika nie jest dostępne — wpisy z ostatnich "
+            f"{RETENTION_MONTHS} miesięcy podlegają obowiązkowej retencji. "
+            "Podaj datę, przed którą wpisy mają zostać usunięte.")
+    if mode not in PURGE_MODES:
+        raise HTTPException(400, "Nieznany tryb czyszczenia — dozwolony tryb: before")
     raw = (before or "").strip()
     if not raw:
         raise HTTPException(400, "Podaj datę, przed którą wpisy mają zostać usunięte")
@@ -297,17 +336,52 @@ def parse_purge_cutoff(mode: str, before: Optional[str]) -> Optional[datetime]:
         value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         raise HTTPException(400, "Nieprawidłowa data — użyj formatu RRRR-MM-DD")
-    if value.tzinfo is not None:
-        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=_local_tz())
+    value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    if value > datetime.utcnow():
+        raise HTTPException(400, "Data czyszczenia nie może być z przyszłości")
+    limit = retention_limit()
+    if value > limit:
+        latest = limit.replace(tzinfo=timezone.utc).astimezone(_local_tz()).date()
+        raise HTTPException(400,
+            f"Dzienniki przechowujemy co najmniej {RETENTION_MONTHS} miesiące — "
+            f"można usunąć tylko wpisy sprzed {latest.isoformat()} "
+            "(podaj tę datę lub wcześniejszą).")
     return value
 
 
+def _purge_trace_writer(*, table: str, log: str, trace_action: str, label: str,
+                        user, meta: dict, details: dict
+                        ) -> Callable[[Any, int, dict[str, int]], None]:
+    """Zapis śladu czyszczenia (wpis audytu + zdarzenie critical) surowym SQL
+    na kursorze transakcji czyszczenia — w tej samej transakcji co DELETE."""
+    def write(cur, deleted: int, by_type: dict[str, int]) -> None:
+        now = _db_time(datetime.utcnow())
+        full = {**details, "deleted": deleted, "deleted_by_type": by_type}
+        payload = json.dumps(full, ensure_ascii=False, default=str)
+        cur.execute(
+            'INSERT INTO "auditlog" (timestamp, user_id, username, action, target_type, '
+            'ip, user_agent, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (now, user.id, user.username, trace_action, table, meta.get("ip"),
+             (meta.get("user_agent") or "")[:512] or None, payload))
+        summary = (f"Wyczyszczono {label} ({deleted} wpisów sprzed "
+                   f"{str(details.get('before') or '')[:10]}) przez {user.username}: "
+                   f"{details.get('reason')}")[:512]
+        cur.execute(
+            'INSERT INTO "securityevent" (created_at, event_type, severity, source, '
+            'summary, details, user_id, ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (now, trace_action, "critical", log, summary, payload, user.id, meta.get("ip")))
+    return write
+
+
 def run_log_purge(session: Session, request, user, *, log: str, password: str,
-                  reason: str, mode: str, before: Optional[str]) -> dict:
+                  reason: str, mode: Optional[str], before: Optional[str]) -> dict:
     """Czyszczenie dziennika przez superadmina (POST /api/audit/purge,
-    POST /api/security/purge). Kolejność: walidacja → hasło → atomowe
-    usunięcie → kontrola triggerów → ślad (audit + zdarzenie critical).
-    Wpisy śladu czyszczenia (PURGE_TRACE_ACTIONS) nigdy nie są usuwane."""
+    POST /api/security/purge). Kolejność: walidacja (powód, data zgodna
+    z retencją) → hasło → atomowe usunięcie RAZEM ze śladem (wpis audytu
+    + zdarzenie critical w tej samej transakcji) → kontrola triggerów.
+    Wpisy śladów (PURGE_TRACE_ACTIONS) nigdy nie są usuwane."""
     from fastapi import HTTPException
     from models import SecuritySeverity
     from services.security_events import emit as emit_security_event
@@ -317,6 +391,8 @@ def run_log_purge(session: Session, request, user, *, log: str, password: str,
     if len(reason) < PURGE_REASON_MIN:
         raise HTTPException(400,
             f"Podaj powód czyszczenia (co najmniej {PURGE_REASON_MIN} znaków)")
+    if len(reason) > 1000:
+        raise HTTPException(400, "Powód czyszczenia może mieć najwyżej 1000 znaków")
     cutoff = parse_purge_cutoff(mode, before)
     meta = request_meta(request)
     confirm_password(session, user, password,
@@ -325,9 +401,15 @@ def run_log_purge(session: Session, request, user, *, log: str, password: str,
     # sesja żądania nie może trzymać otwartej transakcji zapisu.
     session.commit()
 
+    details = {"reason": reason, "mode": "before", "before": cutoff.isoformat(),
+               "retention_months": RETENTION_MONTHS}
     try:
-        deleted = purge_log_table(table, time_column=time_col, key_column=key_col,
-                                  protected=PURGE_TRACE_ACTIONS, cutoff=cutoff)
+        deleted = purge_log_table(
+            table, time_column=time_col, key_column=key_col,
+            protected=PURGE_TRACE_ACTIONS, cutoff=cutoff,
+            trace=_purge_trace_writer(table=table, log=log, trace_action=trace_action,
+                                      label=label, user=user, meta=meta,
+                                      details=details))
     except PurgeError as exc:
         missing = missing_log_triggers(table)
         emit_security_event(
@@ -343,17 +425,6 @@ def run_log_purge(session: Session, request, user, *, log: str, password: str,
             f"Czyszczenie {label} nie powiodło się — zmiany wycofane, "
             "żadne wpisy nie zostały usunięte.")
 
-    details = {"reason": reason, "mode": mode,
-               "before": cutoff.isoformat() if cutoff else None, "deleted": deleted}
-    record_event(session, action=trace_action, user_id=user.id, username=user.username,
-                 target_type=table, ip=meta["ip"], user_agent=meta["user_agent"],
-                 details=details)
-    emit_security_event(
-        session, event_type=trace_action, source=log, severity=SecuritySeverity.critical,
-        summary=(f"Wyczyszczono {label} ({deleted} wpisów) przez {user.username}: "
-                 f"{reason}"),
-        details=details, user_id=user.id, ip=meta["ip"],
-    )
     missing = missing_log_triggers(table)
     if missing:
         _log.error("Po czyszczeniu %s brak triggerów append-only: %s", table, missing)
@@ -363,4 +434,4 @@ def run_log_purge(session: Session, request, user, *, log: str, password: str,
             summary=f"Dziennik zdarzeń bez ochrony append-only po czyszczeniu {label}",
             details={"missing_triggers": missing}, user_id=user.id, ip=meta["ip"],
         )
-    return {"deleted": deleted}
+    return {"deleted": deleted, "before": cutoff.isoformat()}

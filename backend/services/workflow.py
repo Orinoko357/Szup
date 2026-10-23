@@ -375,20 +375,89 @@ def is_self_request(request: AccessRequest, user: Optional[User]) -> bool:
     return bool(user is not None and wid and user.id == wid)
 
 
+def worker_lead_circle(session: Session, request: AccessRequest,
+                       dept: Optional[Department]) -> set[int]:
+    """Kierownictwo (kierownik i zastępcy) komórki, którą kieruje pracownik
+    wniosku albo w której jest zastępcą — komórki wniosku albo komórki, która
+    odpowiada za nią na etapie kierownika (samodzielne stanowisko / komórka bez
+    aktywnego kierownika → kierownik wyżej). Puste, gdy pracownik nikim tu nie
+    kieruje. Te osoby nie zastępują decyzji przełożonego pracownika."""
+    wid = getattr(request, "worker_user_id", None)
+    if not wid or dept is None:
+        return set()
+    from services.permissions import dept_deputy_ids
+    out: set[int] = set()
+    for d in {id(x): x for x in (dept, _responsible_dept(session, dept)) if x}.values():
+        circle = set(dept_deputy_ids(session, d.id))
+        if d.manager_user_id:
+            circle.add(d.manager_user_id)
+        if wid in circle:
+            out |= circle
+    return out
+
+
+def worker_leads_dept(session: Session, request: AccessRequest,
+                      dept: Optional[Department]) -> bool:
+    """Czy pracownik wniosku kieruje komórką wniosku (albo odpowiadającą za nią
+    komórką wyżej) lub jest jej zastępcą — patrz `worker_lead_circle`."""
+    return bool(worker_lead_circle(session, request, dept))
+
+
+def worker_did_manager_step(session: Session, request: AccessRequest,
+                            instance: Optional[WorkflowInstance] = None) -> bool:
+    """Czy którykolwiek krok etapu kierownika (wybór / akceptacja) w obiegu
+    wniosku wykonał sam pracownik, którego wniosek dotyczy."""
+    wid = getattr(request, "worker_user_id", None)
+    if not wid:
+        return False
+    if instance is None:
+        instance = instance_of(session, request)
+    if instance is None or instance.id is None:
+        return False
+    from sqlmodel import col
+    return session.exec(
+        select(WorkflowStep.id)
+        .where(WorkflowStep.instance_id == instance.id)
+        .where(WorkflowStep.actor_user_id == wid)
+        .where(col(WorkflowStep.node_type).in_(list(MANAGER_STAGE_TYPES)))
+        .where(col(WorkflowStep.action).in_([WorkflowStepAction.select,
+                                             WorkflowStepAction.approve]))
+    ).first() is not None
+
+
+def needs_superior_approval(session: Session, request: AccessRequest,
+                            dept: Optional[Department], actor_user: Optional[User] = None,
+                            instance: Optional[WorkflowInstance] = None) -> bool:
+    """Wniosek „dla siebie” w szerokim sensie — akceptacja wyższa NIE może być
+    pominięta (rozdział obowiązków: zatwierdza przełożony), gdy:
+
+    - krok kierownika wykonuje (`actor_user`) pracownik, którego wniosek dotyczy,
+    - którykolwiek wcześniejszy krok etapu kierownika wykonał ten pracownik,
+    - pracownik kieruje komórką wniosku albo jest jej zastępcą — wtedy krok
+      kierownika wykonany przez jego zastępcę albo podwładnego nie zastępuje
+      decyzji przełożonego."""
+    return (is_self_request(request, actor_user)
+            or worker_leads_dept(session, request, dept)
+            or worker_did_manager_step(session, request, instance))
+
+
 def should_skip(node: dict, request: AccessRequest, dept: Optional[Department],
-                actor_user: Optional[User] = None) -> bool:
+                actor_user: Optional[User] = None, *,
+                self_request: Optional[bool] = None) -> bool:
     """Czy silnik pomija węzeł. `actor_user` — osoba, której akcja przesuwa
     obieg (przy podglądzie `landing_node_type`: osoba, która miałaby działać).
 
     Akceptacja wyższa (`higher_manager_approve`) jest pomijana w komórce
-    jednostopniowej — CHYBA że krok kierownika wykonuje pracownik, którego
-    wniosek dotyczy (rozdział obowiązków: wniosek „dla siebie” zawsze
-    zatwierdza przełożony)."""
+    jednostopniowej — CHYBA że wniosek jest „dla siebie” (`self_request`,
+    wyliczane przez `needs_superior_approval`; bez niego — tylko gdy krok
+    wykonuje sam pracownik). Wniosek „dla siebie” zawsze zatwierdza przełożony."""
     props = node.get("props") or {}
     if node["type"] == "higher_manager_approve":
         if props.get("skip_if_not_required", True):
             if not dept or not dept.requires_higher_approval:
-                return not is_self_request(request, actor_user)
+                if self_request is None:
+                    self_request = is_self_request(request, actor_user)
+                return not self_request
     return False
 
 
@@ -414,6 +483,7 @@ def landing_node_type(
 
     node_id = instance.current_node_id
     acted = find_node(graph, node_id)
+    self_req = needs_superior_approval(session, request, dept, actor_user, instance)
     # Automatyczna akceptacja wyższa (`auto_higher_approval`) liczy się tylko
     # wtedy, gdy `actor_user` faktycznie może wykonać bieżący krok.
     acted_type = (acted or {}).get("type") if actor_user is not None else None
@@ -424,7 +494,7 @@ def landing_node_type(
         node_id = nxt["id"]
         if nxt["type"] == "end":
             return "end"
-        if should_skip(nxt, request, dept, actor_user):
+        if should_skip(nxt, request, dept, actor_user, self_request=self_req):
             continue
         if (acted_type and auto_higher_approval(session, request, dept, acted_type,
                                                 nxt, actor_user)
@@ -453,7 +523,12 @@ def auto_higher_approval(session: Session, request: AccessRequest,
     Nigdy dla wniosku „dla siebie” (pracownik nie zatwierdza sam siebie) ani
     dla kierownika / zastępcy samej komórki — wyjątek: dyrektor jednostki,
     o ile `can_act` pozwala mu na akceptację wyższą. Superadmin w obiegu nie
-    działa, więc też nigdy."""
+    działa, więc też nigdy.
+
+    Wniosek „dla siebie” w szerokim sensie (`needs_superior_approval`: dla
+    kierownika komórki albo z krokiem wykonanym przez pracownika) zaliczamy
+    automatycznie tylko po kroku niezależnego przełożonego — `can_act` odmawia
+    akceptacji wyższej pracownikowi i kręgowi samej komórki."""
     if actor_user is None or acted_type not in MANAGER_STAGE_TYPES:
         return False
     if nxt.get("type") != "higher_manager_approve":
@@ -1139,13 +1214,20 @@ SUPERADMIN_NO_ACT_MSG = (
 
 def superadmin_acts(session: Session, node: dict, request: AccessRequest,
                     dept: Optional[Department]) -> bool:
-    """Czy na tym kroku działa superadmin — wyłącznie akceptacja wyższa wniosku
-    „dla siebie” kierownika, nad którym w strukturze nie ma nikogo, kto mógłby
-    go zatwierdzić (rezerwa `_stage_actor_info`). Poza tym superadmin w obiegu
-    nie działa."""
-    if node.get("type") != "higher_manager_approve":
+    """Czy na tym kroku działa superadmin — wyłącznie rezerwa `_stage_actor_info`
+    na etapie kierownika albo akceptacji wyższej, gdy w strukturze nie ma nikogo,
+    kto mógłby wykonać krok:
+
+    - akceptacja wyższa wniosku „dla siebie” kierownika, nad którym nie ma
+      przełożonego (np. dyrektor jednostki kierujący komórką),
+    - krok bez żadnej osoby uprawnionej (np. ta sama osoba kieruje komórką
+      i komórką nadrzędną, a jednostka nie ma dyrektora; usunięta komórka
+      nadrzędna; komórka bez kierownika w jednostce bez dyrektora).
+
+    Poza tym superadmin w obiegu nie działa."""
+    if node.get("type") not in STRUCTURE_SENSITIVE_TYPES:
         return False
-    return _stage_actor_info(session, node, dept, request)[1]
+    return bool(_stage_actor_info(session, node, dept, request)[1])
 
 
 def can_act(node: dict, request: AccessRequest, dept: Optional[Department],
@@ -1226,6 +1308,12 @@ def can_act(node: dict, request: AccessRequest, dept: Optional[Department],
                 and _unit_director_id(session, dept) != user.id):
             return False, ("Kierownik komórki i jego zastępcy nie zatwierdzają akceptacji "
                            "wyższej wniosku własnej komórki — zrobi to przełożony.")
+        # Wniosek dla kierownika (zastępcy) komórki odpowiedzialnej za wniosek —
+        # jego zastępca czy kierownik tej samej komórki nie jest jego przełożonym.
+        if (user.id in worker_lead_circle(session, request, dept)
+                and _unit_director_id(session, dept) != user.id):
+            return False, ("Wniosek dotyczy osoby z kierownictwa Twojej komórki — "
+                           "zatwierdzi go przełożony.")
         parent = None
         if dept and dept.parent_dept_id:
             parent = session.get(Department, dept.parent_dept_id)
@@ -1344,6 +1432,7 @@ def advance(
     dept = session.get(Department, request.department_id) if request.department_id else None
     acted = find_node(graph, instance.current_node_id) if instance.current_node_id else None
     acted_type = (acted or {}).get("type") if actor_user is not None else None
+    self_req = needs_superior_approval(session, request, dept, actor_user, instance)
 
     guard = 0
     while True:
@@ -1385,7 +1474,7 @@ def advance(
             _notify_request_completed(session, request, actor_user)
             return
 
-        if should_skip(nxt, request, dept, actor_user):
+        if should_skip(nxt, request, dept, actor_user, self_request=self_req):
             _record_step(session, instance, nxt,
                          action=WorkflowStepAction.auto_skip, actor_user=None,
                          comment="Warunek pominięcia spełniony")
@@ -1460,23 +1549,32 @@ def _stage_actor_ids(session: Session, node: dict,
       którego wniosek dotyczy (`request`).
     Gdy nikogo takiego nie ma (komórka najwyższego poziomu, łańcuch bez
     kierownika) — dyrektor jednostki, który i tak może wykonać ten krok.
-    Akceptacja wyższa wniosku „dla siebie”, gdy poza pracownikiem nie ma
-    żadnego przełożonego — superadmin (`superadmin_acts`).
+    Gdy nie ma też dyrektora (albo nikt z listy nie ma aktywnego konta) —
+    superadmin (`superadmin_acts`), żeby wniosek nie utknął.
     """
     return _stage_actor_info(session, node, dept, request)[0]
 
 
+# Powód rezerwy superadmina (`_stage_actor_info`) — wpływa na opis „Czeka na”.
+FALLBACK_SELF = "self"      # wniosek „dla siebie”, nad pracownikiem nie ma nikogo
+FALLBACK_NOBODY = "nobody"  # w strukturze nie ma żadnej osoby uprawnionej
+
+SUPERADMIN_NOBODY_LABEL = "superadmin — brak osoby uprawnionej w strukturze"
+
+
 def _stage_actor_info(session: Session, node: dict, dept: Optional[Department],
                       request: Optional[AccessRequest] = None
-                      ) -> tuple[list[int], bool]:
-    """(adresaci kroku jak w `_stage_actor_ids`, czy to rezerwa „superadmin”)."""
+                      ) -> tuple[list[int], Optional[str]]:
+    """(adresaci kroku jak w `_stage_actor_ids`, powód rezerwy superadmina albo
+    None). Powód (`FALLBACK_SELF` / `FALLBACK_NOBODY`) oznacza, że adresatami
+    są superadmini, bo w strukturze nie ma nikogo innego, kto mógłby działać."""
     ntype = node["type"]
     if ntype in ("manager_approve", "select_permissions"):
         own = dept
     elif ntype == "higher_manager_approve":
         own = session.get(Department, dept.parent_dept_id) if dept and dept.parent_dept_id else None
     else:
-        return [], False
+        return [], None
 
     resp = _responsible_dept(session, own)
     ids: list[int] = []
@@ -1495,6 +1593,7 @@ def _stage_actor_info(session: Session, node: dict, dept: Optional[Department],
     director = _unit_director_id(session, dept)
     worker_id = getattr(request, "worker_user_id", None) if request is not None else None
     own_circle: set[int] = set()
+    worker_dropped = False
     if ntype == "higher_manager_approve":
         if dept is not None:
             # Kierownik / zastępca samej komórki nie wykona akceptacji wyższej
@@ -1503,20 +1602,32 @@ def _stage_actor_info(session: Session, node: dict, dept: Optional[Department],
             own_circle = set(_deputy_ids(session, dept))
             if dept.manager_user_id:
                 own_circle.add(dept.manager_user_id)
+            # To samo dla kierownictwa komórki, którą kieruje pracownik wniosku
+            # (np. komórka bez kierownika, za którą odpowiada pracownik).
+            own_circle |= worker_lead_circle(session, request, dept) if request else set()
             ids = [uid for uid in ids if uid not in own_circle or uid == director]
         if worker_id:
             # Pracownik nie zatwierdza wniosku, który dotyczy jego samego.
+            worker_dropped = worker_id in ids
             ids = [uid for uid in ids if uid != worker_id]
     if not ids and not (ntype == "higher_manager_approve" and director == worker_id):
         _add(director)
-    if (not ids and ntype == "higher_manager_approve" and worker_id
-            and (worker_id in own_circle or worker_id == director)):
-        # Wniosek „dla siebie” kierownika, nad którym w strukturze nie ma nikogo
-        # innego (np. dyrektor jednostki kierujący komórką) — zatwierdzić może
-        # tylko superadmin.
-        from services.permissions import users_with_role
-        return [u.id for u in users_with_role(session, "superadmin")], True
-    return ids, False
+    if any(_is_active_user(session, uid) for uid in ids):
+        return ids, None
+    # Nikt w strukturze nie może wykonać kroku — rezerwa superadmina. Wniosek
+    # „dla siebie” kierownika, nad którym nie ma nikogo innego (np. dyrektor
+    # jednostki kierujący komórką), ma osobny opis.
+    reason = FALLBACK_NOBODY
+    if (ntype == "higher_manager_approve" and worker_id
+            and (worker_dropped or worker_id in own_circle or worker_id == director)):
+        reason = FALLBACK_SELF
+    from services.permissions import users_with_role
+    return [u.id for u in users_with_role(session, "superadmin")], reason
+
+
+def _is_active_user(session: Session, user_id: Optional[int]) -> bool:
+    u = session.get(User, user_id) if user_id else None
+    return bool(u and u.is_active)
 
 
 def _addressee_for_node(session: Session, node: dict, request: AccessRequest,
@@ -1581,6 +1692,8 @@ def waiting_for_label(session: Session, node: Optional[dict], request: AccessReq
     if ntype == "higher_manager_approve":
         return _higher_waiting_label(session, node, request, dept)
     if ntype in ("manager_approve", "select_permissions"):
+        if _stage_actor_info(session, node, dept, request)[1]:
+            return SUPERADMIN_NOBODY_LABEL
         own = dept
         resp = _responsible_dept(session, own)
         # Komórka bez (własnego) kierownika, ale z zastępcą — to on jest
@@ -1611,10 +1724,12 @@ def _higher_waiting_label(session: Session, node: dict, request: AccessRequest,
     (`_stage_actor_info`): bez kierownika i zastępców samej komórki (poza
     dyrektorem jednostki) i bez pracownika, którego wniosek dotyczy."""
     from models import Unit
-    ids, superadmin = _stage_actor_info(session, node, dept, request)
-    if superadmin:
+    ids, fallback = _stage_actor_info(session, node, dept, request)
+    if fallback == FALLBACK_SELF:
         return ("superadmin — poza pracownikiem, którego dotyczy wniosek, nie ma "
                 "przełożonego, który mógłby go zatwierdzić")
+    if fallback:
+        return SUPERADMIN_NOBODY_LABEL
     if not ids:
         return "kierownik nadrzędny (nieprzypisany)"
     parent = (session.get(Department, dept.parent_dept_id)
@@ -1721,6 +1836,17 @@ def _notify_stage(session: Session, request: AccessRequest, node: dict,
             skip.add(actor_user.id)
         emails = _addressee_for_node(session, node, request, dept, skip)
         if not emails:
+            fb_ids, fallback = (_stage_actor_info(session, node, dept, request)
+                                if node.get("type") in STRUCTURE_SENSITIVE_TYPES
+                                else ([], None))
+            if fallback and not any(getattr(session.get(User, uid), "email", None)
+                                    for uid in fb_ids):
+                # Rezerwa superadmina bez adresu e-mail — wniosek czeka na
+                # superadmina, ale nikt o tym nie wie. Ślad w logu dla administratora.
+                _log.warning(
+                    "Wniosek #%s czeka na superadmina (brak osoby uprawnionej "
+                    "w strukturze), ale żadne konto superadmina nie ma adresu "
+                    "e-mail — powiadomienie nie zostało wysłane.", request.id)
             return
         s_name, s_email = _actor_sender(actor_user)
         from services.email_alerts import notify_workflow_stage
@@ -1740,22 +1866,26 @@ def _notify_stage(session: Session, request: AccessRequest, node: dict,
 
 def _notify_request_completed(session: Session, request: AccessRequest,
                               actor_user: Optional[User] = None) -> None:
-    """Wniosek zrealizowany — powiadom KIEROWNIKA, który wybierał uprawnienia.
-
-    To on wystąpił o konkretne uprawnienia i czeka na ich nadanie. Dopiero gdy
-    kroku wyboru nie było (np. wniosek zamknięty wcześniej), wracamy do twórcy
-    zgłoszenia (zwykle kadry). Nadawcą jest osoba z IT, która zrealizowała
-    wniosek (`actor_user`).
-    """
+    """Wniosek zrealizowany — powiadom KIEROWNIKA, który wybierał uprawnienia
+    (wystąpił o konkretne uprawnienia i czeka na ich nadanie), oraz TWÓRCĘ
+    zgłoszenia (zwykle kadry), jeśli to inna osoba — kadry muszą wiedzieć, że
+    pracownik ma już dostęp. Gdy kroku wyboru nie było, adresatem jest tylko
+    twórca. Nadawcą jest osoba z IT, która zrealizowała wniosek (`actor_user`);
+    ona sama maila nie dostaje."""
     try:
-        target_id = request.created_by_id
+        targets: list[int] = []
         step = _selector_step(session, request)
-        if step and step.actor_user_id:
-            target_id = step.actor_user_id
-        if not target_id or (actor_user is not None and target_id == actor_user.id):
-            return   # brak adresata albo realizujący sam jest wnioskodawcą
-        u = session.get(User, target_id)
-        if not u or not u.email:
+        for uid in ((step.actor_user_id if step else None), request.created_by_id):
+            if uid and uid not in targets:
+                targets.append(uid)
+        users = []
+        for uid in targets:
+            if actor_user is not None and uid == actor_user.id:
+                continue   # realizujący sam jest wnioskodawcą
+            u = session.get(User, uid)
+            if u and u.is_active and u.email and all(x.email != u.email for x in users):
+                users.append(u)
+        if not users:
             return
         s_name, s_email = _actor_sender(actor_user)
         # Lista pozycji ODMÓWIONYCH — wnioskodawca ma wiedzieć, czego NIE nadano
@@ -1778,16 +1908,17 @@ def _notify_request_completed(session: Session, request: AccessRequest,
             denied_lines.append(label)
         from services.email_alerts import notify_request_completed
         from services.permissions import user_is_hr
-        defer(session, notify_request_completed, **{
-                "requester_email": u.email,
-                "request_id": request.id,
-                "worker_name": request.worker_name,
-                "from_name": s_name, "from_email": s_email,
-                "denied_lines": denied_lines,
-                # Link w mailu: kierownik → „Moje wnioski”, kadry → Kartoteka.
-                "requester_is_manager": has_role(u, "manager"),
-                "requester_is_hr": user_is_hr(session, u),
-            })
+        for u in users:
+            defer(session, notify_request_completed, **{
+                    "requester_email": u.email,
+                    "request_id": request.id,
+                    "worker_name": request.worker_name,
+                    "from_name": s_name, "from_email": s_email,
+                    "denied_lines": denied_lines,
+                    # Link w mailu: kierownik → „Moje wnioski”, kadry → Kartoteka.
+                    "requester_is_manager": has_role(u, "manager"),
+                    "requester_is_hr": user_is_hr(session, u),
+                })
     except Exception as exc:
         _log.warning("Powiadomienie o zakończeniu wniosku nie wysłane: %s", exc)
 

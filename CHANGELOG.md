@@ -6,6 +6,49 @@ Wersjonowanie: [Semantic Versioning](https://semver.org/lang/pl/).
 
 ## [Unreleased]
 
+## [3.10.0] — 2026-10-23
+
+Poprawki po audycie 3.9.
+
+### Obieg
+- Wniosek, w którym pracownikiem jest kierownik (lub zastępca) komórki, zawsze
+  wymaga akceptacji przełożonego — także gdy krok wykona jego zastępca albo gdy
+  pracownik wykonał którykolwiek krok kierownika.
+- Wnioski bez osoby uprawnionej w strukturze przechodzą na superadmina
+  (powiadomienie e-mail, otwarcie wniosku z pulpitu superadmina).
+- Do komórki zarchiwizowanej lub nieaktywnej nie można złożyć wniosku ani
+  przypisać pracownika; ustanie dla pracownika odpiętego przy likwidacji komórki.
+- Systemowe odebranie (usunięcie grupy) nie jest traktowane jak ustanie.
+- Kadry dostają e-mail o realizacji; temat maila do helpdesku z numerem wniosku;
+  kierownik komórki dowiaduje się, że wniosek prowadzi przełożony.
+- Limity długości i zawartości pól; oświadczenie otwierane przed wysłaniem.
+
+### Struktura i rejestr
+- Likwidacja komórki: wersje robocze nie wyciekają, wnioski częściowo
+  zrealizowane są domykane (zrealizowane pozycje zostają), lista odpiętych osób.
+- Usunięcie przyznanej grupy wymaga hasła, obejmuje posiadaczy bez konta,
+  pozycje już zrealizowane trafiają do odebrania, e-mail do posiadaczy i kierowników.
+- Lista kontrolna: komórka kadrowa, akceptacja wyższa bez osoby uprawnionej,
+  osoby, które straciły funkcję kadr; migawki obejmują konta nieaktywne.
+
+### Bezpieczeństwo
+- Zdarzenia bezpieczeństwa przy nadaniu funkcji kadr (konto w komórce kadrowej,
+  oznaczenie komórki jako kadrowej); import z AD nie zmienia komórki własnego
+  konta administratora.
+- Wspólny, trwały limit prób potwierdzenia hasłem (zmiana hasła, czyszczenie,
+  likwidacja komórki, usuwanie grupy, reset).
+- Dziennik: czyszczenie tylko wpisów starszych niż 24 miesiące (NIS2), ślad
+  czyszczenia zapisywany atomowo i chroniony triggerami, zachowany przy resecie;
+  superadmin nie zamyka zdarzeń o własnych operacjach.
+- Zmiana loginu konta AD weryfikowana w AD (ta sama osoba).
+- Limit logowań liczy tylko nieudane próby; e-mail superadmina przy pierwszym
+  uruchomieniu.
+
+### Interfejs
+- Podsumowanie likwidacji komórki z czytelnymi etykietami, fokus po akcjach,
+  karty błędów zamiast pustych list, tabele przy 1024 px, okna w portalu,
+  słownictwo „kadry”, odmiana liczebników.
+
 ## [3.9.1] — 2026-10-23
 
 ### Naprawiono

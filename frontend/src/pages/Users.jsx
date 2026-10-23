@@ -517,8 +517,9 @@ export default function Users() {
                 </button>
 
                 {unitOpen && (
-                  <div style={{ overflowX: 'auto' }}>
-                    <table className="data-table" style={{ margin: 0, minWidth: 1300 }}>
+                  // Kolumna akcji przyklejona do prawej (task-table) — przy ~1024 px w zasięgu bez przewijania.
+                  <div className="task-table-wrap">
+                    <table className="data-table task-table" style={{ margin: 0, minWidth: 1300 }}>
                       <thead>
                         <tr>
                           <th>Login</th><th>Imię i nazwisko</th><th>E-mail</th><th>Rola</th>
@@ -689,7 +690,9 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
                                          background: 'transparent', padding: 4, font: 'inherit', color: 'inherit',
                                          textAlign: 'left', minHeight: 32 }}
                onClick={() => setEditRoles(true)} title="Kliknij, aby zmienić role"
-               aria-label={`Zmień role użytkownika ${u.username}`}>
+               aria-label={`Zmień role użytkownika ${u.username} (obecnie: ${
+                 [...ownRoles.map(rv => ROLE_META[rv]?.label || rv), ...(deptHr ? ['kadry (z komórki kadrowej)'] : [])]
+                   .join(', ') || 'brak ról'})`}>
             {ownRoles.map(rv => {
               const m = ROLE_META[rv]
               return m ? (
@@ -701,7 +704,7 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
               <span className={`badge ${ROLE_META.hr?.badge || 'badge--info'}`}
                     style={{ fontSize: 10, opacity: 0.85 }}
                     title="Członek komórki kadrowej — pełni funkcję kadr dla wszystkich jednostek">
-                HR (kadry)
+                kadry
               </span>
             )}
           </button>
@@ -746,25 +749,26 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
       </td>
       <td style={{ whiteSpace: 'nowrap' }}>
         <button className="btn btn--ghost btn--sm" style={{ border: 0 }} onClick={toggleActive}
-                title={u.is_active ? 'Dezaktywuj' : 'Aktywuj'} aria-label={u.is_active ? 'Dezaktywuj' : 'Aktywuj'}>
-          <Ban size={15} style={{ color: u.is_active ? 'var(--color-warning)' : 'var(--color-success)' }} />
+                title={u.is_active ? 'Dezaktywuj' : 'Aktywuj'}
+                aria-label={`${u.is_active ? 'Dezaktywuj' : 'Aktywuj'} konto ${u.username}`}>
+          <Ban size={15} aria-hidden="true" style={{ color: u.is_active ? 'var(--color-warning)' : 'var(--color-success)' }} />
         </button>
         {u.auth_type === 'local' && (
           <button className="btn btn--ghost btn--sm" style={{ border: 0 }}
-                  onClick={handleReset} title="Resetuj hasło" aria-label="Resetuj hasło">
-            <KeyRound size={15} />
+                  onClick={handleReset} title="Resetuj hasło" aria-label={`Resetuj hasło konta ${u.username}`}>
+            <KeyRound size={15} aria-hidden="true" />
           </button>
         )}
         {isLocked && (
           <button className="btn btn--ghost btn--sm" style={{ border: 0 }}
-                  onClick={handleUnlock} title="Odblokuj konto" aria-label="Odblokuj konto">
-            <Unlock size={15} style={{ color: 'var(--color-warning)' }} />
+                  onClick={handleUnlock} title="Odblokuj konto" aria-label={`Odblokuj konto ${u.username}`}>
+            <Unlock size={15} aria-hidden="true" style={{ color: 'var(--color-warning)' }} />
           </button>
         )}
         {!(u.roles || [u.role]).includes('superadmin') && (
           <button className="btn btn--ghost btn--sm" style={{ border: 0, color: 'var(--color-error-text)' }}
-                  onClick={handleDelete} title="Usuń" aria-label="Usuń">
-            <Trash2 size={15} />
+                  onClick={handleDelete} title="Usuń konto" aria-label={`Usuń konto ${u.username}`}>
+            <Trash2 size={15} aria-hidden="true" />
           </button>
         )}
       </td>

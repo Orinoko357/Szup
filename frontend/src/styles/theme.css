@@ -227,7 +227,7 @@ button, input, select, textarea, optgroup {
 /* Długi login nie łamie belki — wielokropek. */
 .app-header__who strong { color: var(--color-heading); font-weight: 700;
                           display: inline-block; vertical-align: bottom; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.app-header__who { display: inline-flex; align-items: baseline; min-width: 0; white-space: nowrap; }
+.app-header__who { display: inline-flex; align-items: baseline; gap: 4px; min-width: 0; white-space: nowrap; }
 .app-header__who span { color: var(--color-text-muted); font-weight: 400;
                         overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 320px; }
 .app-header__avatar {
@@ -426,6 +426,9 @@ button, input, select, textarea, optgroup {
   text-decoration: none; line-height: 1; letter-spacing: 0.2px;
 }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+/* aria-disabled: przycisk nieaktywny, ale nadal w kolejności Tab (nie gubi fokusu podczas wysyłki). */
+.btn[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+.btn--danger[aria-disabled="true"]:hover { background: var(--color-error); border-color: var(--color-error); }
 .btn--primary { background: var(--color-navy); color: white; border-color: var(--color-navy); }
 .btn--primary:hover:not(:disabled) { background: var(--color-navy-light); border-color: var(--color-navy-light); }
 /* Akcja główna pozostaje granatowa (złoto = akcent, nie tło przycisku wg identyfikacji WODS) */
@@ -471,6 +474,9 @@ button, input, select, textarea, optgroup {
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .form-check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
 .form-check input[type="checkbox"], .form-check input[type="radio"] { accent-color: var(--color-selected); }
+/* v3.10: wszystkie pola wyboru (także poza .form-check, np. w tabelach i oknach) w kolorze motywu —
+   w trybie ciemnym bez natywnego niebieskiego. */
+input[type="checkbox"], input[type="radio"] { accent-color: var(--color-selected); }
 
 /* Modals */
 .modal-overlay { position: fixed; inset: 0; background: rgba(13,20,36,0.55); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(2px); }
@@ -666,4 +672,5 @@ body.is-scroll-locked { overflow: hidden; }
                     border-radius: 50%; background: var(--color-card); color: var(--color-error); }
 .load-error__title { font-weight: 700; font-size: 14px; }
 .load-error__msg { font-size: 13px; margin-top: 2px; word-break: break-word; }
-.load-error__hint { font-size: 12px; margin-top: 4px; color: var(--color-text-muted); }
+/* Kolor tekstu błędu (nie „muted”) — kontrast ≥ 4,5:1 na --color-error-bg w obu motywach. */
+.load-error__hint { font-size: 12px; margin-top: 4px; color: inherit; }

@@ -135,7 +135,8 @@ def main() -> int:
             else:
                 print("\nUWAGA: brak aktywnych kont operacyjnych (tylko admin/superadmin).")
                 print("Te konta NIE logują się w trybie testowym — potrzebujesz konta")
-                print("hr / manager / it_staff albo zaloguj się superadminem HASŁEM.")
+                print("operacyjnego (manager / it_staff / pracownik komórki kadrowej)")
+                print("albo zaloguj się superadminem HASŁEM.")
 
             print("\nPo odzyskaniu dostepu WYLACZ tryb testowy:")
             print("  python enable_test_mode.py --off        (lub Ustawienia -> Tryb testowy)")

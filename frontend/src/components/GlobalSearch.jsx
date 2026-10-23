@@ -290,6 +290,7 @@ const SEARCH_CSS = `
   transition: border-color .15s, color .15s;
 }
 .szup-search-btn:hover, .szup-search-btn:focus-visible { border-color: var(--color-heading); color: var(--color-heading); outline: none; }
+.szup-search-btn:focus-visible { box-shadow: 0 0 0 2px var(--color-focus-ring); }
 .szup-search-btn__label { flex: 1; text-align: left; }
 .szup-search-btn__kbd {
   font: 600 11px var(--font-mono); padding: 2px 6px; border-radius: 4px;

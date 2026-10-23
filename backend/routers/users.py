@@ -1,19 +1,22 @@
 """
 Router: Zarządzanie użytkownikami.
 
-Superadmin (break-glass): pełny dostęp, może nadawać/odbierać dowolną rolę.
+Superadmin (konto awaryjne): zarządza wszystkimi kontami i nadaje/odbiera
+       dowolną rolę (bez łączenia roli superadmin z rolami operacyjnymi).
 Admin: może zakładać konta i zarządzać użytkownikami z wyjątkiem kont z rolą
        admin lub superadmin (edycja, reset hasła, odblokowanie, dezaktywacja,
        usunięcie — tylko superadmin); nadaje wyłącznie role operacyjne
        (kierownik, IT, podgląd) — ról admin/superadmin nie nadaje ani nie odbiera.
 
 Roli „hr” nie ma (v3.9): pracownikiem kadr jest każdy członek komórki kadrowej
-(Department.is_hr). Superadmin nie łączy swojej roli z rolami operacyjnymi.
+(Department.is_hr). Wejście konta do takiej komórki (formularz, import z AD)
+jest zdarzeniem bezpieczeństwa `user.hr_capability_granted` (medium), a reset
+hasła członka komórki kadrowej — `user.password_reset` (high).
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -26,8 +29,10 @@ from models import (
     User, AuthType, Unit, Department, SecuritySeverity,
     parse_roles, roles_to_json, primary_role, VALID_ROLES, has_role,
 )
-from services.auth_service import hash_password, validate_password_strength
-from services.auth_service import get_current_user
+from services.auth_service import (
+    clean_text_field, get_current_user, hash_password, invalidate_tokens_now,
+    validate_password_strength,
+)
 from services.permissions import (
     require_admin, require_manager, managed_dept_ids,
     users_with_role, manager_scope_ids, SUPERADMIN_FORBIDDEN_ROLES,
@@ -100,6 +105,49 @@ def _roles_granted_event(session: Session, request: Optional[Request], actor: Us
                  "granted": sorted(sensitive)},
         user_id=actor.id, ip=request_meta(request)["ip"],
     )
+
+
+def _hr_capability_event(session: Session, request: Optional[Request], actor: User,
+                         target: User, old_dept_id: Optional[int], *, via: str) -> None:
+    """Konto weszło do komórki kadrowej (Department.is_hr) → zdarzenie medium.
+
+    Zdolność kadrowa (dane pracowników i wnioski we wszystkich jednostkach)
+    nie jest rolą, więc nie obejmuje jej `_roles_granted_event` — bez tego
+    admin mógłby po cichu założyć „marionetkę” w komórce kadrowej. Przejście
+    między dwiema komórkami kadrowymi niczego nie poszerza (bez zdarzenia).
+    `via` — skąd zmiana: "create", "update", "ldap_import"."""
+    if not target.department_id or target.department_id == old_dept_id:
+        return
+    new_dept = session.get(Department, target.department_id)
+    if not new_dept or not new_dept.is_hr:
+        return
+    old_dept = session.get(Department, old_dept_id) if old_dept_id else None
+    if old_dept is not None and old_dept.is_hr:
+        return
+    from services.audit import request_meta
+    from services.security_events import emit as emit_security_event
+    emit_security_event(
+        session, event_type="user.hr_capability_granted", source="users",
+        severity=SecuritySeverity.medium,
+        summary=(f"Konto {target.username} uzyskało zdolność kadrową — przypisane do "
+                 f"komórki kadrowej „{new_dept.name}” przez {actor.username}"),
+        details={"target_user_id": target.id, "target_username": target.username,
+                 "department_id": new_dept.id, "department_name": new_dept.name,
+                 "old_department_id": old_dept_id, "via": via},
+        user_id=actor.id, ip=request_meta(request)["ip"],
+    )
+
+
+def _clean_identity(data, *, username: bool = False) -> None:
+    """Limity pól konta (N2): login, imię i nazwisko, e-mail — najwyżej 200
+    znaków, bez znaków sterujących. Modyfikuje `data` w miejscu (przycięte
+    spacje); błąd = 400."""
+    if username:
+        data.username = clean_text_field(data.username, "login", required=True)
+    if data.full_name is not None:
+        data.full_name = clean_text_field(data.full_name, "imię i nazwisko")
+    if data.email is not None:
+        data.email = clean_text_field(data.email, "e-mail")
 
 
 def _guard_admin_account(current_user: User, target: User) -> None:
@@ -324,6 +372,11 @@ def _effective_permissions(session: Session, user_id: int) -> dict:
             if getattr(it, "denied", False):
                 continue
             if _item_kind(it, r) == "revoke":
+                current.pop(key, None)
+                continue
+            # Nadanie odebrane systemowo (np. usunięcie posiadanej grupy przez
+            # superadmina) — wskazuje wniosek odebrania; już nie jest posiadane.
+            if getattr(it, "revoked_by_request_id", None):
                 current.pop(key, None)
                 continue
             s = sys_map.get(it.system_id); p = perm_map.get(it.permission_id)
@@ -657,6 +710,21 @@ def my_workers(
             ).all()
         }
 
+    # Wniosek przełożonego dla pracownika komórki, która ma WŁASNEGO aktywnego
+    # kierownika, jest przy składaniu automatycznie przejmowany (zatrzymany
+    # u przełożonego) — front uprzedza o tym przy wyborze pracownika.
+    from services.permissions import has_active_manager, is_department_manager_or_deputy
+    take_over_cache: dict[int, bool] = {}
+
+    def _will_take_over(d: Optional[Department]) -> bool:
+        if d is None:
+            return False
+        if d.id not in take_over_cache:
+            take_over_cache[d.id] = bool(
+                not is_department_manager_or_deputy(session, current_user, d)
+                and has_active_manager(session, d))
+        return take_over_cache[d.id]
+
     result = []
     for u in workers:
         d = depts_map.get(u.department_id)
@@ -677,6 +745,7 @@ def my_workers(
             # dopiero kierownik II stopnia, więc nie pokazuje go przy tworzeniu.
             "requires_higher_approval": bool(d.requires_higher_approval) if d else False,
             "is_self": False,
+            "will_take_over": _will_take_over(d),
             # Aktualnie posiadane uprawnienia (nadane − odebrane). Kierownik
             # widzi je na liście, a formularz nowego wniosku ma je wstępnie
             # zaznaczone (wniosek o zmianę = modyfikacja obecnego stanu).
@@ -704,6 +773,7 @@ def my_workers(
         "is_escalated": False,
         "requires_higher_approval": bool(md.requires_higher_approval) if md else False,
         "is_self": True,
+        "will_take_over": False,
         "permissions": _effective_permissions(session, me.id)["permissions"],
     })
 
@@ -862,6 +932,7 @@ def create_user(
 ):
     _validate_roles(data.roles)
     _guard_admin_role_change(current_user, data.roles)
+    _clean_identity(data, username=True)
     from services.ldap_service import normalize_login, find_user_by_login
     if data.auth_type == AuthType.ldap:
         # Konto AD zapisujemy pod loginem znormalizowanym — tak samo jak przy
@@ -877,8 +948,9 @@ def create_user(
         validate_password_strength(data.password)
 
     if data.department_id is not None:
-        if not session.get(Department, data.department_id):
-            raise HTTPException(400, "Wskazana komórka organizacyjna nie istnieje")
+        # Komórka zlikwidowana (archiwum) albo nieaktywna nie przyjmuje kont (F8).
+        from services.structure import live_department
+        live_department(session, data.department_id)
 
     # Wybór password_hash:
     #   - lokalne z hasłem  → bcrypt
@@ -927,6 +999,7 @@ def create_user(
         "department_id": user.department_id,
     })
     _roles_granted_event(session, request, current_user, user, set(parse_roles(user.roles)))
+    _hr_capability_event(session, request, current_user, user, None, via="create")
     return _user_read(user, session=session, warning=warning)
 
 
@@ -942,6 +1015,7 @@ def update_user(
     if not user:
         raise HTTPException(404, "Użytkownik nie istnieje")
     _guard_admin_account(current_user, user)
+    _clean_identity(data)
     if data.roles is not None:
         _validate_roles(data.roles)
         _guard_admin_role_change(current_user, data.roles, parse_roles(user.roles))
@@ -987,8 +1061,9 @@ def update_user(
     # by odpiąć od komórki). Rozróżniamy „nie podano" od „podano null".
     if "department_id" in data.model_fields_set:
         if data.department_id:
-            if not session.get(Department, data.department_id):
-                raise HTTPException(400, "Wskazana komórka organizacyjna nie istnieje")
+            if data.department_id != user.department_id:
+                from services.structure import live_department
+                live_department(session, data.department_id)
             user.department_id = data.department_id
         else:
             user.department_id = None
@@ -1006,12 +1081,24 @@ def update_user(
         if release_manager_posts(session, user.id, before=stage_before):
             session.commit(); session.refresh(user)
     elif data.roles is not None or "department_id" in data.model_fields_set:
-        from services.org_sync import sync_after_user_change, release_manager_posts
+        from services.org_sync import (
+            after_department_change, release_manager_posts, sync_after_user_change,
+        )
         changed = False
+        if user.department_id != before["department_id"]:
+            # Przeniesienie do innej komórki zwalnia stanowiska w dawnej (kierownik
+            # nie kieruje dalej starą komórką). Rolę ustala admin — bez jej
+            # automatycznego odbierania.
+            moved = after_department_change(session, user, before["department_id"],
+                                            drop_unused_role=False)
+            changed = bool(moved["released_dept_ids"] or moved["adopted"])
+            warning = moved["warning"]
         if "manager" in parse_roles(user.roles):
-            changed, warning = sync_after_user_change(session, user)
+            adopted, sync_warning = sync_after_user_change(session, user)
+            changed = changed or adopted
+            warning = warning or sync_warning
         else:
-            changed = release_manager_posts(session, user.id)
+            changed = release_manager_posts(session, user.id) or changed
         if changed:
             session.commit(); session.refresh(user)
 
@@ -1026,6 +1113,8 @@ def update_user(
                     target=user, details={"changes": diff})
         _roles_granted_event(session, request, current_user, user,
                              set(after["roles"]) - set(before["roles"]))
+        _hr_capability_event(session, request, current_user, user,
+                             before["department_id"], via="update")
     return _user_read(user, session=session, warning=warning)
 
 
@@ -1050,14 +1139,17 @@ def reset_password(
     user.must_change_password = True
     user.failed_login_count = 0
     user.locked_until = None
-    # Margines -5s żeby nowy token wystawiony zaraz po reset'cie miał iat > tokens_valid_from.
-    # JWT iat jest w całych sekundach, datetime w bazie ma mikrosekundy.
-    user.tokens_valid_from = (datetime.utcnow() - timedelta(seconds=5)).replace(microsecond=0)
+    # Wszystkie dotychczasowe sesje konta tracą ważność.
+    invalidate_tokens_now(user)
     session.add(user); session.commit()
     _audit_user(session, request, current_user, action="user.password_reset", target=user)
     # Kto zna nowe hasło, może działać jako to konto — przy kontach z rolą
-    # operacyjną lub administracyjną to zdarzenie wysokie (zamyka superadmin).
+    # operacyjną lub administracyjną oraz członkach komórki kadrowej (zdolność
+    # kadrowa) to zdarzenie wysokie (zamyka superadmin).
+    from services.permissions import user_is_hr
     sensitive = set(parse_roles(user.roles)) & (OPERATIONAL_ROLES | ADMIN_ROLES)
+    if user_is_hr(session, user):
+        sensitive.add("hr")
     if sensitive:
         from services.audit import request_meta
         from services.security_events import emit as emit_security_event
@@ -1161,14 +1253,26 @@ class LdapUserImportResult(BaseModel):
     reactivation_skipped: int = 0
 
 
-def _build_dn_to_dept_map(session: Session) -> dict[str, int]:
-    """Mapa znormalizowany DN OU → Department.id."""
+def _build_dn_to_dept_map(session: Session) -> tuple[dict[str, int], set[str]]:
+    """Mapa znormalizowany DN OU → Department.id (tylko komórki niezarchiwizowane)
+    oraz zbiór DN przypisanych KILKU komórkom naraz.
+
+    DN niejednoznacznego nie rozstrzygamy (dawniej wygrywała komórka o wyższym
+    id — dopisanie DN do nowej komórki, np. kadrowej, przenosiło importem całą
+    OU). Osobom z takiej OU import nie zmienia komórki."""
     from services.ldap_service import normalize_dn
     out: dict[str, int] = {}
-    for d in session.exec(select(Department)).all():
-        if d.ldap_dn:
-            out[normalize_dn(d.ldap_dn)] = d.id
-    return out
+    ambiguous: set[str] = set()
+    for d in session.exec(select(Department).order_by(Department.id)).all():
+        if not d.ldap_dn or getattr(d, "archived_at", None) is not None:
+            continue
+        key = normalize_dn(d.ldap_dn)
+        if key in out and out[key] != d.id:
+            ambiguous.add(key)
+        out.setdefault(key, d.id)
+    for key in ambiguous:
+        out.pop(key, None)
+    return out, ambiguous
 
 
 def _build_dn_to_unit_map(session: Session) -> dict[str, int]:
@@ -1221,9 +1325,9 @@ def ldap_users_preview(
     except Exception as exc:
         raise HTTPException(502, f"Błąd połączenia z LDAP: {exc}")
 
-    dept_by_dn = _build_dn_to_dept_map(session)
+    dept_by_dn, ambiguous_dn = _build_dn_to_dept_map(session)
     unit_by_dn = _build_dn_to_unit_map(session)
-    _require_structure(dept_by_dn, unit_by_dn)
+    _require_structure(dept_by_dn or ambiguous_dn, unit_by_dn)
     dept_names = {d.id: d.name for d in session.exec(select(Department)).all()}
     unit_names = {u.id: u.name for u in session.exec(select(Unit)).all()}
     from services.ldap_service import normalize_login
@@ -1235,9 +1339,17 @@ def ldap_users_preview(
     from services.ldap_service import parent_dn as _parent_of
 
     def _resolve_dept_unit(start_dn: str) -> tuple[Optional[int], Optional[int]]:
-        """Idzie w górę po parent-DN dopóki nie trafi na dopasowany Department/Unit."""
+        """Idzie w górę po parent-DN dopóki nie trafi na dopasowany Department/Unit.
+        OU przypisana kilku komórkom: bez komórki (tylko jednostka)."""
         current = normalize_dn(start_dn)
         while current:
+            if current in ambiguous_dn:
+                up = current
+                while up:
+                    if up in unit_by_dn:
+                        return None, unit_by_dn[up]
+                    up = normalize_dn(_parent_of(up))
+                return None, None
             if current in dept_by_dn:
                 d_id = dept_by_dn[current]
                 u_id = None
@@ -1313,7 +1425,7 @@ def ldap_users_import(
     from services.ldap_service import (
         fetch_ldap_users, normalize_dn, normalize_login, find_user_by_login, is_valid_login,
     )
-    from services.org_sync import release_manager_posts
+    from services.org_sync import after_department_change, release_manager_posts
 
     cfg = session.exec(select(LdapSettings)).first()
     if not cfg or not cfg.enabled:
@@ -1332,16 +1444,24 @@ def ldap_users_import(
     wanted = {normalize_login(n) for n in data.usernames}
     for u in users_raw:
         u["username"] = normalize_login(u["username"])
-    dept_by_dn = _build_dn_to_dept_map(session)
+    dept_by_dn, ambiguous_dn = _build_dn_to_dept_map(session)
     unit_by_dn = _build_dn_to_unit_map(session)
-    _require_structure(dept_by_dn, unit_by_dn)
+    _require_structure(dept_by_dn or ambiguous_dn, unit_by_dn)
 
     from services.ldap_service import parent_dn as _parent_of
 
-    def _resolve_dept_unit(start_dn: str) -> tuple[Optional[int], Optional[int]]:
-        """Nearest dopasowany Department (+ obejmujący Unit) w górę po DN."""
+    def _resolve_dept_unit(start_dn: str) -> tuple[Optional[int], Optional[int], Optional[str]]:
+        """Najbliższa dopasowana komórka (+ obejmująca jednostka) w górę po DN.
+        Trzeci element: DN OU przypisanej kilku komórkom (wtedy bez komórki)."""
         current = normalize_dn(start_dn)
         while current:
+            if current in ambiguous_dn:
+                up = current
+                while up:
+                    if up in unit_by_dn:
+                        return None, unit_by_dn[up], current
+                    up = normalize_dn(_parent_of(up))
+                return None, None, current
             if current in dept_by_dn:
                 d_id = dept_by_dn[current]
                 u_id = None
@@ -1350,11 +1470,11 @@ def ldap_users_import(
                     if up in unit_by_dn:
                         u_id = unit_by_dn[up]; break
                     up = normalize_dn(_parent_of(up))
-                return d_id, u_id
+                return d_id, u_id, None
             if current in unit_by_dn:
-                return None, unit_by_dn[current]
+                return None, unit_by_dn[current], None
             current = normalize_dn(_parent_of(current))
-        return None, None
+        return None, None, None
 
     created = updated = skipped = conflicts = reactivation_skipped = 0
     details: list[str] = []
@@ -1411,7 +1531,10 @@ def ldap_users_import(
             details.append(f"⚠ {u['username']} — wyłączony w AD, pominięty")
             continue
 
-        dept_id, unit_id = _resolve_dept_unit(u["parent_dn"])
+        dept_id, unit_id, ambiguous = _resolve_dept_unit(u["parent_dn"])
+        if ambiguous:
+            details.append(f"⚠ {u['username']} — OU „{ambiguous}” jest przypisana kilku "
+                           "komórkom; komórki nie zmieniono (popraw powiązania w strukturze)")
         # Importujemy WYŁĄCZNIE osoby z powiązanych jednostek organizacyjnych —
         # jeśli OU użytkownika nie mieści się w zaimportowanej strukturze, pomijamy.
         if dept_id is None and unit_id is None:
@@ -1419,6 +1542,7 @@ def ldap_users_import(
             details.append(f"⚠ {u['username']} — poza powiązaną strukturą OU, pominięty")
             continue
         ndn = normalize_dn(u["dn"])
+        guid = u.get("guid") or None
 
         existing = find_user_by_login(session, u["username"])
         if existing and existing.auth_type != AuthType.ldap:
@@ -1434,21 +1558,43 @@ def ldap_users_import(
                 continue
             old = {"full_name": existing.full_name, "email": existing.email,
                    "department_id": existing.department_id, "title": existing.title or ""}
+            new_dept_id = dept_id or existing.department_id
+            if existing.id == current_user.id and new_dept_id != existing.department_id:
+                # Własnej komórki nie zmienia się importem — tak jak w edycji konta
+                # (komórka kadrowa dałaby sobie samemu zdolność kadrową).
+                new_dept_id = existing.department_id
+                details.append(f"⚠ {u['username']} — to Twoje konto: komórki nie zmieniono "
+                               "(własną komórkę zmienia inny administrator lub superadmin)")
             existing.full_name    = u["full_name"] or existing.full_name
             existing.email        = u["email"] or existing.email
-            existing.department_id = dept_id or existing.department_id
+            existing.department_id = new_dept_id
             existing.ldap_dn      = ndn
+            if guid:
+                existing.ldap_guid = guid
             # Stanowisko: AD jest źródłem prawdy — także wyczyszczenie w AD.
             existing.title        = u.get("title") or ""
             # is_active: import tylko DEZAKTYWUJE (gałąź wyżej). Konta wyłączonego
             # w SZUP nie włączamy po cichu — reaktywacja wyłącznie ręczna.
-            session.add(existing); session.commit()
+            session.add(existing)
+            moved = None
+            if existing.department_id != old["department_id"]:
+                # Przeniesienie w AD: stanowiska w dawnej komórce są zwalniane,
+                # wolne stanowisko w nowej obejmuje kierownik (org_sync).
+                moved = after_department_change(session, existing, old["department_id"])
+            session.commit(); session.refresh(existing)
             new = {"full_name": existing.full_name, "email": existing.email,
                    "department_id": existing.department_id, "title": existing.title or ""}
             diff = {k: {"old": old[k], "new": new[k]} for k in old if old[k] != new[k]}
             if diff:
+                extra = {}
+                if moved and (moved["released_dept_ids"] or moved["adopted"]
+                              or moved["role_revoked"]):
+                    extra = {"structure": {k: moved[k] for k in (
+                        "released_dept_ids", "adopted", "role_revoked")}}
                 _audit_user(session, request, current_user, action="user.updated_ad",
-                            target=existing, details={"changes": diff})
+                            target=existing, details={"changes": diff, **extra})
+            _hr_capability_event(session, request, current_user, existing,
+                                 old["department_id"], via="ldap_import")
             updated += 1
             if not existing.is_active:
                 reactivation_skipped += 1
@@ -1468,10 +1614,13 @@ def ldap_users_import(
                 is_active=u["is_enabled_in_ad"],
                 department_id=dept_id,
                 ldap_dn=ndn,
+                ldap_guid=guid,
             )
             session.add(new_user); session.commit()
             _audit_user(session, request, current_user, action="user.created_ad",
                         target=new_user, details={"department_id": dept_id})
+            _hr_capability_event(session, request, current_user, new_user, None,
+                                 via="ldap_import")
             created += 1
             details.append(f"+ {u['username']} — utworzony")
 

@@ -228,8 +228,9 @@ def test_hr_request_for_manager_requires_superior_approval(api):
     det = _det(api, rid, kier)
     # Etykieta „Wyślij do akceptacji” — kolejny krok to akceptacja przełożonego.
     assert det["next_node_type"] == "higher_manager_approve"
-    # Kadrowa (która nie wykona kroku) widzi zwykłą ścieżkę.
-    assert _det(api, rid, api.login("hr"))["next_node_type"] == "it_execute"
+    # Wniosek dla kierownika komórki zawsze zatwierdza przełożony (3.10) —
+    # także z perspektywy kadrowej, która kroku nie wykona.
+    assert _det(api, rid, api.login("hr"))["next_node_type"] == "higher_manager_approve"
     r = _act(api, rid, kier, "select", items=_items(w), declaration=None)
     assert r.status_code == 200, r.text          # bez oświadczenia — nie idzie do IT
     assert api.node_type(rid, kier) == "higher_manager_approve"

@@ -46,7 +46,7 @@ export default function RequestTypes() {
         <div>
           <h1 className="page-header__title">Typy wniosków</h1>
           <div className="page-header__sub">
-            Każdy typ wniosku ma przypisany szablon obiegu. HR/kierownik wybiera typ przy tworzeniu wniosku.
+            Każdy typ wniosku ma przypisany szablon obiegu. Typ wniosku wynika z rodzaju zgłoszenia (kadry: nowy pracownik, ustanie; kierownik: zmiana uprawnień).
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>

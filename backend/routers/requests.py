@@ -330,6 +330,77 @@ class LinkWorker(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Limity pól wejściowych — 400 z polskim komunikatem zamiast przyjmowania
+# megabajtowych nazwisk, znaków sterujących czy tysięcy zdublowanych pozycji
+# ---------------------------------------------------------------------------
+
+TEXT_MAX_LEN = 200        # nazwisko, stanowisko, e-mail, telefon, login AD
+COMMENT_MAX_LEN = 4000    # uwagi, uzasadnienia, powody odmowy
+ITEMS_MAX = 500           # pozycji w jednym wniosku / jednej akcji
+
+
+def _check_text(value: Optional[str], label: str, *, max_len: int = TEXT_MAX_LEN,
+                multiline: bool = False) -> None:
+    """Pole tekstowe: najwyżej `max_len` znaków i bez znaków sterujących
+    (w polach wielowierszowych dozwolone są tylko nowa linia i tabulator)."""
+    if value is None:
+        return
+    if len(value) > max_len:
+        raise HTTPException(400, f"Pole „{label}” może mieć najwyżej {max_len} znaków.")
+    allowed = "\n\t" if multiline else ""
+    if any((ord(c) < 32 or 127 <= ord(c) < 160) and c not in allowed for c in value):
+        raise HTTPException(400, f"Pole „{label}” zawiera niedozwolone znaki sterujące.")
+
+
+def _check_comment(value: Optional[str], label: str = "Uwagi") -> None:
+    _check_text(value, label, max_len=COMMENT_MAX_LEN, multiline=True)
+
+
+def _check_items_input(items: list, request_kind: str = "grant",
+                       label: str = "Pozycje wniosku") -> None:
+    """Lista pozycji: najwyżej `ITEMS_MAX`, bez powtórzeń tej samej pary
+    (oprogramowanie, uprawnienie) w tym samym kierunku i z krótkimi wartościami
+    pól dodatkowych."""
+    if len(items) > ITEMS_MAX:
+        raise HTTPException(400, f"{label}: najwyżej {ITEMS_MAX} pozycji w jednym wniosku.")
+    seen: set[tuple] = set()
+    for it in items:
+        key = (it.system_id, it.permission_id, _item_kind_for(it, request_kind))
+        if key in seen:
+            raise HTTPException(400,
+                f"{label}: to samo uprawnienie (id {it.permission_id}) występuje na liście "
+                f"więcej niż raz — usuń powtórzenie.")
+        seen.add(key)
+        for k, v in (it.custom_values or {}).items():
+            _check_text(k, "Nazwa pola uprawnienia")
+            _check_comment(v, f"Wartość pola „{k[:40]}”")
+
+
+def _check_create_input(data: "RequestCreate") -> None:
+    """Limity pól nowego wniosku (dane pracownika i pozycje)."""
+    if not (data.worker_name or "").strip():
+        raise HTTPException(400, "Wpisz imię i nazwisko pracownika.")
+    for value, label in ((data.worker_name, "Imię i nazwisko"),
+                         (data.worker_email, "E-mail"),
+                         (data.worker_phone, "Telefon"),
+                         (data.worker_position, "Stanowisko")):
+        _check_text(value, label)
+    _check_items_input(data.items, data.kind)
+
+
+def _check_action_input(data: "WorkflowActionIn", request_kind: str) -> None:
+    """Limity pól akcji obiegu (uwagi, pozycje, odmowy, login AD)."""
+    _check_comment(data.comment)
+    _check_text(data.ad_username, "Login AD")
+    _check_items_input(data.items, request_kind)
+    _check_items_input(data.added_items, "grant", label="Pozycje dodane przez IT")
+    if len(data.denials) > ITEMS_MAX:
+        raise HTTPException(400, f"Najwyżej {ITEMS_MAX} odmów w jednej akcji.")
+    for d in data.denials:
+        _check_comment(d.comment, "Powód odmowy")
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -577,17 +648,25 @@ def _attach_node_info(session: Session, out: list[dict], rows: list, user: User)
     `can_take_over` (czy `user` może wniosek przejąć jako przełożony)
     i `can_release` (czy `user` może oddać przejęcie).
 
+    `declaration_required` — czy wysłanie bieżącego kroku przez `user` (wybór /
+    akceptacja kierujące wniosek do IT) wymaga oświadczenia wnioskującego; front
+    otwiera wtedy okno oświadczenia przed wysyłką zamiast czekać na 428. Na
+    kroku wyboru zależy to od wysyłanych pozycji: True, gdy wniosek nie jest
+    czystym odebraniem albo ma już pozycję nadania (serwer i tak sprawdza
+    pozycje po wyborze — 428 zostaje siatką bezpieczeństwa).
+
     Przejęcie, które wygasło (przejmujący nieaktywny albo nie jest już
     przełożonym), na etapie kierownika jest pokazywane jako brak przejęcia."""
     from services.workflow import (
         MANAGER_STAGE_TYPES, can_act, is_manager_stage, can_take_over, can_release,
-        effective_taker_id, landing_node_type, request_workflow,
+        effective_taker_id, grants_permissions, landing_node_type, request_workflow,
     )
     by_id = {r.id: r for r in rows}
     for row in out:
         r = by_id[row["id"]]
         node_type, act = None, False
         stage, take, release, next_type = False, False, False, None
+        declaration = False
         # Instancja i graf zwykle już w cache sesji (_serialize_request / preload).
         inst, node = request_workflow(session, r)
         if node:
@@ -604,6 +683,12 @@ def _attach_node_info(session: Session, out: list[dict], rows: list, user: User)
                 next_type = landing_node_type(session, inst, r, "approve", actor_user=user)
             except Exception:   # podpowiedź dla etykiety — nie może wywrócić listy
                 next_type = None
+            if act and next_type == "it_execute" and node_type in (
+                    *MANAGER_STAGE_TYPES, "higher_manager_approve"):
+                declaration = bool(
+                    (node_type == "select_permissions"
+                     and (getattr(r, "kind", None) or "grant") != "revoke")
+                    or grants_permissions(session, r))
             if stage:
                 take = can_take_over(session, r, user, node_type, dept)[0]
                 release = can_release(session, r, user, node_type, dept)
@@ -621,6 +706,7 @@ def _attach_node_info(session: Session, out: list[dict], rows: list, user: User)
                                and getattr(r, "draft_saved_at", None))
         row["can_take_over"] = take
         row["can_release"] = release
+        row["declaration_required"] = declaration
 
 
 def _item_kind(item, request_kind: str) -> str:
@@ -938,13 +1024,15 @@ def workflow_dashboard(
             if e:
                 pending.append(e); seen_ids.add(r.id)
 
-    # 3) Superadmin w obiegu nie działa — z jednym wyjątkiem: akceptacja wyższa
-    #    wniosku „dla siebie” kierownika, nad którym nie ma nikogo w strukturze
-    #    (`services.workflow.superadmin_acts`). Takie wnioski też trafiają na pulpit.
+    # 3) Superadmin w obiegu nie działa — z jednym wyjątkiem: krok etapu
+    #    kierownika albo akceptacji wyższej, którego w strukturze nie może wykonać
+    #    nikt inny (`services.workflow.superadmin_acts`). Takie wnioski też
+    #    trafiają na pulpit.
     if has_role(user, "superadmin"):
+        from services.workflow import STRUCTURE_SENSITIVE_TYPES
         for r in session.exec(
             select(AccessRequest)
-            .where(AccessRequest.current_node_type == "higher_manager_approve")
+            .where(col(AccessRequest.current_node_type).in_(list(STRUCTURE_SENSITIVE_TYPES)))
             .where(col(AccessRequest.status).notin_([RequestStatus.completed, RequestStatus.rejected]))
         ).all():
             if r.id in seen_ids:
@@ -1029,11 +1117,13 @@ def create_request(
     if data.request_type_id is None:
         raise HTTPException(400,
             "Wybierz typ wniosku — bez niego wniosku nie można skierować do obiegu.")
+    _check_create_input(data)
     if not session.get(Unit, data.unit_id):
         raise HTTPException(400, "Jednostka nie istnieje")
-    dept = session.get(Department, data.department_id)
-    if not dept:
-        raise HTTPException(400, "Wydział nie istnieje")
+    # Komórka zlikwidowana przez superadmina (archiwum) albo nieaktywna nie
+    # przyjmuje wniosków — wniosek stałby bez kierownika i bez końca (400).
+    from services.structure import live_department
+    dept = live_department(session, data.department_id)
     # Jednostka musi być jednostką komórki — od niej zależą zakres kadr (HR)
     # i dostępność systemów, więc niezgodna para obchodziłaby oba ograniczenia.
     if dept.unit_id != data.unit_id:
@@ -1065,10 +1155,16 @@ def create_request(
         raise HTTPException(400,
             "Wniosek o odebranie/zmianę uprawnień wymaga wskazania pracownika")
     if worker_user_id is not None:
-        wu = session.get(User, worker_user_id)
+        wu = session.get(User, worker_user_id) if _db_int_ok(worker_user_id) else None
         if not wu:
             raise HTTPException(400, "Wskazany pracownik nie istnieje")
-        if wu.department_id != data.department_id:
+        # Pracownik bez komórki (odpięty przy likwidacji komórki przez
+        # superadmina) nadal może mieć uprawnienia — wniosek o ustanie
+        # stosunku pracy składa się wtedy do dowolnej aktualnej komórki
+        # wskazanej przez składającego (jej kierownik wykona wybór). Komórki
+        # nie bierzemy z dawnych wniosków: zwykle jest już zarchiwizowana.
+        orphan_revoke = kind == "revoke" and wu.department_id is None
+        if wu.department_id != data.department_id and not orphan_revoke:
             raise HTTPException(400,
                 "Wybrany pracownik nie należy do wskazanego wydziału")
     if kind == "revoke":
@@ -1248,6 +1344,7 @@ def _finish_creation_take_over(session: Session, req: AccessRequest, user: User)
     _discard_stage_mail(session, req.id, ntype)
     record_request_event(session, req.id, "take_over", actor_user=user,
                          note="Wniosek złożony przez przełożonego")
+    _notify_held_by_superior(session, req, user)
     try:
         record_event(
             session, action="request.taken_over",
@@ -1260,6 +1357,27 @@ def _finish_creation_take_over(session: Session, req: AccessRequest, user: User)
     except Exception:
         _log.exception(AUDIT_WRITE_FAILED_MSG)
     session.flush()
+
+
+def _notify_held_by_superior(session: Session, req: AccessRequest, taker: User) -> None:
+    """Jeden e-mail do kierownika komórki: wniosek dla jego komórki złożył
+    i prowadzi przełożony (przejęcie przy składaniu) — bez tego kierownik
+    w ogóle nie wiedziałby o wniosku."""
+    try:
+        from services.after_commit import defer
+        from services.email_alerts import notify_request_held_by_superior
+        dept = session.get(Department, req.department_id) if req.department_id else None
+        mgr = session.get(User, dept.manager_user_id) if dept and dept.manager_user_id else None
+        if not mgr or not mgr.is_active or not mgr.email or mgr.id == taker.id:
+            return
+        taker_name = taker.full_name or taker.username
+        defer(session, notify_request_held_by_superior,
+              to_address=mgr.email, request_id=req.id, worker_name=req.worker_name,
+              dept_name=dept.name, taker_name=taker_name,
+              from_name=taker_name, from_email=taker.email)
+    except Exception as exc:
+        _log.warning("Powiadomienie kierownika o wniosku przełożonego nie zostało "
+                     "zlecone: %s", exc)
 
 
 def _auto_manager_steps(session: Session, req: AccessRequest, dept: Optional[Department],
@@ -1642,16 +1760,44 @@ def _worker_permissions(session: Session, worker_user_id: int) -> list[dict]:
     return list(_effective_permissions(session, worker_user_id).get("permissions") or [])
 
 
+# Przedrostek uwag systemowego wniosku o odebranie z wersji 3.9 (przed
+# znacznikiem `[SYSTEM] ` — `services.structure.is_system_request`).
+LEGACY_SYSTEM_REVOKE_PREFIX = "Usunięcie grupy uprawnień"
+
+
+def _is_system_revoke(session: Session, r: AccessRequest) -> bool:
+    """Czy zrealizowany wniosek o odebranie jest SYSTEMOWY (usunięcie grupy
+    uprawnień przez superadmina), a nie wnioskiem o ustanie stosunku pracy.
+
+    Rozpoznanie: `services.structure.is_system_request` (bez typu wniosku,
+    uwagi z przedrostkiem `[SYSTEM] `). Wnioski systemowe sprzed znacznika
+    (3.9) — bez typu i bez instancji obiegu, z uwagami „Usunięcie grupy
+    uprawnień…” albo założone przez superadmina (który zwykłych wniosków nie
+    składa). Wniosek z obiegiem nigdy nie jest systemowy."""
+    from services.structure import is_system_request
+    from services.workflow import instance_of
+    if is_system_request(r):
+        return True
+    if r.request_type_id is not None or instance_of(session, r) is not None:
+        return False
+    if (r.manager_comment or "").startswith(LEGACY_SYSTEM_REVOKE_PREFIX):
+        return True
+    creator = session.get(User, r.created_by_id) if r.created_by_id else None
+    return bool(creator and has_role(creator, "superadmin"))
+
+
 def _terminated_since(session: Session, r: AccessRequest) -> Optional[str]:
     """Powód, dla którego nadanie uprawnień z wniosku `r` wymaga potwierdzenia
     (`confirm_after_termination`): konto pracownika jest nieaktywne albo po
-    złożeniu wniosku zrealizowano wniosek o ustanie stosunku pracy. None — brak."""
+    złożeniu wniosku zrealizowano wniosek o ustanie stosunku pracy. Systemowe
+    odebranie (usunięcie grupy uprawnień — `_is_system_revoke`) ustaniem nie
+    jest. None — brak."""
     if not r.worker_user_id:
         return None
     wu = session.get(User, r.worker_user_id)
     if wu is not None and not wu.is_active:
         return "konto pracownika jest nieaktywne"
-    term = session.exec(
+    term = next((t for t in session.exec(
         select(AccessRequest)
         .where(AccessRequest.worker_user_id == r.worker_user_id)
         .where(AccessRequest.kind == "revoke")
@@ -1659,7 +1805,7 @@ def _terminated_since(session: Session, r: AccessRequest) -> Optional[str]:
         .where(AccessRequest.id != r.id)
         .where(col(AccessRequest.completed_at) >= r.created_at)
         .order_by(col(AccessRequest.completed_at).desc())
-    ).first()
+    ).all() if not _is_system_revoke(session, t)), None)
     if term:
         when = term.completed_at.strftime("%Y-%m-%d") if term.completed_at else ""
         return f"po złożeniu wniosku zrealizowano wniosek o ustanie stosunku pracy #{term.id} ({when})"
@@ -1804,17 +1950,41 @@ SELF_REQUEST_NO_SUPERIOR_MSG = (
     "Wniosek dotyczy Ciebie, a obieg tego typu nie ma etapu akceptacji przełożonego — "
     "wniosku „dla siebie” nie możesz wysłać do realizacji sam. Poproś przełożonego "
     "o przejęcie wniosku.")
+# Wniosek dla kierownika komórki (albo z krokiem wykonanym przez niego samego),
+# który wysyła jego zastępca albo podwładny.
+SELF_REQUEST_FOR_MANAGER_MSG = (
+    "Wniosek dotyczy kierownika komórki (albo kierownik wykonał w nim krok dla siebie), "
+    "a obieg tego typu nie ma etapu akceptacji przełożonego — taki wniosek musi "
+    "zatwierdzić przełożony. Poproś przełożonego o przejęcie wniosku.")
 
 
 def _self_request_blocked(session: Session, inst, r: AccessRequest, user: User,
                           action: str) -> bool:
-    """Czy krok kierownika wykonywany przez pracownika, którego wniosek dotyczy,
-    ominąłby akceptację przełożonego (szablon bez `higher_manager_approve`)."""
-    from services.workflow import MANAGER_STAGE_TYPES, is_self_request, landing_node_type
-    if action not in ("select", "approve") or not is_self_request(r, user):
+    """Czy krok kierownika na wniosku „dla siebie” ominąłby akceptację
+    przełożonego (szablon bez `higher_manager_approve`).
+
+    „Dla siebie” w szerokim sensie (`needs_superior_approval`): krok wykonuje
+    pracownik wniosku, wykonał on już wcześniej krok etapu kierownika albo
+    kieruje komórką wniosku (jest jej zastępcą) — wtedy krok jego zastępcy czy
+    podwładnego nie wystarczy. Nie blokujemy przełożonego, który sam mógłby
+    wykonać akceptację wyższą (np. przejął wniosek) — jego krok jest decyzją
+    przełożonego."""
+    from services.workflow import (
+        MANAGER_STAGE_TYPES, can_act, is_self_request, landing_node_type,
+        needs_superior_approval,
+    )
+    if action not in ("select", "approve"):
+        return False
+    dept = session.get(Department, r.department_id) if r.department_id else None
+    if not needs_superior_approval(session, r, dept, user, inst):
         return False
     landing = landing_node_type(session, inst, r, action, actor_user=user)
-    return landing not in ("higher_manager_approve", *MANAGER_STAGE_TYPES)
+    if landing in ("higher_manager_approve", *MANAGER_STAGE_TYPES):
+        return False
+    if is_self_request(r, user) or has_role(user, "superadmin"):
+        return True
+    return not can_act({"id": "_higher", "type": "higher_manager_approve"},
+                       r, dept, user, session)[0]
 
 
 def _check_self_request_route(session: Session, inst, r: AccessRequest, user: User,
@@ -1822,8 +1992,11 @@ def _check_self_request_route(session: Session, inst, r: AccessRequest, user: Us
     """Rozdział obowiązków: wniosek „dla siebie” musi zatwierdzić przełożony
     (silnik nie pomija wtedy akceptacji wyższej — `should_skip`). Gdy szablon
     nie ma takiego etapu → 409."""
+    from services.workflow import is_self_request
     if _self_request_blocked(session, inst, r, user, action):
-        raise HTTPException(status.HTTP_409_CONFLICT, SELF_REQUEST_NO_SUPERIOR_MSG)
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            SELF_REQUEST_NO_SUPERIOR_MSG if is_self_request(r, user)
+                            else SELF_REQUEST_FOR_MANAGER_MSG)
 
 
 def _ensure_taker_unchanged(session: Session, r: AccessRequest,
@@ -1862,6 +2035,7 @@ def workflow_action(
 
     r = _load_request(session, request_id)
     _check_access(current_user, r, session)
+    _check_action_input(data, getattr(r, "kind", None) or "grant")
 
     inst = instance_of(session, r)
     if not inst:
@@ -2068,6 +2242,8 @@ def save_draft(
 
     r = _load_request(session, request_id)
     _check_access(current_user, r, session)
+    _check_comment(data.comment)
+    _check_items_input(data.items, getattr(r, "kind", None) or "grant")
 
     inst, node = _active_node(session, request_id)
     if data.expected_node_id and inst.current_node_id != data.expected_node_id:
@@ -2329,6 +2505,7 @@ def set_item_denial(
 
     r = _load_request(session, request_id)
     _check_access(current_user, r, session)
+    _check_comment(data.comment, "Powód odmowy")
 
     item = session.get(RequestItem, item_id) if _db_int_ok(item_id) else None
     if not item or item.request_id != request_id:

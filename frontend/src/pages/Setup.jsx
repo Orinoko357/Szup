@@ -6,6 +6,7 @@ import '../styles/login.css'
 export default function Setup({ onSetup }) {
   const [username, setUsername] = useState('')
   const [fullName, setFullName] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [password2, setPassword2] = useState('')
   const [err, setErr] = useState(null)
@@ -17,7 +18,7 @@ export default function Setup({ onSetup }) {
     if (password !== password2) { setErr('Hasła nie są identyczne'); return }
     setBusy(true)
     try {
-      const res = await setupAdmin({ username, password, full_name: fullName })
+      const res = await setupAdmin({ username, password, full_name: fullName, email: email.trim() || null })
       localStorage.setItem('szup_token', res.data.access_token)
       localStorage.setItem('szup_user', JSON.stringify({
         username: res.data.username,
@@ -52,6 +53,15 @@ export default function Setup({ onSetup }) {
             <label htmlFor="setup-name">Imię i nazwisko (opcjonalne)</label>
             <input id="setup-name" className="wl-input" type="text"
                    value={fullName} onChange={e => setFullName(e.target.value)} />
+          </div>
+          <div className="wl-field">
+            <label htmlFor="setup-email">E-mail (zalecany)</label>
+            <input id="setup-email" className="wl-input" type="email" autoComplete="email"
+                   aria-describedby="setup-email-hint"
+                   value={email} onChange={e => setEmail(e.target.value)} />
+            <div id="setup-email-hint" style={{ fontSize: 12, opacity: .8, marginTop: 4 }}>
+              Na ten adres trafią powiadomienia awaryjne — np. o wnioskach, których nikt w strukturze nie może zatwierdzić.
+            </div>
           </div>
           <div className="wl-field">
             <label htmlFor="setup-pw">Hasło <span className="wl-req" aria-hidden="true">*</span></label>

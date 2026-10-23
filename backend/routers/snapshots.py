@@ -88,7 +88,7 @@ def snapshot_csv(
     buf.write("﻿")
     w = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_MINIMAL)
     w.writerow(["Pracownik", "Login", "Jednostka", "Wydział", "System",
-                "Uprawnienie", "Zakres", "Nadano", "Kod oświadczenia"])
+                "Uprawnienie", "Zakres", "Nadano", "Kod oświadczenia", "Konto"])
     # Każda komórka przez csv_safe — dane pochodzą m.in. z AD i wniosków
     # (imiona, nazwy komórek, zakres), więc mogą zawierać „formułę".
     for r in rows:
@@ -98,6 +98,8 @@ def snapshot_csv(
             r.get("unit_name") or "", r.get("department_name") or "",
             r.get("system_name") or "", r.get("permission_name") or "",
             zakres, r.get("granted_at") or "", r.get("reference_code") or "",
+            # Starsze migawki nie mają pola — wtedy obejmowały tylko konta aktywne.
+            "nieaktywne" if r.get("account_active") is False else "aktywne",
         ]))
     buf.seek(0)
     fname = f"szup-migawka-{snapshot_date}.csv"

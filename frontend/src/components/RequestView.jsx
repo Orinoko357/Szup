@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Check } from 'lucide-react'
 import { getRequestWorkflow } from '../api'
 import { getUserRoles } from '../roles'
+import { focusIfLost, PAGE_HEADING } from './ui/focus'
 import { serverTs, fmtDateTimeShort } from '../serverTime'
 import { daysSince, waitText, kindLabel as kindLabelOf, nodeLabel, statusLabel, NODE_WHO } from '../labels'
 
@@ -73,8 +74,9 @@ export function KindPill({ kind }) {
 /** Zwrot fokusu po zamknięciu pełnoekranowego widoku wniosku: gdy `openKey`
  *  wraca do null, a lista jest już wyrenderowana (`ready`), fokus trafia na
  *  przycisk z atrybutem data-return-focus={openKey}, który widok otworzył.
- *  Gdy wiersza już nie ma (np. wniosek obsłużony) — fokus zostaje bez zmian. */
-export function useReturnFocus(openKey, ready = true) {
+ *  Gdy wiersza już nie ma (np. wniosek obsłużony) — fokus na `fallback`
+ *  (ref / element / selektor; domyślnie h1 strony). */
+export function useReturnFocus(openKey, ready = true, fallback = PAGE_HEADING) {
   const last = useRef(null)
   useEffect(() => {
     if (openKey != null) { last.current = String(openKey); return }
@@ -84,6 +86,9 @@ export function useReturnFocus(openKey, ready = true) {
     const sel = `[data-return-focus="${window.CSS?.escape ? window.CSS.escape(key) : key}"]`
     const el = document.querySelector(sel)
     if (el && typeof el.focus === 'function') el.focus()
+    // v3.10: wiersza już nie ma (wniosek wysłany / obsłużony znika z listy) —
+    // fokus na nagłówek listy / strony zamiast na <body> (WCAG 2.4.3).
+    else focusIfLost(fallback)
   }, [openKey, ready])
 }
 
@@ -200,7 +205,8 @@ function RequestStepper({ steps = [] }) {
  *   nodeType      — bieżący węzeł obiegu (select_permissions / manager_approve /
  *                   higher_manager_approve / it_execute) lub null
  *   status        — RequestStatus (completed / rejected / …)
- *   requiresHigher— czy komórka wymaga akceptacji wyższego rzędu
+ *   requiresHigher— czy komórka wymaga akceptacji wyższego rzędu; null/undefined —
+ *                   jeszcze nie wiadomo (np. komórka niewybrana) → „zależnie od komórki”
  *   kind          — grant / revoke (wpływa na etykietę kroku 2)
  */
 export function buildWorkflowSteps({ sent, nodeType, status, requiresHigher, kind }) {
@@ -218,6 +224,7 @@ export function buildWorkflowSteps({ sent, nodeType, status, requiresHigher, kin
 
   function st(idx) {
     if (rejected) return idx < cur ? 'done' : idx === cur ? 'current' : 'future'
+    if (idx === 3 && requiresHigher == null && cur < 3) return 'future'
     if (idx === 3 && !requiresHigher) return cur > 3 ? 'skipped' : (cur === 3 ? 'current' : 'skipped')
     if (idx < cur) return 'done'
     if (idx === cur) return 'current'
@@ -225,11 +232,14 @@ export function buildWorkflowSteps({ sent, nodeType, status, requiresHigher, kin
   }
 
   return [
-    { n: 1, label: 'Zgłoszenie',       caption: 'Kadry / HR',             state: st(1) },
+    { n: 1, label: 'Zgłoszenie',       caption: 'Kadry',                  state: st(1) },
     { n: 2, label: step2Label,         caption: 'Kierownik komórki',      state: st(2) },
-    { n: 3, label: 'Akceptacja wyższa', caption: requiresHigher ? 'Kierownik nadrzędny' : 'Pominięta',  state: st(3) },
+    { n: 3, label: 'Akceptacja wyższa',
+      caption: requiresHigher == null && cur < 3 ? 'Zależnie od komórki'
+        : requiresHigher ? 'Kierownik nadrzędny' : 'Pominięta',
+      state: st(3) },
     { n: 4, label: nodeLabel('it_execute'), caption: 'Biuro Informatyki',  state: st(4) },
-    { n: 5, label: statusLabel('completed'), caption: 'Powiadomienie HR',  state: st(5) },
+    { n: 5, label: statusLabel('completed'), caption: 'Powiadomienie kadr', state: st(5) },
   ]
 }
 
@@ -279,7 +289,7 @@ function HistoryBox({ items = [], requestId, createdBy }) {
     const sub = fmtDateTimeShort(s.created_at)
     // Kroki systemowe silnika obiegu — opisane po ludzku, bez surowych nazw akcji.
     if (s.action === 'auto_advance' && s.node_type === 'start') {
-      return { text: `${createdBy || 'Kadry / HR'} złożył(a) wniosek`, sub }
+      return { text: `${createdBy || 'Kadry'} złożył(a) wniosek`, sub }
     }
     if (s.action === 'auto_advance' && s.node_type === 'end') {
       return { text: 'Obieg zakończony', sub }

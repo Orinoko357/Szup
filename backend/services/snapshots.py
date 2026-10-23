@@ -40,12 +40,25 @@ def build_rows(session: Session) -> list[dict]:
 
     Reużywa `_effective_permissions` (odtworzenie stanu z ukończonych wniosków),
     żeby migawka była spójna z tym, co pokazuje „Moje uprawnienia" i rejestr.
+
+    Obejmuje także konta NIEAKTYWNE, które wciąż mają uprawnienia (np. wyłączone
+    w AD bez wniosku o ustanie) — migawka ma pokazać faktyczny stan dostępu,
+    a takie osoby to właśnie sygnał do odebrania (`account_active=False`).
     """
+    from models import AccessRequest, RequestStatus
     from routers.users import _effective_permissions
 
+    # Tylko konta, które mają jakikolwiek zrealizowany wniosek — reszta nie ma
+    # uprawnień efektywnych.
+    holder_ids = {int(x) for x in session.exec(
+        select(AccessRequest.worker_user_id)
+        .where(AccessRequest.status == RequestStatus.completed)
+        .where(AccessRequest.worker_user_id != None)  # noqa: E711
+        .distinct()
+    ).all() if x}
     users = session.exec(
-        select(User).where(User.is_active == True)  # noqa: E712
-    ).all()
+        select(User).where(col(User.id).in_(sorted(holder_ids)))
+    ).all() if holder_ids else []
 
     # Nazwy jednostek/wydziałów per użytkownik (bieżące przypisanie).
     dept_ids = list({u.department_id for u in users if u.department_id})
@@ -74,6 +87,7 @@ def build_rows(session: Session) -> list[dict]:
                 "worker_user_id": u.id,
                 "username": u.username,
                 "worker_name": u.full_name or u.username,
+                "account_active": bool(u.is_active),
                 "unit_name": unit.name if unit else None,
                 "department_name": dept.name if dept else None,
                 "system_name": p.get("system_name"),

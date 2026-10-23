@@ -100,19 +100,16 @@ def main() -> None:
             sys.exit(1)
 
         # Zapisz
-        from datetime import datetime, timedelta
+        from datetime import datetime
+        from services.auth_service import invalidate_tokens_now
         user.password_hash         = hash_password(new_password)
         user.password_changed_at   = datetime.utcnow()
         user.must_change_password  = args.force_change
         user.failed_login_count    = 0
         user.locked_until          = None
-        # Unieważnij stare tokeny JWT, ale daj margines bezpieczeństwa 5s w przeszłość.
-        # JWT iat jest w całych sekundach (int), tokens_valid_from w bazie ma pełną
-        # precyzję datetime — bez marginesu nowy login wykonany w tej samej sekundzie
-        # co reset (lub przy minimalnym driftcie zegara) byłby od razu odrzucany
-        # (iat=10:00:00 < tokens_valid_from=10:00:00.123). Stare tokeny (sprzed kilku
-        # minut) i tak są unieważniane bo ich iat << now-5s.
-        user.tokens_valid_from     = (datetime.utcnow() - timedelta(seconds=5)).replace(microsecond=0)
+        # Unieważnij wszystkie dotychczasowe tokeny JWT konta (pełna sekunda —
+        # token z logowania zaraz po resecie pozostaje ważny).
+        invalidate_tokens_now(user)
 
         session.add(user)
         session.commit()

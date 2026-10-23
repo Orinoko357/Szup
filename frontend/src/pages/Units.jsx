@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Plus, Trash2, Edit2, ChevronDown, ChevronRight, Building2, Download,
@@ -16,6 +16,8 @@ import { getUserRoles } from '../roles'
 import { toast, ask } from '../components/ui/feedback'
 import Modal from '../components/ui/Modal'
 import { ErrorAlert, LoadError } from '../components/ui/LoadState'
+import { focusTarget } from '../components/ui/focus'
+import { countLabel } from '../labels'
 
 
 // Rola „HR” zniesiona — funkcję kadr wyznacza wyłącznie flaga komórki (is_hr).
@@ -168,6 +170,15 @@ function UnitAccordion({ unit: u, depts, users, onChanged, onlyDeptIds = null })
   const [name, setName] = useState(u.name)
   const [err, setErr] = useState(null)
   const [mgrBusy, setMgrBusy] = useState(false)
+  const headRef = useRef(null)
+
+  // Po usunięciu / zarchiwizowaniu komórki (wiersz znika razem z przyciskiem)
+  // fokus wraca na nagłówek tej jednostki, a nie spada na <body> (WCAG 2.4.3).
+  async function afterDeptRemoved() {
+    try { await onChanged() } finally {
+      requestAnimationFrame(() => focusTarget(headRef))
+    }
+  }
 
   async function saveUnit(e) {
     e.preventDefault(); setErr(null)
@@ -200,25 +211,27 @@ function UnitAccordion({ unit: u, depts, users, onChanged, onlyDeptIds = null })
                                                          borderRadius: 10, overflow: 'hidden' }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '6px 8px 6px 18px',
                     minHeight: 56, borderBottom: open ? '1px solid var(--color-border)' : 0 }}>
-        <button type="button" aria-expanded={open} onClick={() => setOpen(v => !v)}
-                style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, flex: '1 1 300px', minHeight: 44,
+        <h2 style={{ margin: 0, flex: '1 1 300px', minWidth: 0, font: 'inherit' }}>
+        <button type="button" ref={headRef} aria-expanded={open} onClick={() => setOpen(v => !v)}
+                style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, width: '100%', minHeight: 44,
                          border: 0, background: 'transparent', font: 'inherit', color: 'inherit', cursor: 'pointer',
                          textAlign: 'left', padding: 0 }}>
           {open ? <ChevronDown size={18} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />
                 : <ChevronRight size={18} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />}
           <Building2 size={18} aria-hidden="true" style={{ color: 'var(--color-heading)', flexShrink: 0 }} />
           <strong style={{ fontSize: 16, color: 'var(--color-heading)' }}>{u.name}</strong>
-          <span className="badge badge--neutral">{depts.length} wydziałów</span>
+          <span className="badge badge--neutral">{countLabel(depts.length, 'wydział', 'wydziały', 'wydziałów')}</span>
           {u.description && (
             <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>— {u.description}</span>
           )}
         </button>
-        <button type="button" className="btn btn--ghost" style={ICONBTN} aria-label="Edytuj jednostkę" title="Edytuj jednostkę"
+        </h2>
+        <button type="button" className="btn btn--ghost" style={ICONBTN} aria-label={`Edytuj jednostkę ${u.name}`} title="Edytuj jednostkę"
                 onClick={() => { setEditing(v => !v); setOpen(true) }}>
           <Edit2 size={16} />
         </button>
         <button type="button" className="btn btn--ghost" style={{ ...ICONBTN, color: 'var(--color-error-text)' }}
-                aria-label="Usuń jednostkę" title="Usuń jednostkę" onClick={delUnit}>
+                aria-label={`Usuń jednostkę ${u.name}`} title="Usuń jednostkę" onClick={delUnit}>
           <Trash2 size={16} />
         </button>
       </div>
@@ -259,13 +272,16 @@ function UnitAccordion({ unit: u, depts, users, onChanged, onlyDeptIds = null })
             </span>
           </div>
 
-          <div style={{ overflowX: 'auto' }}>
-            <table className="data-table" style={{ minWidth: 1040 }}>
+          {/* Kolumna akcji przyklejona do prawej (jak listy zadań) — przy ~1024 px
+              edycja / zastępcy / usuwanie są w zasięgu bez przewijania w poziomie. */}
+          <div className="task-table-wrap">
+            <table className="data-table task-table" style={{ minWidth: 1000 }}>
               <thead><tr><th>Nazwa</th><th>Typ</th><th>Kierownik</th><th>Aktywny</th><th title="Wymaga zatwierdzenia kierownika wydziału nadrzędnego">Wyższa akcept.</th><th title={HR_DEPT_HINT}>Kadry</th><th><span className="sr-only">Akcje</span></th></tr></thead>
               <tbody>
                 {flattenDeptTree(depts).filter(({ dept: d }) => !onlyDeptIds || onlyDeptIds.has(d.id)).map(({ dept: d, depth }) => (
                   <DeptRow key={d.id} dept={d} depth={depth} users={users}
-                           unitId={u.id} unitDepts={depts} onChanged={onChanged} />
+                           unitId={u.id} unitDepts={depts} onChanged={onChanged}
+                           onRemoved={afterDeptRemoved} />
                 ))}
                 {depts.length === 0 && (
                   <tr><td colSpan={7} style={{ color: 'var(--color-text-muted)', padding: '10px 18px' }}>Brak wydziałów</td></tr>
@@ -371,7 +387,7 @@ function collectDescendants(depts, rootId) {
 }
 
 
-function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
+function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged, onRemoved }) {
   const [editing, setEditing] = useState(false)
   const [deputiesOpen, setDeputiesOpen] = useState(false)
   const [forceOpen, setForceOpen] = useState(false)
@@ -401,7 +417,7 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
 
   async function del() {
     if (!await ask(`Usunąć "${d.name}"?`, { title: 'Potwierdź operację', confirmLabel: 'Usuń komórkę', danger: true })) return
-    try { await deleteDepartment(d.id); onChanged(); toast(`Usunięto „${d.name}”`) }
+    try { await deleteDepartment(d.id); toast(`Usunięto „${d.name}”`); (onRemoved || onChanged)() }
     catch (ex) { toast(errorMessage(ex, 'Błąd usuwania'), { tone: 'error' }) }
   }
 
@@ -521,25 +537,28 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
       </td>
       <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
         <button type="button" className="btn btn--ghost btn--sm" style={{ border: 0 }} onClick={() => setEditing(true)}
-                title="Edytuj" aria-label="Edytuj"><Edit2 size={15} /></button>
+                title="Edytuj" aria-label={`Edytuj komórkę ${d.name}`}><Edit2 size={15} aria-hidden="true" /></button>
         <button type="button" className="btn btn--ghost btn--sm" style={{ border: 0 }}
-                onClick={() => setDeputiesOpen(true)} title="Zastępcy kierownika" aria-label="Zastępcy kierownika">
-          <UserCog size={15} />
+                onClick={() => setDeputiesOpen(true)} title="Zastępcy kierownika" aria-label={`Zastępcy kierownika komórki ${d.name}`}>
+          <UserCog size={15} aria-hidden="true" />
         </button>
         <button type="button" className="btn btn--ghost btn--sm" style={{ border: 0, color: 'var(--color-error-text)' }} onClick={del}
-                title="Usuń" aria-label="Usuń"><Trash2 size={15} /></button>
+                title="Usuń pustą komórkę (bez pracowników, podkomórek i wniosków)"
+                aria-label={`Usuń komórkę ${d.name}`}><Trash2 size={15} aria-hidden="true" /></button>
         {superadmin && (
+          // Kompaktowo (ikona) — tekstowy przycisk poszerzał kolumnę akcji o ~170 px.
+          // Różnica względem zwykłego „Usuń” w podpowiedzi i nazwie dostępnej.
           <button type="button" className="btn btn--ghost btn--sm" style={{ border: 0, color: 'var(--color-error-text)' }}
                   onClick={() => setForceOpen(true)}
-                  title="Usuń komórkę mimo powiązań (pracownicy, podkomórki, wnioski) — tylko superadmin"
-                  aria-label={`Usuń (superadmin) komórkę ${d.name}`}>
-            <ShieldAlert size={15} aria-hidden="true" /> Usuń (superadmin)…
+                  title="Usuń komórkę (superadmin) — także z pracownikami, podkomórkami i wnioskami; z hasłem i powodem"
+                  aria-label={`Usuń komórkę (superadmin): ${d.name}`}>
+            <ShieldAlert size={15} aria-hidden="true" />
           </button>
         )}
       </td>
       {forceOpen && (
         <ForceDeleteDeptModal dept={d} onClose={() => setForceOpen(false)}
-                              onDone={() => { setForceOpen(false); onChanged() }} />
+                              onDone={() => { setForceOpen(false); (onRemoved || onChanged)() }} />
       )}
       {deputiesOpen && (
         <DeputiesModal dept={d} users={users} unitDepts={unitDepts}
@@ -550,28 +569,36 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
   )
 }
 
-// Czytelne podsumowanie odpowiedzi force-delete (pola liczbowe/logiczne z backendu).
-const FORCE_DELETE_LABELS = {
-  users_detached: 'Odpięci pracownicy',
-  detached_users: 'Odpięci pracownicy',
-  children_moved: 'Przepięte podkomórki',
-  moved_children: 'Przepięte podkomórki',
-  requests_rejected: 'Odrzucone wnioski w toku',
-  rejected_requests: 'Odrzucone wnioski w toku',
-  deputies_removed: 'Usunięci zastępcy',
-  archived: 'Zarchiwizowana (ma historię)',
-  deleted: 'Usunięta trwale',
-}
+// Czytelne podsumowanie odpowiedzi force-delete (DepartmentForceDeleteOut):
+// { mode: "deleted"|"archived", department_id, detached_users, detached_user_ids?,
+//   removed_deputies, reparented_department_ids, rejected_request_ids, … }.
+// department_id / mode / message nie trafiają na listę; nieznane pola pomijamy
+// (zamiast pokazywać surowe klucze API).
+const FORCE_DELETE_COUNTS = [
+  // [etykieta, klucze (pierwszy obecny wygrywa)]
+  ['Odpięci pracownicy',   ['detached_users', 'detached_user_ids', 'users_detached']],
+  ['Usunięci zastępcy',    ['removed_deputies', 'deputies_removed']],
+  ['Przepięte podkomórki', ['reparented_department_ids', 'children_moved', 'moved_children']],
+]
+const REJECTED_KEYS = ['rejected_request_ids', 'rejected_requests', 'requests_rejected']
+const asCount = v => (typeof v === 'number' ? v : Array.isArray(v) ? v.length : null)
+
 function forceDeleteSummary(data) {
   if (!data || typeof data !== 'object') return []
   const out = []
-  for (const [k, v] of Object.entries(data)) {
-    if (typeof v === 'number') out.push(`${FORCE_DELETE_LABELS[k] || k}: ${v}`)
-    else if (Array.isArray(v)) out.push(`${FORCE_DELETE_LABELS[k] || k}: ${v.length}`)
-    else if (typeof v === 'boolean' && v && FORCE_DELETE_LABELS[k]) out.push(FORCE_DELETE_LABELS[k])
+  for (const [label, keys] of FORCE_DELETE_COUNTS) {
+    const k = keys.find(x => asCount(data[x]) != null)
+    if (k) out.push(`${label}: ${asCount(data[k])}`)
+  }
+  const rk = REJECTED_KEYS.find(x => asCount(data[x]) != null)
+  if (rk) {
+    const v = data[rk]
+    const ids = Array.isArray(v) ? v.filter(x => x != null) : []
+    out.push(`Odrzucone wnioski: ${asCount(v)}${ids.length ? ` (${ids.map(i => `#${i}`).join(', ')})` : ''}`)
   }
   return out
 }
+const isArchived = data => data?.mode === 'archived' || data?.archived === true
 
 /** Superadmin: usunięcie komórki mimo powiązań (POST …/force-delete). */
 function ForceDeleteDeptModal({ dept: d, onClose, onDone }) {
@@ -580,6 +607,7 @@ function ForceDeleteDeptModal({ dept: d, onClose, onDone }) {
   const [busy, setBusy]         = useState(false)
   const [err, setErr]           = useState(null)
   const [result, setResult]     = useState(null)
+  const pwRef = useRef(null)
   const canSubmit = reason.trim().length > 0 && password.length > 0 && !busy
 
   async function submit(e) {
@@ -588,18 +616,33 @@ function ForceDeleteDeptModal({ dept: d, onClose, onDone }) {
     setBusy(true); setErr(null)
     try {
       const r = await forceDeleteDepartment(d.id, { reason: reason.trim(), password })
-      setResult(r.data || {})
-      toast(r.data?.message || `Usunięto komórkę „${d.name}”`)
+      const data = r.data || {}
+      setResult(data)
+      toast(isArchived(data)
+        ? `Zarchiwizowano komórkę „${d.name}” (ma historię)`
+        : `Usunięto komórkę „${d.name}”`)
     } catch (ex) {
       setErr(errorMessage(ex, 'Nie udało się usunąć komórki'))
+      // Fokus zostaje w oknie — na polu hasła, zaznaczonym do poprawy.
+      requestAnimationFrame(() => { pwRef.current?.focus(); pwRef.current?.select() })
     } finally { setBusy(false) }
   }
 
   if (result) {
     const lines = forceDeleteSummary(result)
+    const archived = isArchived(result)
+    // key: nowe okno (nie ponowne użycie formularza) — useDialog ustawia fokus
+    // na „Zamknij”, zamiast zostawić go na zniszczonym przycisku wysyłki.
     return (
-      <Modal title={`Usunięto — ${d.name}`} onClose={onDone} width={520}
-             footer={<button type="button" className="btn btn--primary" onClick={onDone}>Zamknij</button>}>
+      <Modal key="result" title={`${archived ? 'Zarchiwizowano komórkę (ma historię)' : 'Usunięto komórkę'} — ${d.name}`}
+             onClose={onDone} width={520}
+             footer={<button type="button" className="btn btn--primary" data-autofocus onClick={onDone}>Zamknij</button>}>
+        {archived && (
+          <p style={{ marginTop: 0 }}>
+            Komórka ma historię (wnioski, uprawnienia), więc zamiast usunięcia została zarchiwizowana
+            i nie jest już widoczna w strukturze.
+          </p>
+        )}
         {result.message && <p style={{ marginTop: 0 }}>{result.message}</p>}
         {lines.length > 0 ? (
           <ul style={{ margin: 0, paddingLeft: 20, fontSize: 14 }}>
@@ -611,11 +654,12 @@ function ForceDeleteDeptModal({ dept: d, onClose, onDone }) {
   }
 
   return (
-    <Modal title={`Usuń komórkę (superadmin) — ${d.name}`} onClose={onClose} closable={!busy} width={560}
+    <Modal key="form" title={`Usuń komórkę (superadmin) — ${d.name}`} onClose={onClose} closable={!busy} width={560}
            onSubmit={submit}
            footer={<>
              <button type="button" className="btn btn--ghost" onClick={onClose} disabled={busy}>Anuluj</button>
-             <button type="submit" className="btn btn--danger" disabled={!canSubmit}>
+             {/* aria-disabled zamiast disabled — przycisk nie gubi fokusu podczas wysyłki. */}
+             <button type="submit" className="btn btn--danger" aria-disabled={!canSubmit}>
                <Trash2 size={14} aria-hidden="true" /> {busy ? 'Usuwanie…' : 'Usuń komórkę'}
              </button>
            </>}>
@@ -636,7 +680,7 @@ function ForceDeleteDeptModal({ dept: d, onClose, onDone }) {
       </div>
       <div className="form-group">
         <label className="form-label" htmlFor={`fd-pw-${d.id}`}>Twoje hasło *</label>
-        <input id={`fd-pw-${d.id}`} className="form-control" type="password" required
+        <input id={`fd-pw-${d.id}`} ref={pwRef} className="form-control" type="password" required
                autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} />
         <div className="form-hint">Operacja zostanie zapisana w dzienniku zdarzeń.</div>
       </div>

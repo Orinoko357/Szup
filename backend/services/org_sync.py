@@ -281,3 +281,60 @@ def sync_after_user_change(session: Session, user: User) -> tuple[bool, str | No
     _log.info("Użytkownik %s ustawiony kierownikiem komórki '%s' (miała wolne stanowisko)",
               user.username, dept.name)
     return True, None
+
+
+def after_department_change(session: Session, user: User, old_dept_id: int | None, *,
+                            drop_unused_role: bool = True) -> dict:
+    """Wywołaj po zmianie komórki konta (`user.department_id` już ustawione),
+    np. przy przeniesieniu osoby importem z AD.
+
+    1. Zwalnia stanowiska osoby w DAWNEJ komórce (kierownik, zastępca) —
+       kierownik przeniesiony do innej komórki nie kieruje dalej starą.
+    2. Gdy osoba ma rolę `manager`, a nowa komórka nie ma kierownika — obejmuje
+       ją (`sync_after_user_change`).
+    3. Gdy po zmianie nie kieruje już niczym — traci rolę `manager`
+       (`drop_unused_role=False` zostawia rolę bez zmian).
+    Porządki wniosków w toku (przejęcia, adresaci kroków) w poddrzewach obu
+    komórek — jak przy edycji struktury. Nie robi commitu.
+
+    Zwraca {"released_dept_ids": [...], "adopted": bool, "role_revoked": bool,
+    "warning": str | None}.
+    """
+    out = {"released_dept_ids": [], "adopted": False, "role_revoked": False,
+           "warning": None}
+    if not user or user.id is None or old_dept_id == user.department_id:
+        return out
+    from services.workflow import (
+        manager_stage_snapshot, resync_manager_stage, subtree_dept_ids,
+    )
+    affected = subtree_dept_ids(session, {old_dept_id}) if old_dept_id else set()
+    before = manager_stage_snapshot(session, affected) if affected else {}
+
+    released: list[int] = []
+    if old_dept_id:
+        old = session.get(Department, old_dept_id)
+        if old is not None and old.manager_user_id == user.id:
+            old.manager_user_id = None
+            session.add(old)
+            released.append(old.id)
+            _log.info("Zwolniono stanowisko kierownika komórki '%s' — %s przeniesiony(-a) "
+                      "do innej komórki", old.name, user.username)
+        for row in session.exec(
+            select(DepartmentDeputy).where(DepartmentDeputy.department_id == old_dept_id)
+            .where(DepartmentDeputy.user_id == user.id)
+        ).all():
+            session.delete(row)
+            if old_dept_id not in released:
+                released.append(old_dept_id)
+    if released:
+        session.flush()
+        resync_manager_stage(session, affected, before=before,
+                             reason="Przeniesienie kierownika do innej komórki")
+    # Objęcie wolnego stanowiska w nowej komórce robi własne porządki
+    # (migawka po zwolnieniu — bez podwójnych powiadomień).
+    adopted, warning = sync_after_user_change(session, user)
+    role_revoked = bool(drop_unused_role and released and not adopted
+                        and revoke_manager_role_if_unused(session, user.id))
+    out.update(released_dept_ids=released, adopted=adopted,
+               role_revoked=role_revoked, warning=warning)
+    return out

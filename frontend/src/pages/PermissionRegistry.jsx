@@ -171,6 +171,12 @@ function CurrentRegistry() {
         </div>
       </section>
 
+      {!loading && !err && total > rows.length && rows.length > 0 && (
+        <div className="alert alert--info" role="status" style={{ marginBottom: 12 }}>
+          Pokazano {rows.length} z {total} — zawęź filtr (jednostka, system, wyszukiwanie), aby zobaczyć resztę,
+          albo pobierz pełny CSV.
+        </div>
+      )}
       <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
         {loading ? (
           <div style={{ color: 'var(--color-text-muted)', padding: 16 }}>Ładowanie…</div>
@@ -196,7 +202,13 @@ function CurrentRegistry() {
                   <td>{r.system_name || '—'}</td>
                   <td>
                     {r.group_name && <span className="badge badge--neutral" style={{ borderRadius: 4, fontSize: 11, fontWeight: 700, marginRight: 6 }}>{r.group_name}</span>}
-                    <span style={{ fontWeight: 600 }}>{r.permission_name || '—'}</span>
+                    <span style={{ fontWeight: 600, textDecoration: r.revoked ? 'line-through' : 'none' }}>{r.permission_name || '—'}</span>
+                    {r.revoked && (
+                      <span className="badge badge--error" style={{ fontSize: 11, marginLeft: 6 }}
+                            title={r.revoked_at ? `Odebrano ${fmtDate(r.revoked_at)}` : undefined}>
+                        odebrane{r.revoked_by_request_id ? ` (#${r.revoked_by_request_id})` : ''}
+                      </span>
+                    )}
                     {r.custom_values && Object.keys(r.custom_values).length > 0 && (
                       <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
                         {Object.entries(r.custom_values).map(([k, v]) => `${k}: ${v}`).join(' · ')}

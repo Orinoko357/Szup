@@ -10,7 +10,8 @@ import RequestViewShell, {
   buildWorkflowSteps, Section, WorkerCard, deptFull, KindPill, perspectiveLabel, waitingText,
   useReturnFocus,
 } from '../components/RequestView'
-import { statusLabel, statusBadge, nodeLabel, kindLabel, daysSince, waitText, MANAGER_NODES } from '../labels'
+import { statusLabel, statusBadge, nodeLabel, kindLabel, daysSince, waitText, MANAGER_NODES, plural } from '../labels'
+import { getCurrentUser } from '../roles'
 import { toast, confirmDialog, promptDialog } from '../components/ui/feedback'
 import { ErrorAlert, LoadError } from '../components/ui/LoadState'
 import { ReviewDialog, describeKeys, diffSelection } from '../components/ChangeSummary'
@@ -293,7 +294,8 @@ function MineTable({ rows, onOpen }) {
               </td>
               <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{fmtDate(r.created_at)}</td>
               <td>
-                <button className="btn btn--ghost btn--sm" onClick={() => onOpen(r)} data-return-focus={r.id}>Podgląd</button>
+                <button type="button" className="btn btn--ghost btn--sm" onClick={() => onOpen(r)} data-return-focus={r.id}
+                        aria-label={`Podgląd wniosku #${r.id} — ${r.worker_name || 'pracownik'}`}>Podgląd</button>
               </td>
             </tr>
           )
@@ -344,7 +346,8 @@ function TakenOverNote({ r }) {
   return (
     <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 3 }}
          title={r.taken_over_at ? `Przejęto ${fmtDate(r.taken_over_at)}` : undefined}>
-      Przejęty przez {r.taken_over_by_name}
+      Przejęty przez {r.taken_over_by_id != null && r.taken_over_by_id === getCurrentUser().id
+        ? 'Ciebie' : r.taken_over_by_name}
     </div>
   )
 }
@@ -393,7 +396,8 @@ function PrepTable({ rows, onOpen }) {
                 <div style={{ color: 'var(--color-text-muted)' }}>złożono {fmtDate(r.created_at)}</div>
               </td>
               <td>
-                <button className="btn btn--ghost btn--sm" onClick={() => onOpen(r)} data-return-focus={r.id}>Podgląd</button>
+                <button type="button" className="btn btn--ghost btn--sm" onClick={() => onOpen(r)} data-return-focus={r.id}
+                        aria-label={`Podgląd wniosku #${r.id} — ${r.worker_name || 'pracownik'}`}>Podgląd</button>
               </td>
             </tr>
           ))}
@@ -409,7 +413,7 @@ function PrepTable({ rows, onOpen }) {
 //   - pending_selection → wybór uprawnień (nadanie) / do odebrania (ustanie)
 //   - pending_manager   → decyzja (zatwierdź / odrzuć)
 // ---------------------------------------------------------------------------
-function RequestModal({ request: r, onClose, onDone, onRefresh }) {
+export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   const isRevoke   = r.kind === 'revoke'
   // Akcje tylko, gdy backend potwierdza, że TEN użytkownik może działać na
   // bieżącym kroku (can_act) — inaczej podgląd (bez przycisków kończących się 403).
@@ -728,6 +732,15 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   // Wyślij akcję; `declaration` dokładane, gdy zebrane w modalu. Backend jest
   // twardą bramką: brak oświadczenia przy nadaniu → 428, wtedy otwieramy modal.
   async function sendAction(action, declaration = null, commentText = comment) {
+    // v3.10: backend podaje w szczegółach wniosku `declaration_required` — gdy
+    // wysłanie tego kroku wymaga oświadczenia, zbieramy je PRZED wysłaniem
+    // (bez zbędnej rundy 428). Obsługa 428 niżej zostaje jako zabezpieczenie.
+    if (!declaration && action !== 'reject' && r.declaration_required === true) {
+      setDeclText('')            // DeclarationModal pobierze aktualną treść
+      setDeclPending(action)     // okno podsumowania chowa się na czas oświadczenia (open niżej)
+      setBusy(false)
+      return
+    }
     const body = buildActionBody(action, commentText)
     if (declaration) body.declaration = declaration
     // Pusty wybór na wniosku z pozycjami (np. wpisanymi przez kadry) usuwa je —
@@ -1008,8 +1021,10 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       footerLeft={isSelect && !loading
         ? (isRevoke
             ? <>Do odebrania: <strong>{picked.size}</strong></>
-            : <><strong style={{ color: 'var(--color-success-text)' }}>+{toGrant.length + scopeChanged.length}</strong> nadania
-                {' · '}<strong style={{ color: 'var(--color-error-text)' }}>−{toRevoke.length}</strong> odebrania</>)
+            : <><strong style={{ color: 'var(--color-success-text)' }}>+{toGrant.length + scopeChanged.length}</strong>
+                {' '}{plural(toGrant.length + scopeChanged.length, 'nadanie', 'nadania', 'nadań')}
+                {' · '}<strong style={{ color: 'var(--color-error-text)' }}>−{toRevoke.length}</strong>
+                {' '}{plural(toRevoke.length, 'odebranie', 'odebrania', 'odebrań')}</>)
         : null}
       footerActions={<>
         <button className="btn btn--ghost" onClick={guardedClose} disabled={busy}>
@@ -1371,7 +1386,11 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           {(isSelect || isDecision) && (
             <Section n={sec()} title="Uwagi" note="opcjonalne">
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label" htmlFor="mgr-comment">{isSelect ? 'Informacja dla IT' : 'Komentarz · widoczny w historii'}</label>
+                <label className="form-label" htmlFor="mgr-comment">
+                  {isSelect
+                    ? (toApproval ? `Uwagi (widoczne dla ${approvalWho === 'kierownika komórki' ? 'kierownika komórki' : 'przełożonego'} i IT)` : 'Informacja dla IT')
+                    : 'Komentarz · widoczny w historii'}
+                </label>
                 <textarea id="mgr-comment" className="form-control" style={{ minHeight: 70 }}
                           value={comment} onChange={e => setComment(e.target.value)} />
               </div>
@@ -1382,7 +1401,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     </RequestViewShell>
 
       <ReviewDialog
-        open={reviewOpen}
+        open={reviewOpen && !declPending}
         workerName={r.worker_name}
         grants={reviewGrants}
         revokes={reviewRevokes}

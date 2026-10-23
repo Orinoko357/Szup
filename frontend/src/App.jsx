@@ -17,6 +17,7 @@ import { getCurrentUser, getUserRoles, updateCurrentUser, workRoles } from './ro
 
 const HR                 = lazy(() => import('./pages/HR'))
 const Requests           = lazy(() => import('./pages/Requests'))
+const RequestOpen        = lazy(() => import('./pages/RequestOpen'))
 const MyTeam             = lazy(() => import('./pages/MyTeam'))
 const MyPermissions      = lazy(() => import('./pages/MyPermissions'))
 const SoftwareRegistry   = lazy(() => import('./pages/SoftwareRegistry'))
@@ -46,6 +47,7 @@ function RouteTitle({ override }) {
   const { pathname } = useLocation()
   useEffect(() => {
     const name = override || ROUTE_TITLES[pathname.replace(/\/+$/, '') || '/']
+      || (pathname.startsWith('/requests/view/') ? 'Wniosek' : null)
     document.title = name ? `${name} · SZUP` : 'SZUP'
   }, [pathname, override])
   return null
@@ -248,9 +250,9 @@ function AuthGate() {
         <Sidebar />
         <main className="app-main" id="main-content" tabIndex={-1}>
           <div>
-            <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: 'var(--color-heading)' }}>
+            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: 'var(--color-heading)' }}>
               Wymagana zmiana hasła
-            </h2>
+            </h1>
             <p style={{ margin: '6px 0 0', fontSize: 14, color: 'var(--color-text-muted)' }}>
               Polityka bezpieczeństwa (NIS2/KSC) wymaga zmiany hasła przed dalszym korzystaniem z systemu.
             </p>
@@ -298,6 +300,10 @@ function AuthGate() {
           {/* Operacyjne */}
           <Route path="/hr"        element={guard(<HR />,        ['hr'])} />
           <Route path="/requests"  element={guard(<Requests />,  ['manager','it_staff'])} />
+          {/* Pojedynczy wniosek (podgląd + akcje wg can_act) — dla superadmina z pulpitu
+              (rezerwa: akceptacja wyższa „utkniętych” wniosków). Pozostałe role
+              trafiają na zwykłą stronę wniosku. */}
+          <Route path="/requests/view/:id" element={guard(<RequestOpen />, ['superadmin'])} />
           <Route path="/my-team"   element={guard(<MyTeam />,    ['manager'])} />
           <Route path="/manager"   element={guard(<LegacyRedirect to="manager" />, ['manager'])} />
           <Route path="/structure" element={guard(<LegacyRedirect to="structure" />, ['manager'])} />

@@ -14,6 +14,7 @@ import RequestViewShell, {
 } from '../components/RequestView'
 import { toast, confirmDialog } from '../components/ui/feedback'
 import { ErrorAlert, LoadError } from '../components/ui/LoadState'
+import { plural } from '../labels'
 import { ReviewDialog, describeKeys, diffSelection } from '../components/ChangeSummary'
 import CopyFromColleague, { buildCopiedSelection } from '../components/CopyFromColleague'
 import PermInput, {
@@ -226,9 +227,10 @@ function WorkersTab({ renderHeader }) {
                       )}
                     </td>
                     <td style={{ textAlign: 'right', ...(w.is_self ? { background: 'var(--bg-secondary)' } : {}) }}>
-                      <button className="btn btn--action btn--sm" style={{ minHeight: 36 }} onClick={() => setRequestFor(w)}
-                              data-return-focus={w.id}>
-                        <FilePlus size={13} /> Nowy wniosek
+                      <button type="button" className="btn btn--action btn--sm" style={{ minHeight: 36 }} onClick={() => setRequestFor(w)}
+                              data-return-focus={w.id}
+                              aria-label={`Nowy wniosek dla: ${w.full_name || w.username}`}>
+                        <FilePlus size={13} aria-hidden="true" /> Nowy wniosek
                       </button>
                     </td>
                   </tr>,
@@ -554,8 +556,16 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
   // dla KAŻDEGO rodzaju wniosku, a wniosek kierownika SAMEGO DLA SIEBIE (v3.8)
   // także w komórce jednostopniowej — nie zatwierdza własnego wniosku.
   const landingNode = w.landing_node_type || w.next_node_type || null
+  // Przełożony składa wniosek dla PODLEGŁEJ komórki z własnym kierownikiem —
+  // backend od razu go przejmuje (taken_over), krok kierownika wykonuje sam
+  // przełożony, a akceptacja wyższa zalicza się automatycznie → wniosek ląduje
+  // w IT (logika 11). Pole z backendu, jeśli jest (superior_takeover /
+  // will_take_over); inaczej przybliżenie: pracownik komórki dwustopniowej pod
+  // komórką zalogowanego (is_escalated z /users/my-workers).
+  const superiorTakeover = !w.is_self && !!(w.superior_takeover ?? w.will_take_over ?? w.is_escalated)
   const toApproval = landingNode
     ? ['higher_manager_approve', 'manager_approve'].includes(landingNode)
+    : superiorTakeover ? false
     : (!!w.requires_higher_approval || !!w.is_self)
   const sendLabel = toApproval ? 'Wyślij do akceptacji' : 'Wyślij do realizacji'
   const approvalWho = landingNode === 'manager_approve' ? 'kierownika komórki' : 'kierownika nadrzędnego'
@@ -567,11 +577,17 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
     sent: true, nodeType: 'select_permissions',
     requiresHigher: toApproval, kind: 'grant',
   })
+  const takeoverNote = superiorTakeover
+    ? 'Składasz wniosek jako przełożony dla komórki, która ma własnego kierownika — wniosek zostanie '
+      + 'od razu przejęty przez Ciebie (kierownik komórki zobaczy go jako przejęty i nie będzie mógł go zmienić). '
+      + (toApproval ? '' : 'Twoja decyzja zastępuje akceptację wyższą, więc wniosek trafi wprost do IT.')
+    : null
   const _summary = [
     { label: 'Pracownik', value: w.full_name || w.username },
     { label: 'Komórka', value: `${w.department_name || '—'} · ${w.unit_name || '—'}` },
     { label: 'Zmiany', value: `+${toGrant.length + scopeChanged.length} / −${toRevoke.length}` },
     { label: 'Akceptacja', value: toApproval ? 'wymagana' : 'nie wymagana' },
+    ...(superiorTakeover ? [{ label: 'Przejęty przez', value: 'Ciebie (przełożony)' }] : []),
   ]
 
   return (
@@ -583,8 +599,10 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
       subtitle={`Zaznacz stan docelowy uprawnień — po wysłaniu wniosek trafi ${destText}.`}
       backLabel="← Wróć do moich pracowników" onBack={guardedClose}
       steps={_steps} summary={_summary} history={[]}
-      footerLeft={<><strong style={{ color: 'var(--color-success-text)' }}>+{toGrant.length + scopeChanged.length}</strong> nadania
-        {' · '}<strong style={{ color: 'var(--color-error-text)' }}>−{toRevoke.length}</strong> odebrania</>}
+      footerLeft={<><strong style={{ color: 'var(--color-success-text)' }}>+{toGrant.length + scopeChanged.length}</strong>
+        {' '}{plural(toGrant.length + scopeChanged.length, 'nadanie', 'nadania', 'nadań')}
+        {' · '}<strong style={{ color: 'var(--color-error-text)' }}>−{toRevoke.length}</strong>
+        {' '}{plural(toRevoke.length, 'odebranie', 'odebrania', 'odebrań')}</>}
       footerActions={<>
         <button className="btn btn--ghost" onClick={guardedClose} disabled={busy}>Anuluj</button>
         <button className="btn btn--ghost" onClick={saveDraft} disabled={busy || loading || noChange || !requestTypeId}
@@ -597,6 +615,11 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
           <Send size={14} /> {sendLabel}
         </button>
       </>}>
+          {takeoverNote && (
+            <div className="alert alert--info" role="note" style={{ marginTop: 0, marginBottom: 16 }}>
+              {takeoverNote}
+            </div>
+          )}
           <Section n={1} title="Pracownik">
             <WorkerCard name={w.full_name || w.username}
               sub={[w.username, w.email].filter(Boolean).join(' · ') || null}

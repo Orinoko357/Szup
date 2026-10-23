@@ -4,7 +4,8 @@ import { listSecurityEvents, securityEventsSummary, resolveSecurityEvent, purgeS
 import PurgeLogModal from '../components/PurgeLogModal'
 import { fmtDateTime } from '../serverTime'
 import { toast, promptDialog } from '../components/ui/feedback'
-import { SEVERITY_LABEL } from '../labels'
+import { SEVERITY_LABEL, SECURITY_EVENT_LABEL, securityEventLabel } from '../labels'
+import { LoadError } from '../components/ui/LoadState'
 import Segmented from '../components/ui/Segmented'
 import { getUserRoles, getCurrentUser } from '../roles'
 
@@ -56,6 +57,7 @@ export default function SecurityEvents() {
       setSum(s.data)
     } catch (ex) {
       setErr(errorMessage(ex, 'Nie udało się wczytać zdarzeń bezpieczeństwa'))
+      setRows([]); setSum(null)   // bez „Brak zdarzeń” / zerowych kafelków po błędzie
     } finally {
       setLoading(false)
     }
@@ -106,15 +108,15 @@ export default function SecurityEvents() {
           </div>
           {Object.entries(sum.open_by_severity || {}).map(([sev, n]) => (
             <div key={sev} className={`stat-tile stat-tile--sev-${sevKey(sev)}`}>
-              <span style={TILE_LBL}>{sev}</span>
+              <span style={TILE_LBL}>{SEVERITY_LABEL[sev] || sev}</span>
               <span style={TILE_VAL}>{n}</span>
-              <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>{SEVERITY_LABEL[sev] || ''}</span>
+              <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>istotność, otwarte</span>
             </div>
           ))}
         </div>
       )}
 
-      {err && <div className="alert alert--error mb-4" role="alert">{err}</div>}
+      {err && <LoadError message={err} onRetry={load} busy={loading} style={{ marginBottom: 16 }} />}
 
       <section aria-label="Zdarzenia" className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, padding: '10px 18px',
@@ -123,7 +125,7 @@ export default function SecurityEvents() {
                      onChange={v => setOnlyOpen(v === 'open')}
                      options={[{ value: 'all', label: 'Wszystkie' }, { value: 'open', label: 'Nierozwiązane' }]} />
           <div style={{ flex: 1 }} />
-          <button className="btn btn--ghost btn--sm" onClick={load} disabled={loading}>
+          <button type="button" className="btn btn--ghost btn--sm" onClick={load} disabled={loading}>
             <RefreshCw size={13} /> Odśwież
           </button>
         </div>
@@ -138,7 +140,7 @@ export default function SecurityEvents() {
               {loading && (
                 <tr><td colSpan={7} style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</td></tr>
               )}
-              {!loading && rows.length === 0 && (
+              {!loading && !err && rows.length === 0 && (
                 <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--color-text-muted)' }}>Brak zdarzeń</td></tr>
               )}
               {rows.map(r => {
@@ -148,7 +150,17 @@ export default function SecurityEvents() {
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, whiteSpace: 'nowrap' }}>
                       {fmtDateTime(r.created_at)}
                     </td>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-heading)' }}>{r.event_type}</td>
+                    <td style={{ fontSize: 13, color: 'var(--color-heading)' }} title={r.event_type || ''}>
+                      {SECURITY_EVENT_LABEL[r.event_type] ? (
+                        <>
+                          <span style={{ display: 'block', fontWeight: 600 }}>{securityEventLabel(r.event_type)}</span>
+                          <span style={{ display: 'block', fontFamily: 'var(--font-mono)', fontSize: 11,
+                                         color: 'var(--color-text-muted)' }}>{r.event_type}</span>
+                        </>
+                      ) : (
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.event_type}</span>
+                      )}
+                    </td>
                     <td>
                       <span className={`badge badge--sev-${sevKey(r.severity)}`}>
                         {SEVERITY_LABEL[r.severity] || r.severity}
@@ -164,7 +176,8 @@ export default function SecurityEvents() {
                     <td style={{ textAlign: 'right' }}>
                       {!r.resolved_at && !blocked && (
                         <button className="btn btn--ghost btn--sm" onClick={() => resolve(r.id)}
-                                title="Oznacz jako rozwiązane" aria-label="Oznacz jako rozwiązane"
+                                title="Oznacz jako rozwiązane"
+                                aria-label={`Oznacz jako rozwiązane: ${securityEventLabel(r.event_type)}, ${fmtDateTime(r.created_at)}`}
                                 style={{ color: 'var(--color-success-text)' }}>
                           <Check size={15} />
                         </button>

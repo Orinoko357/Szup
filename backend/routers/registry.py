@@ -7,6 +7,8 @@ z oświadczeniem wnioskującego (`PermissionDeclaration`) po `request_id`.
 
 Do audytu (NIS2/KSC/RODO): kto, komu, jakie uprawnienie, kiedy, na podstawie
 jakiego oświadczenia (data + osoba) i pod jakim kodem referencyjnym.
+Pozycje później odebrane (wniosek o odebranie / ustanie, usunięcie grupy przez
+superadmina) zostają w rejestrze jako historia, z oznaczeniem `revoked`.
 Eksport CSV jak w audit logu (`;`, UTF-8 z BOM).
 """
 from __future__ import annotations
@@ -42,9 +44,58 @@ router = APIRouter()
 _GRANTED_STATUSES = (RequestStatus.pending_it, RequestStatus.completed)
 
 
+def _revocations(session: Session, pairs) -> dict[int, tuple[int, Optional[datetime]]]:
+    """Pozycja nadania → (id wniosku odbierającego, data odebrania).
+
+    - oznaczenie systemowe (`revoked_by_request_id` — usunięcie grupy; działa
+      także dla osób bez dowiązanego konta),
+    - dla pracownika z kontem: późniejszy ZREALIZOWANY wniosek z pozycją
+      odebrania tego samego uprawnienia (chronologia jak w uprawnieniach
+      efektywnych; ponowne nadanie to osobna, nowsza pozycja rejestru)."""
+    def _ts(r):
+        return r.completed_at or r.approved_at or r.created_at
+
+    out: dict[int, tuple[int, Optional[datetime]]] = {}
+    marked = {it.revoked_by_request_id for it, _ in pairs
+              if getattr(it, "revoked_by_request_id", None)}
+    rev_reqs = {r.id: r for r in session.exec(
+        select(AccessRequest).where(col(AccessRequest.id).in_(list(marked))))} if marked else {}
+    for it, _req in pairs:
+        rid = getattr(it, "revoked_by_request_id", None)
+        if rid:
+            rr = rev_reqs.get(rid)
+            out[it.id] = (rid, _ts(rr) if rr else None)
+
+    worker_ids = list({r.worker_user_id for _, r in pairs if r.worker_user_id})
+    if not worker_ids:
+        return out
+    revokes: dict[tuple[int, int, int], list[tuple[datetime, int, int]]] = {}
+    for ri, rr in session.exec(
+        select(RequestItem, AccessRequest)
+        .join(AccessRequest, col(RequestItem.request_id) == col(AccessRequest.id))
+        .where(col(AccessRequest.worker_user_id).in_(worker_ids))
+        .where(AccessRequest.status == RequestStatus.completed)
+        .where(col(RequestItem.denied) == False)  # noqa: E712
+        .where((RequestItem.kind == "revoke")
+               | ((RequestItem.kind == None) & (AccessRequest.kind == "revoke")))  # noqa: E711
+    ).all():
+        key = (rr.worker_user_id, ri.system_id, ri.permission_id)
+        revokes.setdefault(key, []).append((_ts(rr), rr.id, ri.id))
+    for it, req in pairs:
+        if it.id in out or not req.worker_user_id or req.status != RequestStatus.completed:
+            continue
+        granted = (_ts(req), req.id)
+        later = sorted(x for x in revokes.get((req.worker_user_id, it.system_id,
+                                                it.permission_id), [])
+                       if (x[0], x[1]) > granted)
+        if later:
+            out[it.id] = (later[0][1], later[0][0])
+    return out
+
+
 def _rows(session: Session, *, unit_id=None, system_id=None, q=None,
           date_from=None, date_to=None, only_with_declaration=False,
-          limit=None, offset=0):
+          only_effective=False, limit=None, offset=0):
     """Buduje wiersze rejestru (lista dictów). Bez paginacji, gdy limit=None."""
     stmt = (
         select(RequestItem, AccessRequest)
@@ -92,11 +143,16 @@ def _rows(session: Session, *, unit_id=None, system_id=None, q=None,
     unit_map = {u.id: u for u in session.exec(
         select(Unit).where(col(Unit.id).in_(unit_ids)))} if unit_ids else {}
 
+    revoked = _revocations(session, pairs)
+
     ql = (q or "").strip().lower()
     out = []
     for it, req in pairs:
         dec = decls.get(req.id)
         if only_with_declaration and not dec:
+            continue
+        rev = revoked.get(it.id)
+        if only_effective and rev:
             continue
         worker = req.worker_name or ""
         if ql and ql not in worker.lower():
@@ -125,6 +181,10 @@ def _rows(session: Session, *, unit_id=None, system_id=None, q=None,
             "custom_values": vals,
             "granted_at": (req.completed_at or req.approved_at or req.created_at),
             "request_status": req.status.value if hasattr(req.status, "value") else req.status,
+            # Odebrane później (wnioskiem o odebranie / przy usunięciu grupy).
+            "revoked": bool(rev),
+            "revoked_by_request_id": rev[0] if rev else None,
+            "revoked_at": rev[1] if rev else None,
             # Kolumny oświadczenia:
             "declared_by_name": dec.declared_by_name if dec else None,
             "declared_date": dec.declared_date if dec else None,
@@ -146,15 +206,18 @@ def granted_registry(
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
     only_with_declaration: bool = False,
+    only_effective: bool = False,
     limit: int = Query(200, ge=1, le=2000),
     offset: int = Query(0, ge=0),
     _: User = Depends(require_it_staff),
     session: Session = Depends(get_session),
 ):
+    """`only_effective=true` pomija pozycje odebrane później."""
     rows, total = _rows(
         session, unit_id=unit_id, system_id=system_id, q=q,
         date_from=date_from, date_to=date_to,
-        only_with_declaration=only_with_declaration, limit=limit, offset=offset)
+        only_with_declaration=only_with_declaration, only_effective=only_effective,
+        limit=limit, offset=offset)
     return {"items": rows, "total": total, "limit": limit, "offset": offset}
 
 
@@ -166,20 +229,22 @@ def granted_registry_csv(
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
     only_with_declaration: bool = False,
+    only_effective: bool = False,
     _: User = Depends(require_it_staff),
     session: Session = Depends(get_session),
 ):
     rows, _total = _rows(
         session, unit_id=unit_id, system_id=system_id, q=q,
         date_from=date_from, date_to=date_to,
-        only_with_declaration=only_with_declaration, limit=None)
+        only_with_declaration=only_with_declaration, only_effective=only_effective,
+        limit=None)
 
     buf = io.StringIO()
     buf.write("﻿")  # BOM — Excel poprawnie odczyta UTF-8
     w = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_MINIMAL)
     w.writerow(["Nr wniosku", "Pracownik", "Jednostka", "Wydział", "System",
                 "Uprawnienie", "Grupa", "Podgrupa", "Zakres", "Data nadania", "Status",
-                "Oświadczenie — osoba", "Oświadczenie — data", "Kod"])
+                "Oświadczenie — osoba", "Oświadczenie — data", "Kod", "Odebrano"])
     for r in rows:
         zakres = "; ".join(f"{k}: {v}" for k, v in (r["custom_values"] or {}).items())
         granted = r["granted_at"]
@@ -193,6 +258,8 @@ def granted_registry_csv(
             r["request_status"] or "",
             r["declared_by_name"] or "", r["declared_date"] or "",
             r["reference_code"] or "",
+            (f"{r['revoked_at'].isoformat() if hasattr(r['revoked_at'], 'isoformat') else ''}"
+             f" (wniosek #{r['revoked_by_request_id']})").strip() if r["revoked"] else "",
         ]))
     buf.seek(0)
     fname = f"szup-rejestr-uprawnien-{datetime.utcnow().date()}.csv"

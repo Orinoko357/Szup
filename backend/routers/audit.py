@@ -132,9 +132,11 @@ def audit_stats(
 
 class PurgeRequest(BaseModel):
     password: str                    # potwierdzenie hasłem wykonującego
-    reason: str                      # wymagany, co najmniej 10 znaków
-    mode: str                        # "before" | "all"
-    before: Optional[str] = None     # data ISO (RRRR-MM-DD) — dla mode="before"
+    reason: str                      # wymagany, 10–1000 znaków
+    before: Optional[str] = None     # data ISO (RRRR-MM-DD, północ czasu polskiego);
+                                     # najpóźniej dziś minus 24 miesiące
+    # Zgodność wstecz: jedyny tryb to "before" (trybu "all" nie ma od 3.10).
+    mode: Optional[str] = "before"
 
 
 @router.post("/purge")
@@ -146,10 +148,11 @@ def purge_audit(
 ):
     """Czyszczenie dziennika zdarzeń — WYŁĄCZNIE superadmin (konto awaryjne).
 
-    Wymaga hasła i powodu. Usuwa wszystkie wpisy (`mode="all"`) albo starsze
-    niż `before`, z wyjątkiem śladów wcześniejszych czyszczeń. Operacja jest
-    atomowa (triggery append-only zdejmowane i zakładane w tej samej
-    transakcji) i zostawia ślad: wpis `audit.purged` + zdarzenie krytyczne.
+    Wymaga hasła i powodu. Usuwa wyłącznie wpisy starsze niż `before`, przy
+    czym `before` nie może być późniejsze niż dziś minus 24 miesiące
+    (retencja; inaczej 400). Ślady czyszczeń i resetu fabrycznego zostają.
+    Operacja jest atomowa: zdjęcie i założenie triggerów append-only, DELETE
+    oraz ślad (wpis `audit.purged` + zdarzenie krytyczne) w jednej transakcji.
     """
     from services.audit import run_log_purge
     return run_log_purge(session, request, current_user, log="audit",
