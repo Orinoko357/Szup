@@ -1,10 +1,6 @@
 """E2E: autoryzacja — Wariant A (H5), IDOR (H1/H2), scoping HR (M3), tryb testowy (C2)."""
 from __future__ import annotations
 
-import os
-
-from conftest import PW
-
 
 def _world(api):
     sup = api.setup_superadmin("root")

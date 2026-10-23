@@ -501,7 +501,7 @@ def test_group_delete_keeps_permissions_used_in_requests(api):
 def test_import_requires_it_staff(api):
     sup = api.setup_superadmin()
     sid = _system(api, sup)
-    uid = api.mk_user(sup, "kier", ["manager"], "Kier")
+    api.mk_user(sup, "kier", ["manager"], "Kier")
     tok = api.login("kier")
 
     r = api.post(f"/systems/{sid}/permissions/import/commit", token=tok, json={

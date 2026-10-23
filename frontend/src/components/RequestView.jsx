@@ -383,7 +383,8 @@ export default function RequestViewShell({
         + 'box-shadow:0 -6px 14px -10px rgba(13,20,36,.25)}'
         + '@media (max-width:600px){.rv-footer>div:last-child{width:100%}.rv-footer>div:last-child .btn{flex:1 1 auto}'
         + '.rv-head-back{width:100%}}'
-        + '.rv-title:focus{outline:none}.rv-title:focus-visible{outline:2px solid var(--color-gold);outline-offset:2px}'}</style>
+        + '.rv-title{display:inline-block;max-width:100%}'
+        + '.rv-title:focus{outline:none}.rv-title:focus-visible{outline:2px solid var(--color-gold);outline-offset:2px;border-radius:4px}'}</style>
       {/* Nagłówek */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
         {Icon && (

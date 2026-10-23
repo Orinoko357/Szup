@@ -205,15 +205,24 @@ function HandleTable({ rows, onOpen, hasPrep = false }) {
             </td>
             <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{r.requested_by_name || r.created_by_name}</td>
             <td>
-              {r.status === 'pending_selection' ? (
-                <button className="btn btn--action btn--sm" onClick={() => onOpen(r)} data-return-focus={r.id}>
-                  {isDraftReq(r)
-                    ? <><Save size={14} /> Kontynuuj</>
-                    : <><ListChecks size={14} /> {r.kind === 'revoke' ? 'Wybierz do odebrania' : 'Wybierz uprawnienia'}</>}
+              {/* Zapisana wersja robocza (wybór uprawnień albo akceptacja kierownika
+                  komórki) → „Kontynuuj”; na telefonie skrócone etykiety, pełna w aria-label. */}
+              {isDraftReq(r) ? (
+                <button className="btn btn--action btn--sm" onClick={() => onOpen(r)} data-return-focus={r.id}
+                        aria-label={`Kontynuuj wniosek #${r.id}`}>
+                  <Save size={14} aria-hidden="true" /> Kontynuuj
+                </button>
+              ) : r.status === 'pending_selection' ? (
+                <button className="btn btn--action btn--sm" onClick={() => onOpen(r)} data-return-focus={r.id}
+                        aria-label={`${r.kind === 'revoke' ? 'Wybierz do odebrania' : 'Wybierz uprawnienia'} — wniosek #${r.id}`}>
+                  <ListChecks size={14} aria-hidden="true" />
+                  <span className="task-btn__long">{r.kind === 'revoke' ? 'Wybierz do odebrania' : 'Wybierz uprawnienia'}</span>
+                  <span className="task-btn__short">Wybierz</span>
                 </button>
               ) : (
-                <button className="btn btn--action btn--sm" onClick={() => onOpen(r)} data-return-focus={r.id}>
-                  <Check size={14} /> Decyzja
+                <button className="btn btn--action btn--sm" onClick={() => onOpen(r)} data-return-focus={r.id}
+                        aria-label={`Decyzja — wniosek #${r.id}`}>
+                  <Check size={14} aria-hidden="true" /> Decyzja
                 </button>
               )}
             </td>
@@ -371,7 +380,7 @@ function PrepTable({ rows, onOpen }) {
                 <div style={{ fontWeight: 700 }}>{r.worker_name}</div>
                 <KindPill kind={r.kind} />
               </td>
-              <td>{deptFull(r.department_name, r.department_description) || '—'}</td>
+              <td style={{ minWidth: 160 }}>{deptFull(r.department_name, r.department_description) || '—'}</td>
               <td>
                 <StatusCell r={r} />
               </td>
@@ -404,6 +413,11 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   // bieżącym kroku (can_act) — inaczej podgląd (bez przycisków kończących się 403).
   const isSelect   = !!r.can_act && r.status === 'pending_selection'
   const isDecision = !!r.can_act && r.status === 'pending_manager'
+  // Rodzaj kroku decyzji: akceptacja kierownika komórki (osobny krok szablonu —
+  // można zapisać wersję roboczą z uwagami) albo kierownika nadrzędnego
+  // (tylko on może odmówić pojedynczych pozycji).
+  const isMgrApprove    = isDecision && r.current_node_type === 'manager_approve'
+  const isHigherApprove = isDecision && r.current_node_type === 'higher_manager_approve'
   // Dwie ścieżki zależne od flagi komórki „wymaga akceptacji wyższego rzędu":
   //  - 2-stopniowa: kierownik → kierownik nadrzędny → IT
   //  - 1-stopniowa: kierownik → IT (bez akceptacji wyższego rzędu)
@@ -417,6 +431,8 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     ? ['higher_manager_approve', 'manager_approve'].includes(nextNode)
     : twoStage
   const approvalWho = nextNode === 'manager_approve' ? 'kierownika komórki' : 'kierownika nadrzędnego'
+  // Dokąd trafi wniosek — jedno źródło dla przycisku, podtytułu i podsumowania.
+  const destText = toApproval ? `do akceptacji ${approvalWho}` : 'do realizacji przez IT'
   // Przełożony może wniosek z podległej komórki tylko podejrzeć i „Przejąć”.
   const canTakeOver = !!r.can_take_over && !r.can_act
   // Wniosek z zapisaną wersją roboczą — zaznaczenie odtwarzamy z jego pozycji.
@@ -431,10 +447,11 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   const [fieldValues, setFieldValues] = useState({})
   // Zakres, który pracownik ma OBECNIE — do wykrycia, czy kierownik go zmienił.
   const [heldValues, setHeldValues] = useState({})
-  // Uwagi zapisane z wersją roboczą (backend trzyma je jako komentarz kierownika).
-  const initialComment = (isSelect && fromDraft && r.manager_comment) || ''
+  // Uwagi zapisane z wersją roboczą (backend trzyma je jako komentarz kierownika)
+  // — na kroku wyboru i na kroku akceptacji kierownika komórki.
+  const initialComment = ((isSelect || isMgrApprove) && isDraftReq(r) && r.manager_comment) || ''
   const [comment, setComment] = useState(initialComment)
-  // Odmowy pojedynczych pozycji (kierownik nadrzędny w obiegu 2-stopniowym):
+  // Odmowy pojedynczych pozycji (tylko krok kierownika nadrzędnego — higher_manager_approve):
   // { [item_id]: komentarz }.
   const [denials, setDenials] = useState({})
   const toggleDeny = (id) => setDenials(prev => {
@@ -692,8 +709,8 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     }
     const body = { action, comment }
     if (r.current_node_id) body.expected_node_id = r.current_node_id
-    // Odmowy pozycji dołączamy tylko przy zatwierdzaniu (kierownik nadrzędny).
-    if (action === 'approve') {
+    // Odmowy pozycji dołączamy tylko przy zatwierdzaniu przez kierownika nadrzędnego.
+    if (action === 'approve' && isHigherApprove) {
       const ds = Object.entries(denials).map(([item_id, c]) => ({
         item_id: Number(item_id), comment: (c || '').trim() || null,
       }))
@@ -725,7 +742,9 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
         : isSelect
           ? (toApproval ? `Wybór wysłany do akceptacji ${approvalWho} (#${r.id}).`
                         : `Wybór zatwierdzony — wniosek #${r.id} trafił do realizacji przez IT.`)
-          : `Zatwierdzono wniosek #${r.id}.`)
+          : isMgrApprove
+            ? `Zatwierdzono wniosek #${r.id} — trafił ${destText}.`
+            : `Zatwierdzono wniosek #${r.id}.`)
       setReviewOpen(false)
       onDone()
     } catch (ex) {
@@ -758,6 +777,23 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   // „Zapisz roboczy” — zapis wyboru bez wysyłania (bez podsumowania i bez
   // oświadczenia). Pozycje jak w akcji „select”; wniosek zostaje u kierownika.
   async function saveDraft() {
+    if (isMgrApprove) {
+      // Krok akceptacji kierownika komórki: pozycje są ustalone — zapisujemy tylko uwagi.
+      setBusy(true); setErr(null)
+      try {
+        const data = { comment }
+        if (r.current_node_id) data.expected_node_id = r.current_node_id
+        await saveRequestDraft(r.id, data)
+        toast(`Zapisano wersję roboczą wniosku #${r.id}.`)
+        onDone()
+      } catch (ex) {
+        const st = ex.response?.status
+        setErr(errorMessage(ex, 'Nie udało się zapisać wersji roboczej'))
+        setBusy(false)
+        if (st === 409 || st === 403) refreshAfterConflict(ex)
+      }
+      return
+    }
     if (loading || loadErr) { setErr(loadErr || 'Poczekaj na wczytanie uprawnień pracownika.'); return }
     setBusy(true); setErr(null)
     try {
@@ -927,8 +963,10 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       : `Wniosek #${r.id}`
 
   const _subtitle = isSelect
-    ? 'Zaznacz stan docelowy uprawnień — po wysłaniu wniosek trafi do IT.'
-    : isDecision ? 'Zatwierdź albo odrzuć wniosek.' : 'Podgląd wniosku i jego obiegu.'
+    ? `Zaznacz stan docelowy uprawnień — po wysłaniu wniosek trafi ${destText}.`
+    : isMgrApprove
+      ? `Zatwierdź albo odrzuć wniosek — po zatwierdzeniu trafi ${destText}.`
+      : isDecision ? 'Zatwierdź albo odrzuć wniosek.' : 'Podgląd wniosku i jego obiegu.'
   const _steps = buildWorkflowSteps({
     sent: true, nodeType: r.current_node_type, status: r.status,
     requiresHigher: r.requires_higher_approval, kind: r.kind,
@@ -969,6 +1007,12 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
             <X size={14} /> Odrzuć
           </button>
         )}
+        {isMgrApprove && (
+          <button className="btn btn--ghost" onClick={saveDraft} disabled={busy}
+                  title="Zapisz uwagi bez wysyłania — wrócisz do wniosku później">
+            <Save size={14} /> Zapisz roboczy
+          </button>
+        )}
         {isSelect && (
           <button className="btn btn--ghost" onClick={saveDraft} disabled={busy || loading || !!loadErr}
                   title="Zapisz bez wysyłania — wrócisz do wniosku później">
@@ -985,7 +1029,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
         )}
         {isDecision && (
           <button className="btn btn--success" onClick={() => submit('approve')} disabled={busy}>
-            <Check size={14} /> Zatwierdź
+            <Check size={14} /> {isMgrApprove ? sendLabel : 'Zatwierdź'}
           </button>
         )}
       </>}>
@@ -1041,14 +1085,14 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
               Kierownik nadrzędny widzi tu jasno, co jest NADAWANE, a co ODBIERANE. */}
           {!isSelect && (
             <Section n={sec()} title="Zmiany uprawnień we wniosku">
-              {isDecision && twoStage && (
+              {isHigherApprove && (
                 <p style={{ color: 'var(--color-text-muted)', fontSize: 12, margin: '4px 0 0' }}>
                   Możesz odmówić nadania pojedynczej pozycji (z komentarzem) — reszta wniosku przejdzie dalej.
                 </p>
               )}
               <div style={{ marginTop: 8 }}>
                 <PermissionChanges items={items}
-                  deny={isDecision && twoStage
+                  deny={isHigherApprove
                     ? { can: true, map: denials, toggle: toggleDeny, setComment: setDenyComment,
                         save: saveDeny, remove: removeDeny, busyId: denyBusy }
                     : undefined} />
@@ -1056,8 +1100,8 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
             </Section>
           )}
 
-          {/* W kroku wyboru z wersji roboczej komentarz jest już w polu „Uwagi”. */}
-          {r.manager_comment && !(isSelect && fromDraft) && (
+          {/* Komentarz z wersji roboczej jest już w polu „Uwagi” (wybór / akceptacja kierownika komórki). */}
+          {r.manager_comment && !initialComment && (
             <Section n={sec()} title="Komentarz kierownika">
               <div style={{ background: 'var(--bg-secondary)', padding: '10px 14px', borderRadius: 6 }}>{r.manager_comment}</div>
             </Section>

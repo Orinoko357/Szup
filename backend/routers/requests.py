@@ -339,14 +339,9 @@ def _serialize_request(r: AccessRequest, items: list, session: Session | None = 
         # „Wnioskujący" o konkretne uprawnienia = aktor ostatniego kroku
         # „select" w obiegu (zwykle kierownik I stopnia), NIE pracownik kadr,
         # który jedynie zgłosił zatrudnienie. Fallback: twórca wniosku.
-        from models import WorkflowInstance, WorkflowStep, WorkflowStepAction
-        preloaded = session.info.get("_wf_inst_by_req")
-        if preloaded is not None and r.id in preloaded:
-            inst = preloaded[r.id]
-        else:
-            inst = session.exec(
-                select(WorkflowInstance).where(WorkflowInstance.request_id == r.id)
-            ).first()
+        from models import WorkflowStep, WorkflowStepAction
+        from services.workflow import request_workflow
+        inst, cur_node = request_workflow(session, r)
         if inst:
             sel_step = session.exec(
                 select(WorkflowStep)
@@ -362,16 +357,7 @@ def _serialize_request(r: AccessRequest, items: list, session: Session | None = 
             if inst.status == WorkflowInstanceStatus.active:
                 current_node_id = inst.current_node_id
                 # v3.1 — „Czeka na: kto, od kiedy” (od wejścia w bieżący krok).
-                from services.workflow import (
-                    find_node, waiting_for_label, current_step_since,
-                )
-                try:
-                    cur_node = find_node(json.loads(inst.template_snapshot), inst.current_node_id)
-                except Exception:
-                    cur_node = None
-                # Zapamiętaj instancję i węzeł — list_requests użyje ich ponownie
-                # (can_act) zamiast drugi raz pobierać instancję i parsować graf.
-                session.info.setdefault("_wf_rows", {})[r.id] = (inst, cur_node)
+                from services.workflow import waiting_for_label, current_step_since
                 try:
                     waiting_for = waiting_for_label(
                         session, cur_node, r,
@@ -509,12 +495,12 @@ def _preload_for_requests(session: Session, rows: list) -> dict[int, list]:
     """Wczytaj hurtem dane potrzebne do serializacji listy wniosków (N+1).
 
     - pozycje wszystkich wniosków jednym zapytaniem (zwracamy mapę id → pozycje),
-    - instancje obiegu (do `session.info["_wf_inst_by_req"]`; brak instancji = None),
+    - instancje obiegu (do cache sesji — `services.workflow.preload_instances`),
     - komórki, jednostki, systemy, uprawnienia i konta użytkowników — trafiają do
       mapy tożsamości sesji, więc kolejne `session.get` nie odpytują bazy.
     Tylko odczyt; nic nie zmienia w danych.
     """
-    from models import WorkflowInstance
+    from services.workflow import preload_instances
     ids = [r.id for r in rows]
     if not ids:
         return {}
@@ -524,13 +510,7 @@ def _preload_for_requests(session: Session, rows: list) -> dict[int, list]:
     for it in items:
         by_req.setdefault(it.request_id, []).append(it)
 
-    inst_map: dict[int, object] = {i: None for i in ids}
-    for inst in session.exec(
-        select(WorkflowInstance).where(col(WorkflowInstance.request_id).in_(ids))
-    ).all():
-        if inst_map.get(inst.request_id) is None:
-            inst_map[inst.request_id] = inst
-    session.info.setdefault("_wf_inst_by_req", {}).update(inst_map)
+    preload_instances(session, ids)
 
     def _load(model, keys):
         keys = {k for k in keys if k}
@@ -561,52 +541,34 @@ def _attach_node_info(session: Session, out: list[dict], rows: list, user: User)
 
     Przejęcie, które wygasło (przejmujący nieaktywny albo nie jest już
     przełożonym), na etapie kierownika jest pokazywane jako brak przejęcia."""
-    from models import WorkflowInstance, WorkflowInstanceStatus
     from services.workflow import (
-        can_act, find_node, is_manager_stage, can_take_over, can_release,
-        effective_taker_id, landing_node_type,
+        can_act, is_manager_stage, can_take_over, can_release,
+        effective_taker_id, landing_node_type, request_workflow,
     )
     by_id = {r.id: r for r in rows}
-    cached = session.info.get("_wf_rows", {})
-    preloaded = session.info.get("_wf_inst_by_req", {})
     for row in out:
         r = by_id[row["id"]]
         node_type, act = None, False
         stage, take, release, next_type = False, False, False, None
-        if r.id in cached:
-            # Instancja i węzeł już wczytane w _serialize_request.
-            inst, node = cached[r.id]
-        else:
-            if r.id in preloaded:
-                inst = preloaded[r.id]
-            else:
-                inst = session.exec(
-                    select(WorkflowInstance).where(WorkflowInstance.request_id == r.id)
-                ).first()
-            node = None
-            if inst and inst.status == WorkflowInstanceStatus.active and inst.current_node_id:
-                try:
-                    node = find_node(json.loads(inst.template_snapshot), inst.current_node_id)
-                except Exception:
-                    node = None
-        if inst and inst.status == WorkflowInstanceStatus.active and inst.current_node_id:
-            if node:
-                node_type = node.get("type")
-                dept = session.get(Department, r.department_id) if r.department_id else None
-                allowed, _reason = can_act(node, r, dept, user, session)
-                act = bool(allowed)
-                stage = is_manager_stage(session, node_type, dept)
-                try:
-                    next_type = landing_node_type(session, inst, r, "approve")
-                except Exception:   # podpowiedź dla etykiety — nie może wywrócić listy
-                    next_type = None
-                if stage:
-                    take = can_take_over(session, r, user, node_type, dept)[0]
-                    release = can_release(session, r, user, node_type, dept)
-                    if r.taken_over_by_id and not effective_taker_id(session, r, dept):
-                        row["taken_over_by_id"] = None
-                        row["taken_over_by_name"] = None
-                        row["taken_over_at"] = None
+        # Instancja i graf zwykle już w cache sesji (_serialize_request / preload).
+        inst, node = request_workflow(session, r)
+        if node:
+            node_type = node.get("type")
+            dept = session.get(Department, r.department_id) if r.department_id else None
+            allowed, _reason = can_act(node, r, dept, user, session)
+            act = bool(allowed)
+            stage = is_manager_stage(session, node_type, dept)
+            try:
+                next_type = landing_node_type(session, inst, r, "approve")
+            except Exception:   # podpowiedź dla etykiety — nie może wywrócić listy
+                next_type = None
+            if stage:
+                take = can_take_over(session, r, user, node_type, dept)[0]
+                release = can_release(session, r, user, node_type, dept)
+                if r.taken_over_by_id and not effective_taker_id(session, r, dept):
+                    row["taken_over_by_id"] = None
+                    row["taken_over_by_name"] = None
+                    row["taken_over_at"] = None
         row["current_node_type"] = node_type
         row["next_node_type"] = next_type
         row["can_act"] = act
@@ -740,8 +702,8 @@ def list_requests(
 
     # Wnioski na etapie kierownika komórki (wersja robocza) „nie istnieją" dla
     # osób spoza kręgu kierownika — także dla IT i administratora. Wycinamy je
-    # już w SQL (ten sam warunek co `can_view_request`), żeby LIMIT/OFFSET
-    # liczyły tylko widoczne wiersze.
+    # już w SQL (odpowiednik `manager_stage_visibility`, z którego korzysta
+    # `_check_access`), żeby LIMIT/OFFSET liczyły tylko widoczne wiersze.
     from services.workflow import manager_stage_hidden_clause
     hidden = manager_stage_hidden_clause(session, current_user)
     if hidden is not None:
@@ -772,20 +734,16 @@ def workflow_dashboard(
     (do przypisania / akceptacji / realizacji) + powiadomienia o wnioskach
     czekających na jego działanie."""
     from models import WorkflowInstance, WorkflowInstanceStatus
-    from services.workflow import can_act, find_node, waiting_for_label, current_step_since
-    import json as _json
+    from services.workflow import (
+        active_node_of, can_act, waiting_for_label, current_step_since,
+    )
 
     def _entry(r: AccessRequest) -> Optional[dict]:
         """Zwraca wpis kolejki, jeśli bieżący użytkownik może działać na
         aktualnym węźle obiegu tego wniosku; inaczej None."""
         # Brak w mapie aktywnych = brak aktywnego obiegu (nie ma na czym działać).
         inst = inst_by_req.get(r.id)
-        if not inst or inst.status != WorkflowInstanceStatus.active or not inst.current_node_id:
-            return None
-        try:
-            node = find_node(_json.loads(inst.template_snapshot), inst.current_node_id)
-        except Exception:
-            node = None
+        node = active_node_of(session, inst)
         if not node:
             return None
         dept = session.get(Department, r.department_id) if r.department_id else None
@@ -960,7 +918,8 @@ def create_request(
     #  - kierownik (bez HR) może składać dla komórek ze SWOJEGO zakresu — ten sam
     #    zakres co `can_act`/wyszukiwarka (poddrzewo przełożonego + komórki
     #    jednostki, którą kieruje), żeby nie odmawiać złożenia wniosku dla
-    #    osoby, na której wniosku ten kierownik i tak może wykonać każdy krok,
+    #    osoby, na której wniosku ten kierownik i tak działa w obiegu (od razu
+    #    albo — w komórce z własnym kierownikiem — po przejęciu wniosku),
     #  - pracownik HR — tylko dla przypisanych mu jednostek.
     # Superadmin (break-glass) — bez ograniczeń.
     if not has_role(current_user, "superadmin"):
@@ -1061,22 +1020,6 @@ def create_request(
     return out
 
 
-def _current_node(session: Session, req: AccessRequest):
-    """(instancja, bieżący węzeł) aktywnego obiegu wniosku albo (instancja|None, None)."""
-    from models import WorkflowInstance, WorkflowInstanceStatus
-    from services.workflow import find_node
-    inst = session.exec(
-        select(WorkflowInstance).where(WorkflowInstance.request_id == req.id)
-    ).first()
-    node = None
-    if inst and inst.status == WorkflowInstanceStatus.active and inst.current_node_id:
-        try:
-            node = find_node(json.loads(inst.template_snapshot), inst.current_node_id)
-        except Exception:
-            node = None
-    return inst, node
-
-
 def _discard_stage_mail(session: Session, request_id: int, node_type: str) -> None:
     """Usuń z kolejki po-commitowej e-mail „wniosek czeka na Ciebie” dla
     węzła `node_type` — gdy krok wykonał/przejął sam składający."""
@@ -1095,9 +1038,11 @@ def _finish_creation_take_over(session: Session, req: AccessRequest, user: User)
     (zdarzenie w historii, bez e-maila do kierownika komórki o wyborze).
     W przeciwnym razie (szablon bez etapu kierownika) przejęcie nie ma sensu
     i jest czyszczone."""
-    from services.workflow import MANAGER_STAGE_TYPES, clear_take_over, record_request_event
+    from services.workflow import (
+        MANAGER_STAGE_TYPES, clear_take_over, record_request_event, request_workflow,
+    )
     from services.audit import record_event
-    _inst, node = _current_node(session, req)
+    _inst, node = request_workflow(session, req)
     ntype = (node or {}).get("type")
     if ntype not in MANAGER_STAGE_TYPES:
         clear_take_over(req)
@@ -1128,9 +1073,11 @@ def _auto_manager_steps(session: Session, req: AccessRequest, dept: Optional[Dep
     może na nim działać, wykonujemy ten krok w jego imieniu: „wybór uprawnień”
     (pozycje z formularza) albo „akceptacja kierownika”. Gdy krok kieruje
     wniosek do IT i nadaje uprawnienia — wymagane oświadczenie (428)."""
-    from services.workflow import MANAGER_STAGE_TYPES, can_act, execute_action
+    from services.workflow import (
+        MANAGER_STAGE_TYPES, can_act, execute_action, request_workflow,
+    )
     for _ in range(len(MANAGER_STAGE_TYPES) + 1):
-        inst, node = _current_node(session, req)
+        inst, node = request_workflow(session, req)
         ntype = (node or {}).get("type")
         if ntype not in MANAGER_STAGE_TYPES or not can_act(node, req, dept, user, session)[0]:
             return
@@ -1168,10 +1115,12 @@ def _save_initial_draft(session: Session, req: AccessRequest, dept: Optional[Dep
     E-mail „wniosek czeka na Ciebie”, zlecony przy wejściu w ten krok, jest
     zbędny — adresatem byłby sam składający.
     """
-    from services.workflow import MANAGER_STAGE_TYPES, can_act, record_request_event
+    from services.workflow import (
+        MANAGER_STAGE_TYPES, can_act, record_request_event, request_workflow,
+    )
     from services.audit import record_event
 
-    _inst, node = _current_node(session, req)
+    _inst, node = request_workflow(session, req)
     ntype = (node or {}).get("type")
     if ntype not in MANAGER_STAGE_TYPES or not can_act(node, req, dept, user, session)[0]:
         raise HTTPException(400, "Wersję roboczą może zapisać tylko kierownik komórki "
@@ -1350,17 +1299,14 @@ def get_workflow_state(
 
     `events` — historia etapu kierownika komórki spoza podpisanych kroków:
     [{action: "draft"|"take_over"|"release", actor_name, at (ISO), note}]."""
-    from models import WorkflowInstance
-    from services.workflow import serialize_instance, serialize_request_events
+    from services.workflow import instance_of, serialize_instance, serialize_request_events
 
     r = session.get(AccessRequest, request_id)
     if not r:
         raise HTTPException(404, "Wniosek nie istnieje")
     _check_access(current_user, r, session)
 
-    inst = session.exec(
-        select(WorkflowInstance).where(WorkflowInstance.request_id == request_id)
-    ).first()
+    inst = instance_of(session, r)
     if not inst:
         return {"workflow_enabled": False, "events": serialize_request_events(session, r.id)}
     out = serialize_instance(session, inst)
@@ -1432,6 +1378,146 @@ def _enforce_declaration(session, inst, request, action, current_user, declarati
     }
 
 
+def _select_payload(session: Session, r: AccessRequest, data: "WorkflowActionIn") -> dict:
+    """Akcja „select”: zastąp pozycje wniosku tym, co przyszło (kierownik
+    uzupełnia koszyk). Każda pozycja niesie własny kierunek (grant/revoke) —
+    stan docelowy. Zwraca payload kroku obiegu."""
+    old = session.exec(select(RequestItem).where(RequestItem.request_id == r.id)).all()
+    # Pusty wybór na wniosku z pozycjami (np. wpisanymi przez kadry) skasowałby
+    # je po cichu — typowo, gdy front nie zdołał wczytać listy uprawnień.
+    # Wymagamy świadomego potwierdzenia (allow_empty). To samo po zapisanej
+    # wersji roboczej: pusta wersja nie może „przy okazji” trafić do IT.
+    # Wniosek bez pozycji (np. ustanie pracownika, który nic nie ma) bez
+    # wersji roboczej przechodzi jak dotąd.
+    if not data.items and old and not data.allow_empty:
+        raise HTTPException(400,
+            "Nie wybrano żadnych uprawnień, a wniosek zawiera już pozycje "
+            "(np. wpisane przez kadry). Zatwierdzenie pustego wyboru usunęłoby je. "
+            "Odśwież wniosek i zaznacz uprawnienia albo potwierdź wniosek bez pozycji.")
+    if not data.items and r.draft_saved_at and not data.allow_empty:
+        raise HTTPException(400,
+            "Wersja robocza nie zawiera żadnych uprawnień. Zaznacz uprawnienia "
+            "albo potwierdź wysłanie wniosku bez pozycji.")
+    return {"items": _replace_request_items(session, r, data.items)}
+
+
+def _add_it_items(session: Session, r: AccessRequest, data: "WorkflowActionIn",
+                  user: User) -> list[dict]:
+    """Pozycje dołożone przez IT na etapie realizacji (`added_items`).
+
+    Wymaga uzasadnienia (komentarz akcji), sprawdza zakres jednostki i duplikaty
+    na wniosku; zapisuje pozycje (flush, bez commitu) i zwraca ich opis do
+    podpisanego payloadu kroku."""
+    # Uzasadnienie jest obowiązkowe: IT rozszerza zakres poza to,
+    # co zatwierdził kierownik — musi zostać ślad dlaczego.
+    if not (data.comment or "").strip():
+        raise HTTPException(
+            400,
+            "Dodanie uprawnień wymaga uzasadnienia — wpisz, dlaczego są "
+            "potrzebne (np. moduł wymaga zależnego dostępu).",
+        )
+    _validate_items_scope(session, r.unit_id, data.added_items)
+
+    # Bez unikalności na (request_id, system_id, permission_id) w bazie
+    # duplikat dałby zdublowane wiersze w podglądzie wniosku i w rejestrze.
+    have = {
+        (it.system_id, it.permission_id)
+        for it in session.exec(
+            select(RequestItem).where(RequestItem.request_id == r.id)
+        ).all()
+    }
+    for it in data.added_items:
+        key = (it.system_id, it.permission_id)
+        if key in have:
+            sys_obj = session.get(PermissionSystem, it.system_id)
+            perm_obj = session.get(SystemPermission, it.permission_id)
+            raise HTTPException(
+                400,
+                f'Uprawnienie „{perm_obj.permission_name if perm_obj else it.permission_id}" '
+                f'({sys_obj.name if sys_obj else it.system_id}) jest już na wniosku.',
+            )
+        have.add(key)
+
+    added_payload = []
+    for it in data.added_items:
+        cleaned = _clean_custom_values(session, it)
+        session.add(RequestItem(
+            request_id=r.id, system_id=it.system_id,
+            permission_id=it.permission_id, kind="grant",
+            custom_values=cleaned,
+            added_by_user_id=user.id))
+        # Do śladu audytowego trafiają wartości PO czyszczeniu, żeby
+        # podpisany payload zgadzał się z tym, co zapisano w bazie.
+        added_payload.append({
+            "system_id": it.system_id,
+            "permission_id": it.permission_id,
+            "kind": "grant",
+            "custom_values": json.loads(cleaned) if cleaned else {},
+        })
+    session.flush()
+    return added_payload
+
+
+def _apply_item_denials(session: Session, r: AccessRequest, denials: list,
+                        user: User) -> None:
+    """Odmowa wskazanych pozycji przy akcji obiegu (kombinację akcja/węzeł
+    sprawdza wołający). Odmowa wyklucza „zrealizowano” — czyścimy odhaczenie."""
+    want = {d.item_id: ((d.comment or "").strip() or None) for d in denials}
+    rows = session.exec(
+        select(RequestItem).where(RequestItem.request_id == r.id)
+        .where(col(RequestItem.id).in_(list(want.keys())))
+    ).all()
+    missing = set(want.keys()) - {x.id for x in rows}
+    if missing:
+        raise HTTPException(400, "Część pozycji do odmowy nie należy do tego wniosku.")
+    for x in rows:
+        x.denied = True
+        x.deny_comment = want[x.id]
+        x.denied_by_user_id = user.id
+        x.denied_at = datetime.utcnow()
+        x.fulfilled = False
+        x.fulfilled_by_user_id = None
+        x.fulfilled_at = None
+        session.add(x)
+    session.flush()
+
+
+def _close_it_realization(session: Session, r: AccessRequest, user: User) -> None:
+    """Zamknięcie realizacji przez IT (execute na it_execute) — każda pozycja
+    NADANIA, która nie została odmówiona, zostaje odhaczona jako zrealizowana.
+    Dzięki temu po częściowej/etapowej pracy stan końcowy jest spójny
+    (wszystko „zrealizowano” albo „odmówiono”), a rejestr i audyt się zgadzają.
+    Pozycje odhaczone wcześniej zachowują swojego realizatora i datę."""
+    now = datetime.utcnow()
+    for x in session.exec(
+        select(RequestItem).where(RequestItem.request_id == r.id)
+        .where(col(RequestItem.denied) == False)  # noqa: E712
+        .where((col(RequestItem.kind) == "grant") | (col(RequestItem.kind).is_(None)))
+    ).all():
+        if not x.fulfilled:
+            x.fulfilled = True
+            x.fulfilled_by_user_id = user.id
+            x.fulfilled_at = now
+            session.add(x)
+    session.flush()
+
+
+def _ensure_taker_unchanged(session: Session, r: AccessRequest,
+                            observed_taker: Optional[int]) -> None:
+    """Wyścig kroku kierownika z przejęciem: zapis jest już w transakcji
+    (blokada zapisu SQLite), więc odczyt poniżej widzi każde zatwierdzone
+    w międzyczasie przejęcie. Gdy stan przejęcia się zmienił — rollback i 409."""
+    from sqlalchemy import select as _sa_select
+    session.flush()
+    current_taker = session.connection().execute(
+        _sa_select(AccessRequest.taken_over_by_id).where(AccessRequest.id == r.id)
+    ).scalar()
+    if current_taker != observed_taker:
+        session.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT,
+            "Wniosek został w międzyczasie przejęty przez przełożonego. Odśwież wniosek.")
+
+
 @router.post("/{request_id}/workflow/action")
 def workflow_action(
     request_id: int,
@@ -1439,18 +1525,20 @@ def workflow_action(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
-    """Wykonuje akcję na aktualnym węźle obiegu. Silnik przechodzi dalej."""
-    from models import WorkflowInstance
-    from services.workflow import execute_action, serialize_instance
+    """Wykonuje akcję na aktualnym węźle obiegu. Silnik przechodzi dalej.
+
+    Kolejność: walidacja bez zmian w bazie → payload akcji (wybór pozycji /
+    pozycje dołożone przez IT, dowiązanie konta) → odmowy pozycji → zamknięcie
+    realizacji IT → oświadczenie → krok silnika → kontrola wyścigu z przejęciem
+    → commit. Wszystko w jednej transakcji."""
+    from services.workflow import execute_action, instance_of, serialize_instance
 
     r = session.get(AccessRequest, request_id)
     if not r:
         raise HTTPException(404, "Wniosek nie istnieje")
     _check_access(current_user, r, session)
 
-    inst = session.exec(
-        select(WorkflowInstance).where(WorkflowInstance.request_id == request_id)
-    ).first()
+    inst = instance_of(session, r)
     if not inst:
         raise HTTPException(400, "Wniosek nie ma podpiętego obiegu (starszy wniosek?).")
 
@@ -1487,87 +1575,18 @@ def workflow_action(
     # Payload zależy od akcji.
     payload = None
     if data.action == "select":
-        # Zastąp RequestItem tym co przyszło (kierownik uzupełnia koszyk).
-        # Każda pozycja niesie własny kierunek (grant/revoke) — stan docelowy.
-        old = session.exec(select(RequestItem).where(RequestItem.request_id == r.id)).all()
-        # Pusty wybór na wniosku z pozycjami (np. wpisanymi przez kadry) skasowałby
-        # je po cichu — typowo, gdy front nie zdołał wczytać listy uprawnień.
-        # Wymagamy świadomego potwierdzenia (allow_empty). To samo po zapisanej
-        # wersji roboczej: pusta wersja nie może „przy okazji” trafić do IT.
-        # Wniosek bez pozycji (np. ustanie pracownika, który nic nie ma) bez
-        # wersji roboczej przechodzi jak dotąd.
-        if not data.items and old and not data.allow_empty:
-            raise HTTPException(400,
-                "Nie wybrano żadnych uprawnień, a wniosek zawiera już pozycje "
-                "(np. wpisane przez kadry). Zatwierdzenie pustego wyboru usunęłoby je. "
-                "Odśwież wniosek i zaznacz uprawnienia albo potwierdź wniosek bez pozycji.")
-        if not data.items and r.draft_saved_at and not data.allow_empty:
-            raise HTTPException(400,
-                "Wersja robocza nie zawiera żadnych uprawnień. Zaznacz uprawnienia "
-                "albo potwierdź wysłanie wniosku bez pozycji.")
-        payload = {"items": _replace_request_items(session, r, data.items)}
+        payload = _select_payload(session, r, data)
     elif data.action == "execute":
         payload = {"ad_username": data.ad_username} if data.ad_username else None
-
-        # --- Pozycje dołożone przez IT ------------------------------------
         # Uprawnienie do kroku sprawdziło już validate_action; wszystko poniżej
         # (pozycje, konto-widmo z _resolve_or_create_worker) to flush w JEDNEJ
         # transakcji — przy błędzie nic nie zostaje w bazie.
-        added_payload = []
         if data.added_items:
-            # Uzasadnienie jest obowiązkowe: IT rozszerza zakres poza to,
-            # co zatwierdził kierownik — musi zostać ślad dlaczego.
-            if not (data.comment or "").strip():
-                raise HTTPException(
-                    400,
-                    "Dodanie uprawnień wymaga uzasadnienia — wpisz, dlaczego są "
-                    "potrzebne (np. moduł wymaga zależnego dostępu).",
-                )
-            _validate_items_scope(session, r.unit_id, data.added_items)
-
-            # Bez unikalności na (request_id, system_id, permission_id) w bazie
-            # duplikat dałby zdublowane wiersze w podglądzie wniosku i w rejestrze.
-            have = {
-                (it.system_id, it.permission_id)
-                for it in session.exec(
-                    select(RequestItem).where(RequestItem.request_id == r.id)
-                ).all()
-            }
-            for it in data.added_items:
-                key = (it.system_id, it.permission_id)
-                if key in have:
-                    sys_obj = session.get(PermissionSystem, it.system_id)
-                    perm_obj = session.get(SystemPermission, it.permission_id)
-                    raise HTTPException(
-                        400,
-                        f'Uprawnienie „{perm_obj.permission_name if perm_obj else it.permission_id}" '
-                        f'({sys_obj.name if sys_obj else it.system_id}) jest już na wniosku.',
-                    )
-                have.add(key)
-
-            for it in data.added_items:
-                cleaned = _clean_custom_values(session, it)
-                session.add(RequestItem(
-                    request_id=r.id, system_id=it.system_id,
-                    permission_id=it.permission_id, kind="grant",
-                    custom_values=cleaned,
-                    added_by_user_id=current_user.id))
-                # Do śladu audytowego trafiają wartości PO czyszczeniu, żeby
-                # podpisany payload zgadzał się z tym, co zapisano w bazie.
-                added_payload.append({
-                    "system_id": it.system_id,
-                    "permission_id": it.permission_id,
-                    "kind": "grant",
-                    "custom_values": json.loads(cleaned) if cleaned else {},
-                })
-            session.flush()
-
             payload = {
                 **(payload or {}),
-                "added_items": added_payload,
+                "added_items": _add_it_items(session, r, data, current_user),
                 "justification": (data.comment or "").strip(),
             }
-
         # Dowiąż wniosek do konta pracownika (tworzy ghost-LDAP, jeśli trzeba).
         # Dzięki temu pracownik od razu widzi swoje
         # uprawnienia w „Moje uprawnienia", a wniosek pojawia się w strukturze.
@@ -1577,42 +1596,11 @@ def workflow_action(
 
     # Odmowa konkretnych pozycji (kombinację akcja/węzeł sprawdzono wyżej).
     if data.denials:
-        want = {d.item_id: ((d.comment or "").strip() or None) for d in data.denials}
-        rows = session.exec(
-            select(RequestItem).where(RequestItem.request_id == r.id)
-            .where(col(RequestItem.id).in_(list(want.keys())))
-        ).all()
-        missing = set(want.keys()) - {x.id for x in rows}
-        if missing:
-            raise HTTPException(400, "Część pozycji do odmowy nie należy do tego wniosku.")
-        for x in rows:
-            x.denied = True
-            x.deny_comment = want[x.id]
-            x.denied_by_user_id = current_user.id
-            x.denied_at = datetime.utcnow()
-            x.fulfilled = False
-            x.fulfilled_by_user_id = None
-            x.fulfilled_at = None
-            session.add(x)
-        session.flush()
+        _apply_item_denials(session, r, data.denials, current_user)
 
-    # Zamknięcie realizacji przez IT (execute na it_execute) — każda pozycja
-    # NADANIA, która nie została odmówiona, zostaje odhaczona jako zrealizowana.
-    # Dzięki temu po częściowej/etapowej pracy stan końcowy jest spójny
-    # (wszystko „zrealizowano" albo „odmówiono"), a rejestr i audyt się zgadzają.
+    # Zamknięcie realizacji przez IT (execute na it_execute).
     if data.action == "execute":
-        now = datetime.utcnow()
-        for x in session.exec(
-            select(RequestItem).where(RequestItem.request_id == r.id)
-            .where(col(RequestItem.denied) == False)  # noqa: E712
-            .where((col(RequestItem.kind) == "grant") | (col(RequestItem.kind).is_(None)))
-        ).all():
-            if not x.fulfilled:
-                x.fulfilled = True
-                x.fulfilled_by_user_id = current_user.id
-                x.fulfilled_at = now
-                session.add(x)
-        session.flush()
+        _close_it_realization(session, r, current_user)
 
     # Oświadczenie wnioskującego — gdy TA akcja kieruje wniosek do IT i wniosek
     # nadaje uprawnienia. Brak → 428; jest → zapis + dopisanie do payloadu kroku.
@@ -1631,18 +1619,7 @@ def workflow_action(
     execute_action(session, inst, r, current_user, data.action,
                    payload=payload, comment=data.comment)
     if ntype in MANAGER_STAGE_TYPES:
-        # Wyścig z przejęciem: zapis jest już w transakcji (blokada zapisu
-        # SQLite), więc odczyt poniżej widzi każde zatwierdzone w międzyczasie
-        # przejęcie. Gdy stan przejęcia się zmienił — ten krok nie jest ważny.
-        session.flush()
-        from sqlalchemy import select as _sa_select
-        current_taker = session.connection().execute(
-            _sa_select(AccessRequest.taken_over_by_id).where(AccessRequest.id == r.id)
-        ).scalar()
-        if current_taker != observed_taker:
-            session.rollback()
-            raise HTTPException(status.HTTP_409_CONFLICT,
-                "Wniosek został w międzyczasie przejęty przez przełożonego. Odśwież wniosek.")
+        _ensure_taker_unchanged(session, r, observed_taker)
     try:
         session.commit()
     except IntegrityError:
@@ -1659,19 +1636,13 @@ def workflow_action(
 
 def _active_node(session: Session, request_id: int):
     """(instancja, bieżący węzeł) aktywnego obiegu albo 409/400, gdy go nie ma."""
-    from models import WorkflowInstance, WorkflowInstanceStatus
-    from services.workflow import find_node
-    inst = session.exec(
-        select(WorkflowInstance).where(WorkflowInstance.request_id == request_id)
-    ).first()
+    from models import WorkflowInstanceStatus
+    from services.workflow import request_workflow
+    inst, node = request_workflow(session, request_id)
     if not inst:
         raise HTTPException(400, "Wniosek nie ma podpiętego obiegu (starszy wniosek?).")
     if inst.status != WorkflowInstanceStatus.active or not inst.current_node_id:
         raise HTTPException(status.HTTP_409_CONFLICT, STEP_ALREADY_DONE_MSG)
-    try:
-        node = find_node(json.loads(inst.template_snapshot), inst.current_node_id)
-    except Exception:
-        node = None
     if not node:
         raise HTTPException(400, "Instancja nie ma aktualnego węzła.")
     return inst, node
@@ -1927,6 +1898,19 @@ def release_request(
     return _request_out(session, r, current_user)
 
 
+def _item_action_node(session: Session, request_id: int) -> Optional[dict]:
+    """Bieżący węzeł dla akcji na pojedynczej pozycji (odmowa / odhaczenie
+    realizacji): 400 bez obiegu, 409 gdy obieg już się zakończył."""
+    from models import WorkflowInstanceStatus
+    from services.workflow import request_workflow
+    inst, node = request_workflow(session, request_id)
+    if not inst or not inst.current_node_id:
+        raise HTTPException(400, "Wniosek nie ma aktywnego obiegu.")
+    if inst.status != WorkflowInstanceStatus.active:
+        raise HTTPException(status.HTTP_409_CONFLICT, STEP_ALREADY_DONE_MSG)
+    return node
+
+
 class ItemDenyIn(BaseModel):
     denied: bool = True              # True = odmów, False = cofnij odmowę
     comment: Optional[str] = None
@@ -1945,9 +1929,8 @@ def set_item_denial(
     razu, że odmowa się zapisała (badge „odmówiono"). Dozwolone tylko na węźle,
     na którym ta osoba faktycznie może działać (higher_manager_approve /
     it_execute) — reguły jak w `workflow_action`."""
-    from models import WorkflowInstance
     from services.audit import record_event
-    from services.workflow import can_act, find_node
+    from services.workflow import can_act
 
     r = session.get(AccessRequest, request_id)
     if not r:
@@ -1958,16 +1941,7 @@ def set_item_denial(
     if not item or item.request_id != request_id:
         raise HTTPException(404, "Pozycja nie należy do tego wniosku.")
 
-    inst = session.exec(
-        select(WorkflowInstance).where(WorkflowInstance.request_id == request_id)
-    ).first()
-    if not inst or not inst.current_node_id:
-        raise HTTPException(400, "Wniosek nie ma aktywnego obiegu.")
-    from models import WorkflowInstanceStatus
-    if inst.status != WorkflowInstanceStatus.active:
-        raise HTTPException(status.HTTP_409_CONFLICT, STEP_ALREADY_DONE_MSG)
-
-    node = find_node(json.loads(inst.template_snapshot), inst.current_node_id)
+    node = _item_action_node(session, request_id)
     ntype = (node or {}).get("type")
     if ntype not in ("higher_manager_approve", "it_execute"):
         raise HTTPException(400,
@@ -2038,9 +2012,8 @@ def set_item_fulfilled(
     etapowa. Zapis w bazie OD RAZU, zanim zamknie się cały wniosek, żeby IT
     mogło realizować wniosek częściami i widziało, co już zrobione. Dozwolone
     tylko na węźle `it_execute` i tylko dla osoby, która może tam działać."""
-    from models import WorkflowInstance
     from services.audit import record_event
-    from services.workflow import can_act, find_node
+    from services.workflow import can_act
 
     r = session.get(AccessRequest, request_id)
     if not r:
@@ -2051,16 +2024,7 @@ def set_item_fulfilled(
     if not item or item.request_id != request_id:
         raise HTTPException(404, "Pozycja nie należy do tego wniosku.")
 
-    inst = session.exec(
-        select(WorkflowInstance).where(WorkflowInstance.request_id == request_id)
-    ).first()
-    if not inst or not inst.current_node_id:
-        raise HTTPException(400, "Wniosek nie ma aktywnego obiegu.")
-    from models import WorkflowInstanceStatus
-    if inst.status != WorkflowInstanceStatus.active:
-        raise HTTPException(status.HTTP_409_CONFLICT, STEP_ALREADY_DONE_MSG)
-
-    node = find_node(json.loads(inst.template_snapshot), inst.current_node_id)
+    node = _item_action_node(session, request_id)
     ntype = (node or {}).get("type")
     if ntype != "it_execute":
         raise HTTPException(400,
@@ -2115,17 +2079,14 @@ def verify_workflow_chain(
     current_user: User = Depends(get_current_user),
 ):
     """Weryfikuje łańcuch podpisów kroków. Dla audytora / superadmina."""
-    from models import WorkflowInstance
-    from services.workflow import verify_chain
+    from services.workflow import instance_of, verify_chain
 
     r = session.get(AccessRequest, request_id)
     if not r:
         raise HTTPException(404, "Wniosek nie istnieje")
     _check_access(current_user, r, session)
 
-    inst = session.exec(
-        select(WorkflowInstance).where(WorkflowInstance.request_id == request_id)
-    ).first()
+    inst = instance_of(session, r)
     if not inst:
         return {"workflow_enabled": False, "chain_valid": None}
     return {"workflow_enabled": True, "chain_valid": verify_chain(session, inst.id)}

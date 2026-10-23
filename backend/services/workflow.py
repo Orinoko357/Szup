@@ -401,28 +401,97 @@ def is_manager_stage(session: Session, node_type: Optional[str],
     return node_type in MANAGER_STAGE_TYPES and dept_has_own_manager(session, dept)
 
 
-def current_node_of(session: Session, request: AccessRequest) -> Optional[dict]:
-    """Bieżący węzeł AKTYWNEGO obiegu wniosku (albo None).
+# ---------------------------------------------------------------------------
+# Instancja obiegu wniosku i jej bieżący węzeł (wspólny helper + cache sesji)
+# ---------------------------------------------------------------------------
+#
+# Cache w `session.info` (na czas jednego żądania):
+#   _wf_rows   — {request_id: WorkflowInstance | None} (None = wniosek bez obiegu),
+#   _wf_graphs — {instance_id: sparsowany template_snapshot}.
+# Snapshot grafu instancji jest zamrożony, a sama instancja to obiekt z mapy
+# tożsamości sesji (zawsze aktualny `current_node_id`/`status`), więc węzeł
+# wyliczamy na bieżąco z cache'owanego grafu. Cache czyścimy po każdym flushu
+# i rollbacku — jak `_perm_cache` w services.permissions — żeby nowo utworzona
+# (albo wycofana) instancja nie zostawiała nieaktualnego wpisu.
 
-    Korzysta z danych wczytanych hurtem przez router (`_wf_rows`,
-    `_wf_inst_by_req` w `session.info`), żeby lista wniosków nie odpytywała bazy
-    osobno dla każdego wiersza."""
-    cached = session.info.get("_wf_rows", {})
-    if request.id in cached:
-        return cached[request.id][1]
-    preloaded = session.info.get("_wf_inst_by_req", {})
-    if request.id in preloaded:
-        inst = preloaded[request.id]
-    else:
-        inst = session.exec(
-            select(WorkflowInstance).where(WorkflowInstance.request_id == request.id)
+_WF_CACHE_KEYS = ("_wf_rows", "_wf_graphs")
+
+
+def _clear_wf_cache(session, *_args) -> None:
+    for key in _WF_CACHE_KEYS:
+        session.info.pop(key, None)
+
+
+def _install_wf_cache_invalidation() -> None:
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session as _OrmSession
+    if not event.contains(_OrmSession, "after_flush", _clear_wf_cache):
+        event.listen(_OrmSession, "after_flush", _clear_wf_cache)
+        event.listen(_OrmSession, "after_rollback", _clear_wf_cache)
+
+
+_install_wf_cache_invalidation()
+
+
+def preload_instances(session: Session, request_ids: list[int]) -> None:
+    """Wczytaj hurtem instancje obiegu wniosków do cache sesji (lista wniosków —
+    bez osobnego zapytania na wiersz). Wniosek bez instancji → None."""
+    if not request_ids:
+        return
+    from sqlmodel import col
+    found: dict[int, Optional[WorkflowInstance]] = {i: None for i in request_ids}
+    for inst in session.exec(
+        select(WorkflowInstance).where(col(WorkflowInstance.request_id).in_(request_ids))
+    ).all():
+        if found.get(inst.request_id) is None:
+            found[inst.request_id] = inst
+    session.info.setdefault("_wf_rows", {}).update(found)
+
+
+def instance_of(session: Session, request: AccessRequest | int) -> Optional[WorkflowInstance]:
+    """Instancja obiegu wniosku (w dowolnym stanie) albo None — z cache sesji."""
+    rid = request if isinstance(request, int) else request.id
+    cache = session.info.setdefault("_wf_rows", {})
+    if rid not in cache:
+        cache[rid] = session.exec(
+            select(WorkflowInstance).where(WorkflowInstance.request_id == rid)
         ).first()
-    if not inst or inst.status != WorkflowInstanceStatus.active or not inst.current_node_id:
+    return cache[rid]
+
+
+def active_node_of(session: Session, instance: Optional[WorkflowInstance]) -> Optional[dict]:
+    """Bieżący węzeł instancji, o ile obieg jest AKTYWNY i ma węzeł; inaczej None
+    (także przy uszkodzonym snapshocie grafu)."""
+    if (instance is None or instance.status != WorkflowInstanceStatus.active
+            or not instance.current_node_id):
         return None
+    graphs = session.info.setdefault("_wf_graphs", {})
+    graph = graphs.get(instance.id)
+    if graph is None:
+        try:
+            graph = json.loads(instance.template_snapshot)
+        except Exception:
+            return None
+        graphs[instance.id] = graph
     try:
-        return find_node(json.loads(inst.template_snapshot), inst.current_node_id)
+        return find_node(graph, instance.current_node_id)
     except Exception:
         return None
+
+
+def request_workflow(session: Session, request: AccessRequest | int
+                     ) -> tuple[Optional[WorkflowInstance], Optional[dict]]:
+    """(instancja, bieżący węzeł) wniosku — JEDYNY helper „wniosek → aktywny
+    węzeł” dla silnika i routerów. Instancja zwracana w każdym stanie (np. do
+    historii kroków), węzeł tylko dla aktywnego obiegu (patrz `active_node_of`)."""
+    inst = instance_of(session, request)
+    return inst, active_node_of(session, inst)
+
+
+def current_node_of(session: Session, request: AccessRequest) -> Optional[dict]:
+    """Bieżący węzeł AKTYWNEGO obiegu wniosku (albo None) — skrót do
+    `request_workflow`."""
+    return request_workflow(session, request)[1]
 
 
 _UNSET = object()
@@ -501,7 +570,14 @@ def outranks_taker(session: Session, user: User, taker_id: int,
 def manager_stage_visibility(session: Session, request: AccessRequest, user: User,
                              node_type: Any = _UNSET,
                              dept: Any = _UNSET) -> Optional[bool]:
-    """Widoczność wniosku na etapie kierownika komórki.
+    """Widoczność wniosku na etapie kierownika komórki — JEDYNE źródło prawdy
+    tej reguły (pozostałe funkcje są jej pochodnymi):
+
+    - `can_view_request` — ta sama reguła jako bool (False = ukryty),
+    - `manager_stage_hidden_clause` — jej odpowiednik w SQL dla listy wniosków
+      (zgodność pilnuje test równoważności w tests/test_cleanup35_visibility.py),
+    - router (`_check_access`) czyta wynik trójstanowo: None → zwykłe reguły
+      ról, True → dostęp bez dalszych warunków, False → 403.
 
     Zwraca None, gdy wniosek NIE jest na takim etapie (obowiązują zwykłe reguły
     dostępu), True — gdy jest i `user` może go zobaczyć, False — gdy jest
@@ -534,11 +610,9 @@ def manager_stage_visibility(session: Session, request: AccessRequest, user: Use
 
 def can_view_request(session: Session, request: AccessRequest, user: User,
                      node_type: Any = _UNSET, dept: Any = _UNSET) -> bool:
-    """False tylko wtedy, gdy wniosek jest na etapie kierownika komórki i ma być
-    przed `user` ukryty. Pozostałe reguły dostępu sprawdza router.
-
-    To jedyne źródło prawdy dla pojedynczego wniosku; lista wniosków stosuje
-    ten sam warunek w SQL (`manager_stage_hidden_clause`)."""
+    """`manager_stage_visibility` jako bool: False tylko wtedy, gdy wniosek jest
+    na etapie kierownika komórki i ma być przed `user` ukryty. Pozostałe reguły
+    dostępu (role, zakres komórek) sprawdza router."""
     return manager_stage_visibility(session, request, user, node_type, dept) is not False
 
 
@@ -551,8 +625,15 @@ def manager_stage_hidden_clause(session: Session, user: User):
     aktywnym kierownikiem (`AccessRequest.current_node_type`), nie został
     złożony przez `user`, a jego komórka leży poza „kręgiem” `user`
     (`superior_dept_ids`: komórki, którymi kieruje lub jest zastępcą, ich
-    poddrzewo i komórki jednostki, którą kieruje)."""
-    from sqlalchemy import or_
+    poddrzewo i komórki jednostki, którą kieruje).
+
+    Siatka bezpieczeństwa: wniosek W TOKU z pustym `current_node_type` (kolumna
+    niewypełniona — np. nieudany backfill po migracji) w takiej komórce też jest
+    ukryty. Pusty typ przepuszczamy tylko dla wniosków zakończonych/odrzuconych
+    (silnik zeruje wtedy kolumnę). Lepiej chwilowo nie pokazać wniosku na liście,
+    niż ujawnić wersję roboczą kierownika; podgląd pojedynczego wniosku i tak
+    liczy regułę z instancji obiegu (`manager_stage_visibility`)."""
+    from sqlalchemy import and_, or_
     from sqlmodel import col
     from services.permissions import superior_dept_ids
     if has_role(user, "superadmin"):
@@ -566,7 +647,8 @@ def manager_stage_hidden_clause(session: Session, user: User):
     if not hidden:
         return None
     return or_(
-        col(AccessRequest.current_node_type).is_(None),
+        and_(col(AccessRequest.current_node_type).is_(None),
+             col(AccessRequest.status).in_([RequestStatus.completed, RequestStatus.rejected])),
         col(AccessRequest.current_node_type).notin_(list(MANAGER_STAGE_TYPES)),
         col(AccessRequest.department_id).notin_(hidden),
         col(AccessRequest.created_by_id) == user.id,

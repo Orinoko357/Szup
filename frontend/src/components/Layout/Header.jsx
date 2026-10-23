@@ -1,6 +1,6 @@
 import { LogOut, KeyRound, Menu, Moon, Sun } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { logout as apiLogout, changePassword, errorMessage } from '../../api'
 import { toast } from '../ui/feedback'
 import Modal from '../ui/Modal'
@@ -106,7 +106,17 @@ function ChangePasswordModal({ onClose, forced = false }) {
   const [busy, setBusy]       = useState(false)
   // Hasło wygasłe (a nie nadane przez administratora) — backend wymaga
   // podania obecnego hasła także w trybie wymuszonym.
-  const askCurrent = !forced || !!getCurrentUser().password_expired
+  const expired = !!getCurrentUser().password_expired
+  const askCurrent = !forced || expired
+  const reasonId = useId()
+
+  // Wylogowanie z okna wymuszonej zmiany — jak w belce: koniec sesji i ekran logowania.
+  async function forcedLogout() {
+    setBusy(true)
+    try { await apiLogout() } catch { /* ignore */ }
+    clearSession()
+    window.location.href = '/login'
+  }
 
   async function submit(e) {
     e.preventDefault()
@@ -140,8 +150,14 @@ function ChangePasswordModal({ onClose, forced = false }) {
       title={<><KeyRound size={18} color="var(--color-gold)" aria-hidden="true"
                          style={{ verticalAlign: '-3px', marginRight: 8 }} />Zmiana hasła</>}
       width={440} closable={!forced} onClose={forced ? undefined : onClose}
-      onSubmit={submit}
+      onSubmit={submit} describedBy={forced ? reasonId : undefined}
       footer={<>
+        {forced && (
+          <button type="button" className="btn btn--ghost" onClick={forcedLogout} disabled={busy}
+                  style={{ minHeight: 44, borderRadius: 8, marginRight: 'auto' }}>
+            <LogOut size={14} aria-hidden="true" /> Wyloguj
+          </button>
+        )}
         {!forced && (
           <button type="button" className="btn btn--ghost" onClick={onClose}
                   style={{ minHeight: 44, borderRadius: 8 }}>Anuluj</button>
@@ -152,6 +168,13 @@ function ChangePasswordModal({ onClose, forced = false }) {
         </button>
       </>}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {forced && (
+          <p id={reasonId} style={{ margin: 0, fontSize: 13, color: 'var(--color-text-muted)' }}>
+            {expired
+              ? 'Twoje hasło wygasło. Podaj obecne hasło i ustaw nowe, aby dalej korzystać z systemu.'
+              : 'Hasło zostało nadane lub zresetowane przez administratora. Ustaw własne hasło, aby dalej korzystać z systemu.'}
+          </p>
+        )}
         {askCurrent && (
           <label style={fieldLabel}>
             <span>Obecne hasło {req}</span>

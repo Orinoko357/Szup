@@ -199,7 +199,7 @@ function VendorForm({ vendor, onCancel, onSaved }) {
             Anuluj
           </button>
           <button type="submit" className="btn btn--primary" disabled={saving}>
-            <Save size={13} /> Zapisz
+            <Save size={14} /> Zapisz
           </button>
         </div>
       </form>

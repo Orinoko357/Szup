@@ -623,6 +623,14 @@ class FactoryResetResult(BaseModel):
     details: list[str]
 
 
+class _ResetAborted(Exception):
+    """Błąd czyszczenia jednej tabeli — przerywa cały reset (fail-closed)."""
+    def __init__(self, table: str, error: Exception):
+        super().__init__(table)
+        self.table = table
+        self.error = f"{type(error).__name__}: {error}"
+
+
 @router.post("/factory-reset", response_model=FactoryResetResult)
 def factory_reset(
     data: FactoryResetRequest,
@@ -695,13 +703,30 @@ def factory_reset(
         before = _count(table)
         try:
             session.exec(text(sql))
-            after = _count(table)
-            n = max(0, before - after)
-            if n:
-                deleted[table] = deleted.get(table, 0) + n
-                details.append(f"{table}: usunięto {n}")
         except Exception as exc:
-            details.append(f"⚠ {table}: {exc}")
+            # Fail-closed: częściowy reset (np. blokada klucza obcego przez
+            # tabelę dodaną w nowej wersji) jest gorszy niż żaden — przerywamy
+            # i wycofujemy całość niżej.
+            raise _ResetAborted(table, exc) from exc
+        n = max(0, before - _count(table))
+        if n:
+            deleted[table] = deleted.get(table, 0) + n
+            details.append(f"{table}: usunięto {n}")
+
+    # Zależności między zakresami czyszczenia (klucze obce) — sprawdzane z góry,
+    # zanim cokolwiek zostanie usunięte.
+    if data.wipe_software and not data.wipe_requests:
+        # RequestItem wskazuje na systemy/uprawnienia.
+        raise HTTPException(400,
+            "Czyszczenie rejestru oprogramowania wymaga też wyczyszczenia wniosków.")
+    if data.wipe_users and not data.wipe_requests:
+        raise HTTPException(400,
+            "Czyszczenie użytkowników wymaga też wyczyszczenia wniosków "
+            "(wnioski wskazują na autorów i pracowników).")
+    if data.wipe_structure and not data.wipe_requests:
+        raise HTTPException(400,
+            "Czyszczenie struktury wymaga też wyczyszczenia wniosków "
+            "(wnioski wskazują na jednostki i komórki).")
 
     # Rozwiąż powiązania krzyżowe TYLKO dla tego, co faktycznie kasujemy.
     # KRYTYCZNE: te UPDATE-y muszą być bramkowane flagami wipe_*. Odpalane
@@ -717,65 +742,84 @@ def factory_reset(
             f'UPDATE "department" SET manager_user_id = NULL WHERE manager_user_id <> {cid}')
         cross_updates.append(
             f'UPDATE "accessrequest" SET assigned_to_user_id = NULL WHERE assigned_to_user_id <> {cid}')
+        cross_updates.append(
+            f'UPDATE "unit" SET manager_user_id = NULL WHERE manager_user_id <> {cid}')
+        cross_updates.append(
+            f'UPDATE "notificationtemplate" SET updated_by_user_id = NULL '
+            f'WHERE updated_by_user_id <> {cid}')
+        cross_updates.append(
+            f'UPDATE "workflowtemplate" SET created_by_user_id = NULL '
+            f'WHERE created_by_user_id <> {cid}')
     if data.wipe_structure:
         # Kasujemy wydziały/jednostki — zdejmij referencje DO nich.
         cross_updates.append('UPDATE "department" SET parent_dept_id = NULL')
         cross_updates.append('UPDATE "user" SET department_id = NULL')
-    for stmt in cross_updates:
-        try:
-            session.exec(text(stmt))
-        except Exception:
-            pass
+    audit_triggers_dropped = False
+    try:
+        for stmt in cross_updates:
+            try:
+                session.exec(text(stmt))
+            except Exception as exc:
+                raise _ResetAborted(stmt.split('"')[1], exc) from exc
 
-    # 1) Wnioski i obieg (dzieci → rodzice).
-    if data.wipe_requests:
-        _wipe("namechangerequest")
-        _wipe("permissionsnapshot")
-        _wipe("permissiondeclaration")
-        _wipe("workflowstep")
-        _wipe("workflowinstance")
-        _wipe("requestitem")
-        _wipe("accessrequest")
+        # 1) Wnioski i obieg (dzieci → rodzice).
+        if data.wipe_requests:
+            _wipe("namechangerequest")
+            _wipe("permissionsnapshot")
+            _wipe("permissiondeclaration")
+            _wipe("requestevent")
+            _wipe("workflowstep")
+            _wipe("workflowinstance")
+            _wipe("requestitem")
+            _wipe("accessrequest")
 
-    # 2) Rejestr oprogramowania.
-    if data.wipe_software:
-        # RequestItem wskazuje na systemy/uprawnienia — wymagamy czystki wniosków.
-        if not data.wipe_requests:
-            raise HTTPException(400,
-                "Czyszczenie rejestru oprogramowania wymaga też wyczyszczenia wniosków.")
-        _wipe("systempermission")
-        _wipe("permissionsystemunit")
-        _wipe("permissionsystem")
-        # Słownik dostawców — umowy przed dostawcami (FK).
-        _wipe("vendorcontract")
-        _wipe("softwarevendor")
+        # 2) Rejestr oprogramowania.
+        if data.wipe_software:
+            _wipe("systempermission")
+            _wipe("permissionsystemunit")
+            _wipe("permissionsystem")
+            # Słownik dostawców — umowy przed dostawcami (FK).
+            _wipe("vendorcontract")
+            _wipe("softwarevendor")
 
-    # 3) Użytkownicy — PRÓCZ wykonującego (i bez naruszania wniosków, które
-    #    mogły zostać, gdy wipe_requests=False).
-    if data.wipe_users:
-        if not data.wipe_requests:
-            raise HTTPException(400,
-                "Czyszczenie użytkowników wymaga też wyczyszczenia wniosków "
-                "(wnioski wskazują na autorów i pracowników).")
-        _wipe("userunit", f"user_id <> {int(current_user.id)}")
-        _wipe("departmentdeputy", f"user_id <> {int(current_user.id)}")
-        _wipe("revokedtoken")
-        _wipe("user", f"id <> {int(current_user.id)}")
+        # 3) Użytkownicy — PRÓCZ wykonującego (i bez naruszania wniosków, które
+        #    mogły zostać, gdy wipe_requests=False).
+        if data.wipe_users:
+            _wipe("userunit", f"user_id <> {int(current_user.id)}")
+            _wipe("departmentdeputy", f"user_id <> {int(current_user.id)}")
+            _wipe("revokedtoken")
+            _wipe("user", f"id <> {int(current_user.id)}")
 
-    # 4) Struktura organizacyjna.
-    if data.wipe_structure:
-        _wipe("departmentdeputy")
-        _wipe("userunit")
-        _wipe("department")
-        _wipe("unit")
+        # 4) Struktura organizacyjna.
+        if data.wipe_structure:
+            _wipe("departmentdeputy")
+            _wipe("userunit")
+            # Przypisania programów do jednostek (rejestr może zostać).
+            _wipe("permissionsystemunit")
+            _wipe("department")
+            _wipe("unit")
 
-    # 5) Audyt / zdarzenia bezpieczeństwa (append-only triggery trzeba zdjąć;
-    #    odtwarzamy je zaraz po commicie, niżej).
-    if data.wipe_audit:
-        from database import drop_auditlog_triggers
-        drop_auditlog_triggers(session)
-        _wipe("auditlog")
-        _wipe("securityevent")
+        # 5) Audyt / zdarzenia bezpieczeństwa (append-only triggery trzeba zdjąć;
+        #    odtwarzamy je zaraz po commicie, niżej).
+        if data.wipe_audit:
+            from database import drop_auditlog_triggers
+            drop_auditlog_triggers(session)
+            audit_triggers_dropped = True
+            _wipe("auditlog")
+            _wipe("securityevent")
+
+    except _ResetAborted as exc:
+        session.rollback()
+        if audit_triggers_dropped:
+            # DDL w SQLite może nie podlegać wycofaniu — przywróć ochronę dziennika.
+            from database import _install_auditlog_triggers
+            _install_auditlog_triggers()
+        import logging
+        logging.getLogger("szup.settings").error(
+            "Factory reset przerwany na tabeli %s: %s", exc.table, exc.error)
+        raise HTTPException(500,
+            f"Reset przerwany — nie udało się wyczyścić tabeli „{exc.table}” "
+            f"({exc.error}). Żadne dane nie zostały usunięte.")
 
     session.commit()
 

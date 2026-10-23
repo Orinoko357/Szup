@@ -367,11 +367,7 @@ def _run_migrations():
     from sqlalchemy import text
     with engine.connect() as conn:
         for table, column, col_def in simple_migrations:
-            try:
-                conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN {column} {col_def}'))
-                conn.commit()
-            except Exception:
-                conn.rollback()
+            _add_column(conn, table, column, col_def, _mlog)
 
         # H4 — UNIQUE(instance_id, step_index) na istniejących bazach. Tworzymy
         # przez CREATE UNIQUE INDEX (idempotentne). Jeśli w bazie są już duplikaty
@@ -428,11 +424,7 @@ def _run_migrations():
         # Dodaj kolumnę roles jeśli nie istnieje
         cols = [r[1] for r in conn.exec_driver_sql('PRAGMA table_info("user")').fetchall()]
         if "roles" not in cols:
-            try:
-                conn.execute(text('ALTER TABLE "user" ADD COLUMN roles TEXT'))
-                conn.commit()
-            except Exception:
-                conn.rollback()
+            _add_column(conn, "user", "roles", "TEXT", _mlog)
             # Przepisz wartości z kolumny role (jeśli istnieje) do roles JSON
             if "role" in cols:
                 try:
@@ -469,12 +461,50 @@ def _run_migrations():
                 _drop_role_via_recreate(conn)
 
 
+class MigrationError(RuntimeError):
+    """Migracja schematu nie powiodła się — start aplikacji jest przerywany."""
+
+
+def _table_columns(conn, table: str) -> set[str]:
+    return {r[1] for r in conn.exec_driver_sql(f'PRAGMA table_info("{table}")').fetchall()}
+
+
+def _add_column(conn, table: str, column: str, col_def: str, _mlog) -> None:
+    """Idempotentne `ALTER TABLE … ADD COLUMN`.
+
+    Kolumnę, która już istnieje, pomijamy. Błąd ALTER nie przechodzi po cichu:
+    po próbie sprawdzamy `PRAGMA table_info` i jeśli kolumny nadal brak, logujemy
+    błąd i rzucamy `MigrationError` — aplikacja nie wystartuje na niepełnym
+    schemacie (inaczej pierwsze zapytanie o tę kolumnę wywróciłoby się dopiero
+    w trakcie pracy, np. przy liście wniosków)."""
+    from sqlalchemy import text
+    if column in _table_columns(conn, table):
+        return
+    error: Exception | None = None
+    try:
+        conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN {column} {col_def}'))
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        error = exc
+    if column not in _table_columns(conn, table):
+        _mlog.error("Migracja nieudana: brak kolumny %s.%s po ALTER TABLE (%s)",
+                    table, column, error or "brak błędu sterownika")
+        raise MigrationError(f"Nie udało się dodać kolumny {table}.{column}: {error}")
+    _mlog.info("Dodano kolumnę %s.%s", table, column)
+
+
 def _backfill_current_node_type(conn, _mlog) -> None:
     """Uzupełnia `accessrequest.current_node_type` dla wniosków w toku.
 
-    Kolumna (3.4.1) jest kopią bieżącego węzła aktywnej instancji obiegu,
+    Kolumna (3.5) jest kopią bieżącego węzła aktywnej instancji obiegu,
     utrzymywaną odtąd przez silnik. Na bazach sprzed migracji wyliczamy ją raz
     z zamrożonego grafu instancji. Idempotentne — dotyka tylko wierszy z NULL.
+
+    Na koniec (niezależnie od /settings/health) ostrzegamy w logu, jeśli jakaś
+    aktywna instancja nadal ma pusty typ węzła — lista wniosków ukrywa wtedy
+    taki wniosek w komórkach z etapem kierownika (patrz
+    `services.workflow.manager_stage_hidden_clause`).
     """
     import json
     from sqlalchemy import text
@@ -500,6 +530,29 @@ def _backfill_current_node_type(conn, _mlog) -> None:
     except Exception as exc:
         conn.rollback()
         _mlog.warning("Backfill accessrequest.current_node_type nie powiódł się: %s", exc)
+    _warn_missing_current_node_type(conn, _mlog)
+
+
+def _warn_missing_current_node_type(conn, _mlog) -> int:
+    """Liczba aktywnych instancji obiegu, których wniosek ma pusty
+    `current_node_type` (z ostrzeżeniem w logu, gdy > 0)."""
+    from sqlalchemy import text
+    try:
+        missing = conn.execute(text(
+            'SELECT COUNT(*) FROM "workflowinstance" wi '
+            'JOIN "accessrequest" ar ON ar.id = wi.request_id '
+            "WHERE wi.status = 'active' AND ar.current_node_type IS NULL"
+        )).scalar() or 0
+    except Exception as exc:
+        conn.rollback()
+        _mlog.warning("Nie udało się sprawdzić accessrequest.current_node_type: %s", exc)
+        return 0
+    if missing:
+        _mlog.warning(
+            "%d wniosek(-ów) w toku ma pusty current_node_type (uszkodzony graf "
+            "instancji?) — lista wniosków ukrywa je w komórkach z etapem "
+            "kierownika. Sprawdź instancje obiegu tych wniosków.", missing)
+    return missing
 
 
 def _drop_role_via_recreate(conn) -> None:

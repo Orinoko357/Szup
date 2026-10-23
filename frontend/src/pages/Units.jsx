@@ -1469,7 +1469,7 @@ function DeputyRow({ row, onEditLabel, onDelete }) {
           <button type="button" className="btn btn--action btn--sm"
                   aria-label={`Zapisz funkcję zastępcy ${row.user_name}`} title="Zapisz etykietę"
                   onClick={() => { onEditLabel(row, label.trim() || null); setDirty(false) }}>
-            <Save size={12} aria-hidden="true" />
+            <Save size={14} aria-hidden="true" />
           </button>
         )}
         <button type="button" className="btn btn--danger btn--sm" style={{ marginLeft: 4 }}

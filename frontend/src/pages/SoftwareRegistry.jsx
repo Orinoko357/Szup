@@ -199,7 +199,7 @@ function PermRow({ p, onChanged, selected = false, onToggleSel }) {
                                prompt={prompt} setPrompt={setPrompt} />
             <div style={{ display: 'flex', gap: 6 }}>
               <button className="btn btn--primary btn--sm" onClick={save} disabled={busy}>
-                <Save size={12} /> Zapisz
+                <Save size={14} /> Zapisz
               </button>
               <button className="btn btn--ghost btn--sm" onClick={cancel} disabled={busy}>
                 Anuluj
@@ -981,7 +981,7 @@ function AddSystemForm({ units, vendors = [], allSystems = [], onCancel, onSaved
             <X size={13} /> Anuluj
           </button>
           <button type="submit" className="btn btn--primary btn--sm" disabled={saving}>
-            <Save size={13} /> Zapisz
+            <Save size={14} /> Zapisz
           </button>
         </div>
       </form>
@@ -1409,7 +1409,7 @@ function EditSystemForm({ system: s, units, vendors = [], onCancel, onSaved }) {
           <X size={13} /> Anuluj
         </button>
         <button type="submit" className="btn btn--primary btn--sm" disabled={saving}>
-          <Save size={13} /> Zapisz
+          <Save size={14} /> Zapisz
         </button>
       </div>
     </form>
@@ -1614,7 +1614,7 @@ function PermissionsPanel({ system: s }) {
                                  }} />
                           <button className="btn btn--primary btn--sm"
                                   onClick={() => renameGroup(group)}>
-                            <Save size={12} /> Zapisz
+                            <Save size={14} /> Zapisz
                           </button>
                           <button className="btn btn--ghost btn--sm"
                                   onClick={() => setRenaming(null)}>

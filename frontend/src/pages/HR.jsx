@@ -899,6 +899,26 @@ function DepartmentPicker({ units, depts, selectedId, onSelect, flush = false })
         .slice(0, 100)
     : null
 
+  // Roving tabindex (WAI-ARIA „tree”): jedyne miejsce w kolejności Tab to
+  // ostatnio fokusowana pozycja (stan niezależny od wyboru) — strzałki przenoszą
+  // tabIndex=0 razem z fokusem, a Shift+Tab wraca na ostatnią pozycję.
+  // Bez fokusu w drzewie: wybrana komórka, a gdy jej nie widać — pierwsza pozycja.
+  const treeRef = useRef(null)
+  const [focusedKey, setFocusedKey] = useState(null)
+  const activeKey = focusedKey ?? (selectedId ? `dept-${selectedId}` : null)
+  function onTreeFocus(e) {
+    const el = e.target.closest?.('[role="treeitem"][data-tkey]')
+    if (el && el.dataset.tkey !== focusedKey) setFocusedKey(el.dataset.tkey)
+  }
+  // Po każdym renderze: jeśli aktywna pozycja zniknęła (zwinięta gałąź, zmiana
+  // wyników wyszukiwania), przenieś miejsce Tab na pierwszą widoczną pozycję.
+  useEffect(() => {
+    const tree = treeRef.current
+    if (!tree || tree.querySelector('[role="treeitem"][tabindex="0"]')) return
+    const first = tree.querySelector('[role="treeitem"][data-tkey]')
+    if (first && first.dataset.tkey !== focusedKey) setFocusedKey(first.dataset.tkey)
+  })
+
   return (
     <div style={flush ? {} : { border: '1px solid var(--color-border)', borderRadius: 8, background: 'var(--bg-secondary)', overflow: 'hidden' }}>
       <div style={{ padding: '10px 10px 4px', background: 'var(--color-card)' }}>
@@ -906,7 +926,7 @@ function DepartmentPicker({ units, depts, selectedId, onSelect, flush = false })
                placeholder="Szukaj komórki…" aria-label="Szukaj komórki"
                value={query} onChange={e => setQuery(e.target.value)} />
       </div>
-      <div role="tree" aria-label="Struktura" onKeyDown={onTreeKeyDown} style={{ padding: '4px 6px 10px',
+      <div role="tree" aria-label="Struktura" ref={treeRef} onKeyDown={onTreeKeyDown} onFocus={onTreeFocus} style={{ padding: '4px 6px 10px',
                     ...(flush ? {} : { maxHeight: 'min(48vh, 420px)', overflowY: 'auto' }) }}>
         {units.length === 0 && (
           <div style={{ padding: 12, fontSize: 12, color: 'var(--color-text-muted)' }}>
@@ -921,11 +941,12 @@ function DepartmentPicker({ units, depts, selectedId, onSelect, flush = false })
             </div>
           ) : matches.map(({ d, path }, i) => {
             const isSelected = selectedId === d.id
-            // Roving tabindex: jedno miejsce w kolejności Tab — wybrana komórka
-            // albo pierwsza pozycja, gdy wybranej nie ma wśród wyników.
-            const tabStop = isSelected || (i === 0 && !matches.some(m => m.d.id === selectedId))
+            // Roving tabindex: aktywna pozycja albo pierwsza, gdy aktywnej nie ma wśród wyników.
+            const tabStop = activeKey === `dept-${d.id}`
+              || (i === 0 && !matches.some(m => activeKey === `dept-${m.d.id}`))
             return (
               <div key={d.id} role="treeitem" aria-selected={isSelected} aria-level={1}
+                   data-tkey={`dept-${d.id}`}
                    tabIndex={tabStop ? 0 : -1} onClick={() => onSelect(d.id)}
                    style={{ ...treeRow(isSelected, false), paddingLeft: 10 }}
                    onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)' }}
@@ -948,7 +969,8 @@ function DepartmentPicker({ units, depts, selectedId, onSelect, flush = false })
                 onSelect={onSelect}
                 initiallyOpen={expandedPath.has(`unit-${u.id}`)}
                 expandedPath={expandedPath}
-                tabStop={i === 0 && !selectedId}
+                activeKey={activeKey}
+                tabStop={activeKey === `unit-${u.id}` || (i === 0 && !activeKey)}
               />
             )
           })
@@ -1016,7 +1038,7 @@ function treeRow(selected, isUnit) {
   }
 }
 
-function UnitNode({ unit, byParent, hasAny, selectedId, onSelect, initiallyOpen, expandedPath, tabStop }) {
+function UnitNode({ unit, byParent, hasAny, selectedId, onSelect, initiallyOpen, expandedPath, activeKey, tabStop }) {
   const [open, setOpen] = useState(initiallyOpen)
   useEffect(() => { if (initiallyOpen) setOpen(true) }, [initiallyOpen])
 
@@ -1027,6 +1049,7 @@ function UnitNode({ unit, byParent, hasAny, selectedId, onSelect, initiallyOpen,
       <button
         type="button"
         role="treeitem" aria-level={1} aria-selected={false}
+        data-tkey={`unit-${unit.id}`}
         tabIndex={tabStop ? 0 : -1}
         aria-expanded={hasAny ? open : undefined}
         onClick={() => hasAny && setOpen(v => !v)}
@@ -1054,6 +1077,7 @@ function UnitNode({ unit, byParent, hasAny, selectedId, onSelect, initiallyOpen,
               selectedId={selectedId}
               onSelect={onSelect}
               expandedPath={expandedPath}
+              activeKey={activeKey}
             />
           ))}
         </div>
@@ -1062,7 +1086,7 @@ function UnitNode({ unit, byParent, hasAny, selectedId, onSelect, initiallyOpen,
   )
 }
 
-function DeptNode({ dept, byParent, depth, selectedId, onSelect, expandedPath }) {
+function DeptNode({ dept, byParent, depth, selectedId, onSelect, expandedPath, activeKey }) {
   const kids = byParent.get(dept.id) || []
   const hasKids = kids.length > 0
   const [open, setOpen] = useState(expandedPath.has(`dept-${dept.id}`))
@@ -1077,7 +1101,8 @@ function DeptNode({ dept, byParent, depth, selectedId, onSelect, expandedPath })
       <div
         role="treeitem" aria-selected={isSelected} aria-level={depth + 1}
         aria-expanded={hasKids ? open : undefined}
-        tabIndex={isSelected ? 0 : -1}
+        data-tkey={`dept-${dept.id}`}
+        tabIndex={activeKey === `dept-${dept.id}` ? 0 : -1}
         onClick={() => onSelect(dept.id)}
         style={{ ...treeRow(isSelected, false), paddingLeft: 10 + depth * 22 }}
         onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)' }}
@@ -1106,6 +1131,7 @@ function DeptNode({ dept, byParent, depth, selectedId, onSelect, expandedPath })
           selectedId={selectedId}
           onSelect={onSelect}
           expandedPath={expandedPath}
+          activeKey={activeKey}
         />
       ))}</div>}
     </div>

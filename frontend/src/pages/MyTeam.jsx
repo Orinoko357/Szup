@@ -550,6 +550,9 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
   // Reguła jak w backendzie (landing_node_type): komórka dwustopniowa → akceptacja
   // wyższa dla KAŻDEGO rodzaju wniosku; inaczej wprost do realizacji przez IT.
   const sendLabel = w.requires_higher_approval ? 'Wyślij do akceptacji' : 'Wyślij do realizacji'
+  const destText = w.requires_higher_approval
+    ? 'do akceptacji kierownika nadrzędnego, a potem do realizacji przez IT'
+    : 'bezpośrednio do realizacji przez IT'
 
   const _steps = buildWorkflowSteps({
     sent: true, nodeType: 'select_permissions',
@@ -568,7 +571,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
       icon={ListChecks} kind="change" kindLabel="Zmiana"
       statusText="Nowy wniosek · nie wysłany"
       title={`Wniosek o uprawnienia — ${w.full_name || w.username}`}
-      subtitle="Zaznacz stan docelowy uprawnień — po wysłaniu wniosek trafi do kierownika nadrzędnego lub do IT."
+      subtitle={`Zaznacz stan docelowy uprawnień — po wysłaniu wniosek trafi ${destText}.`}
       backLabel="← Wróć do moich pracowników" onBack={guardedClose}
       steps={_steps} summary={_summary} history={[]}
       footerLeft={<><strong style={{ color: 'var(--color-success-text)' }}>+{toGrant.length + scopeChanged.length}</strong> nadania

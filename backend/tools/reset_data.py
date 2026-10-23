@@ -7,9 +7,14 @@ Co ZOSTAJE:
   - ustawienia aplikacji (appsettings) — w szczególności flaga test_mode
 
 Co JEST USUWANE:
-  - wnioski i ich pozycje      (accessrequest, requestitem)
-  - jednostki i wydziały       (unit, department)
-  - systemy i uprawnienia      (permissionsystem, systempermission)
+  - wnioski z pozycjami, obiegiem, historią i oświadczeniami
+                               (accessrequest, requestitem, workflowinstance,
+                                workflowstep, requestevent, permissiondeclaration)
+  - zmiany nazwiska i migawki  (namechangerequest, permissionsnapshot)
+  - jednostki i wydziały       (unit, department, zastępcy, przypisania HR)
+  - systemy, uprawnienia i dostawcy
+                               (permissionsystem, systempermission,
+                                permissionsystemunit, softwarevendor, vendorcontract)
   - konfiguracja SMTP / LDAP   (emailsettings, ldapsettings)
   - audit log                  (auditlog — triggery są ściągane, założą się
                                 ponownie przy starcie backendu)
@@ -39,12 +44,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("SZUP_DATA_DIR", "/opt/szup/data")
 
 
-# Kolejność DELETE musi uwzględniać klucze obce — najpierw dzieci, potem rodzice.
-# Przy SQLite z PRAGMA foreign_keys=OFF kolejność nie ma znaczenia funkcjonalnie,
-# ale zachowujemy ją dla czytelności i na wypadek gdyby FK były włączone.
+# Kolejność DELETE uwzględnia klucze obce — najpierw dzieci, potem rodzice.
+# Klucze obce są WŁĄCZONE (PRAGMA foreign_keys w otwartej transakcji nic nie
+# zmienia), więc pominięta tabela-dziecko przerwie całą operację, zamiast
+# zostawić osierocone rekordy przypięte potem do nowych wniosków.
 TABLES_TO_WIPE = [
+    "requestevent",
+    "permissiondeclaration",
+    "workflowstep",
+    "workflowinstance",
     "requestitem",
     "accessrequest",
+    "namechangerequest",
+    "permissionsnapshot",
+    "departmentdeputy",
+    "userunit",
+    "permissionsystemunit",
     "systempermission",
     "permissionsystem",
     "vendorcontract",
@@ -125,47 +140,39 @@ def main() -> None:
             return
 
     # -------------------------------------------------------------- wykonanie
-    with engine.begin() as conn:
-        # FK off — pozwala czyścić tabele w dowolnej kolejności.
-        conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
+    # Całość w jednej transakcji: błąd na którejkolwiek tabeli wycofuje wszystko
+    # (także zdjęcie triggerów — DDL w SQLite podlega transakcji).
+    try:
+        with engine.begin() as conn:
+            existing = {r[0] for r in conn.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
 
-        # 1) Zdejmij append-only triggery z auditlog. Zostaną ponownie
-        #    utworzone przy starcie backendu (init_db()).
-        for trg, exc in drop_auditlog_triggers(conn):
-            print(f"[!] Nie udało się usunąć triggera {trg}: {exc}")
+            # 1) Zdejmij append-only triggery z auditlog. Zostaną ponownie
+            #    utworzone przy starcie backendu (init_db()).
+            for trg, exc in drop_auditlog_triggers(conn):
+                print(f"[!] Nie udało się usunąć triggera {trg}: {exc}")
 
-        # 2) Wyczyść tabele.
-        for table in TABLES_TO_WIPE:
-            try:
+            # 2) Odepnij od usuwanych obiektów rekordy, które zostają.
+            #    department_id/ldap_dn użytkownika wskazywałyby nieistniejące cele.
+            conn.execute(text('UPDATE "user" SET department_id = NULL, ldap_dn = NULL'))
+            conn.execute(text('UPDATE "department" SET parent_dept_id = NULL'))
+
+            # 3) Wyczyść tabele (pomijamy tylko te, których na starej bazie nie ma).
+            for table in TABLES_TO_WIPE:
+                if table not in existing:
+                    print(f"[i] Tabela {table} nie istnieje — pominięta.")
+                    continue
                 conn.execute(text(f'DELETE FROM "{table}"'))
-            except Exception as exc:
-                # Tabela może nie istnieć na bardzo starej bazie — ignorujemy.
-                print(f"[!] DELETE FROM {table} pominięty: {exc}")
 
-        # 3) Zresetuj sekwencje (autoincrement) dla wyczyszczonych tabel.
-        #    Nie ruszamy sekwencji dla user/appsettings.
-        try:
-            placeholders = ", ".join(f"'{t}'" for t in TABLES_TO_WIPE)
-            conn.execute(text(
-                f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})"
-            ))
-        except Exception:
-            # sqlite_sequence nie istnieje jeśli żadna tabela nie miała AUTOINCREMENT;
-            # w SZUP używamy INTEGER PRIMARY KEY, więc to normalne.
-            pass
-
-        # 4) Wyczyść na userze referencje do usuniętych obiektów.
-        #    department_id wskazuje na wykasowaną tabelę department — musimy
-        #    zresetować, inaczej UI/scoping będą odwoływać się do nieistniejących
-        #    wydziałów.
-        try:
-            conn.execute(text(
-                'UPDATE "user" SET department_id = NULL, ldap_dn = NULL'
-            ))
-        except Exception as exc:
-            print(f"[!] UPDATE user pominięty: {exc}")
-
-        conn.exec_driver_sql("PRAGMA foreign_keys = ON")
+            # 4) Zresetuj sekwencje (autoincrement) dla wyczyszczonych tabel.
+            #    sqlite_sequence istnieje tylko przy AUTOINCREMENT.
+            if "sqlite_sequence" in existing:
+                placeholders = ", ".join(f"'{t}'" for t in TABLES_TO_WIPE)
+                conn.execute(text(
+                    f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})"))
+    except Exception as exc:
+        print(f"[BŁĄD] Czyszczenie przerwane, żadne dane nie zostały usunięte: {exc}")
+        sys.exit(1)
 
     # 5) VACUUM — odzyskaj miejsce w pliku bazy. Musi być poza transakcją.
     try:

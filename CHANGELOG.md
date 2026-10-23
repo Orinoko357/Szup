@@ -6,6 +6,29 @@ Wersjonowanie: [Semantic Versioning](https://semver.org/lang/pl/).
 
 ## [Unreleased]
 
+## [3.6.0] — 2026-10-23
+
+Poprawki po audycie 3.5: reset, interfejs, porządki.
+
+### Naprawiono
+- Reset fabryczny: czyści historię wniosków (`requestevent`) i wszystkie zależne
+  tabele; błąd na dowolnej tabeli przerywa całość bez zmian (wcześniej reset
+  zgłaszał sukces, zostawiając wnioski, konta i strukturę). Zależności zakresów
+  sprawdzane przed czyszczeniem. To samo w `tools/reset_data.py` (jedna transakcja).
+- Ramka fokusu w drzewie komórek Kartoteki (regresja 3.5) i w zakładkach.
+- Podtytuł kroku wyboru zgodny z przyciskiem „Wyślij do…”.
+- Wymuszona zmiana hasła: przycisk „Wyloguj” i powód w oknie.
+- Krok „akceptacja kierownika” w szablonie: „Zapisz roboczy”, zachowana notatka,
+  odmowa pozycji tylko przy akceptacji wyższej.
+- Telefon: węższa przyklejona kolumna akcji w tabelach zadań.
+
+### Zmieniono
+- Lista wniosków: dodatkowe zabezpieczenie widoczności, gdy krok obiegu nie jest
+  jeszcze uzupełniony; migracje przerywają start przy nieudanym ALTER.
+- Jeden pomocnik „aktualny krok wniosku” zamiast 7 kopii; podzielona funkcja akcji obiegu.
+- Testy: 252 (m.in. realizacja i odmowa pozycji, wyścig przejęcia, migracje,
+  równoważność filtrów widoczności, reset na danych); bez wątków w tle między testami.
+
 ## [3.5.0] — 2026-10-22
 
 Poprawki po audycie 3.4.

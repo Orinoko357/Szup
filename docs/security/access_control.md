@@ -1,6 +1,6 @@
 # Kontrola dostępu — SZUP
 
-Stan na wersję 3.4. Model: RBAC z rozdziałem obowiązków („Wariant A”) oraz
+Stan na wersję 3.5. Model: RBAC z rozdziałem obowiązków („Wariant A”) oraz
 uprawnieniami wynikającymi ze struktury organizacyjnej (kierownik, zastępca,
 przełożony, dyrektor jednostki).
 
@@ -79,7 +79,8 @@ Kto może wykonać krok (`services/workflow.py: can_act`):
 | `it_execute` | Rola `it_staff`. | Rola `it_staff`. |
 
 Superadmin może wykonać każdy krok. Administrator bez roli operacyjnej — żadnego.
-Każdy wykonany krok jest podpisany (łańcuch HMAC, `SZUP_WORKFLOW_SECRET`);
+Każdy wykonany krok jest podpisany (łańcuch skrótów SHA-256 z sekretem
+`SZUP_WORKFLOW_SECRET`);
 `/requests/{id}/workflow/verify` sprawdza integralność łańcucha.
 Nadanie uprawnień kierowane do IT wymaga oświadczenia wnioskującego.
 
@@ -115,11 +116,17 @@ dostaje e-mail i komunikat o przejęciu. Zasady:
 |-----|-------------------|
 | superadmin | Wszystkie. |
 | admin, it_staff | Wszystkie poza wnioskami na etapie roboczym kierownika komórki. |
-| manager | Wnioski komórek ze swojego zakresu (bezpośrednie, podległe, z akceptacją wyższą, cała jednostka dyrektora) oraz własne. Etap roboczy obcych komórek — ukryty. |
+| manager | Wnioski komórek ze swojego zakresu (bezpośrednie, podległe, z akceptacją wyższą, cała jednostka dyrektora); własne spoza zakresu — w widoku „Moje wnioski” i w szczegółach. Etap roboczy obcych komórek — ukryty. |
 | hr, viewer | Wnioski, które sami złożyli. |
 
-Twórca zawsze widzi swój wniosek. Lista stosuje te same reguły już w zapytaniu
-SQL, więc stronicowanie liczy tylko widoczne wiersze.
+Twórca zawsze widzi swój wniosek. Regułę etapu roboczego definiuje jedno
+miejsce — `services/workflow.py: manager_stage_visibility` (szczegóły wniosku);
+lista stosuje jej odpowiednik już w zapytaniu SQL
+(`manager_stage_hidden_clause`, kolumna `AccessRequest.current_node_type`), więc
+stronicowanie liczy tylko widoczne wiersze. Zgodność obu wersji sprawdza test
+równoważności. Wniosek w toku z pustym `current_node_type` (np. nieudany
+backfill po migracji) lista ukrywa w komórkach z etapem roboczym, a start
+aplikacji ostrzega o takich wnioskach w logu.
 
 ## Składanie wniosków
 

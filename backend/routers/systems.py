@@ -162,10 +162,12 @@ def _sync_admin_option(session: Session, s: PermissionSystem) -> None:
             session.delete(existing)
 
 
-# Typy pól dodatkowych definiowanych przy oprogramowaniu.
-# "select" — jedna wartość z listy; "multiselect" — dowolnie wiele wartości
-# (przechowywane jako tekst rozdzielony przecinkami, żeby `custom_values`
-# pozostało prostą mapą label→tekst i działało w podglądzie, PDF i ewidencji).
+# Typy pól dodatkowych definiowanych przy oprogramowaniu (format starszych baz —
+# przy starcie `database._migrate_custom_fields_to_permissions` przenosi je na
+# uprawnienia z kontrolką). "select" — jedna wartość z listy; "multiselect" —
+# dowolnie wiele wartości (przechowywane jako tekst rozdzielony przecinkami, żeby
+# `custom_values` pozostało prostą mapą label→tekst i działało w podglądzie
+# wniosku i w rejestrze uprawnień).
 CUSTOM_FIELD_TYPES = ("text", "textarea", "select", "multiselect")
 # Typy wymagające zdefiniowanej listy opcji.
 OPTION_FIELD_TYPES = ("select", "multiselect")

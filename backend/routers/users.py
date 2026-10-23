@@ -373,10 +373,9 @@ def _can_act_on_worker_request(session: Session, user: User, worker_id: int) -> 
     pracownika. Np. AD przeniosło pracownika do innej komórki, a wniosek jest
     wciąż w starej — kierownik starej komórki musi widzieć obecne uprawnienia,
     żeby dokończyć wybór (inaczej 403 i pusta lista)."""
-    import json as _json
     from models import AccessRequest, WorkflowInstance, WorkflowInstanceStatus
     # Import w funkcji — services.workflow importuje sporo modułów (cykl importów).
-    from services.workflow import can_act, find_node
+    from services.workflow import active_node_of, can_act
     rows = session.exec(
         select(AccessRequest, WorkflowInstance)
         .join(WorkflowInstance, WorkflowInstance.request_id == AccessRequest.id)
@@ -384,12 +383,7 @@ def _can_act_on_worker_request(session: Session, user: User, worker_id: int) -> 
         .where(WorkflowInstance.status == WorkflowInstanceStatus.active)
     ).all()
     for req, inst in rows:
-        if not inst.current_node_id:
-            continue
-        try:
-            node = find_node(_json.loads(inst.template_snapshot), inst.current_node_id)
-        except Exception:
-            node = None
+        node = active_node_of(session, inst)
         if not node:
             continue
         dept = session.get(Department, req.department_id) if req.department_id else None

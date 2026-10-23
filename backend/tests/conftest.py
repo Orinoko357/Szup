@@ -14,6 +14,7 @@ liczy 4 rundy zamiast 12 — hasła i tak się weryfikują, tylko szybciej.
 """
 from __future__ import annotations
 
+import atexit
 import os
 import shutil
 import tempfile
@@ -25,6 +26,8 @@ import pytest
 _TMP_DIR = tempfile.mkdtemp(prefix="szup-tests-")
 _DB_FILE = os.path.join(_TMP_DIR, "test.db")
 _TEMPLATE_DB = os.path.join(_TMP_DIR, "template.db")
+# Katalog tymczasowy (baza, wzorzec, klucz sekretu obiegu) sprzątamy przy wyjściu.
+atexit.register(shutil.rmtree, _TMP_DIR, ignore_errors=True)
 os.environ["SZUP_DATA_DIR"] = _TMP_DIR
 os.environ["SZUP_DB_URL"] = f"sqlite:///{_DB_FILE}"
 os.environ["SZUP_WORKFLOW_SECRET"] = "pytest-secret"
@@ -74,6 +77,16 @@ def _reset_module_state() -> None:
     _auth._ip_hits.clear()
     _auth._sso_codes.clear()
     _settings._factory_reset_failures.clear()
+
+
+@pytest.fixture(autouse=True)
+def _sync_after_commit(monkeypatch):
+    """Zadania po commicie (powiadomienia) wykonujemy SYNCHRONICZNIE w wątku
+    testu — inaczej wątki puli `after_commit` mogłyby sięgać do bazy już po
+    końcu testu (w trakcie podmiany pliku dla następnego). Testy, które chcą
+    przechwycić zadania, nadpisują `_submit` własnym monkeypatchem."""
+    import services.after_commit as ac
+    monkeypatch.setattr(ac, "_submit", lambda fn, kwargs: ac._safe_run(fn, kwargs))
 
 
 @pytest.fixture(autouse=True)
