@@ -51,6 +51,58 @@ def init_db():
     _seed_default_workflow()
     _backfill_admin_permissions()
     _migrate_custom_fields_to_permissions()
+    _strip_hr_role()
+
+
+def _strip_hr_role() -> list[str]:
+    """v3.9 — usunięcie roli „hr” z kont (rola zniesiona).
+
+    Zdolność kadrową daje teraz wyłącznie przynależność do komórki kadrowej
+    (Department.is_hr). Konta z zapisaną rolą „hr” tracą ją; jeśli nie są
+    w komórce kadrowej, tracą też dostęp do funkcji kadr. Lista loginów trafia
+    do audit logu (`user.hr_role_removed`) i do logu aplikacji — administrator
+    przenosi te osoby do komórki kadrowej albo oznacza ich komórkę jako kadrową.
+    Idempotentne: przy kolejnym starcie nie ma już czego usuwać. Zwraca loginy.
+    """
+    import json
+    import logging
+    from sqlmodel import Session, select
+    from models import User, Department
+
+    _mlog = logging.getLogger("szup.migrations")
+    affected: list[dict] = []
+    with Session(engine) as session:
+        hr_dept_ids = {d.id for d in session.exec(
+            select(Department).where(Department.is_hr == True)).all()}  # noqa: E712
+        for u in session.exec(select(User)).all():
+            try:
+                stored = json.loads(u.roles or "[]")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(stored, list) or "hr" not in stored:
+                continue
+            remaining = [r for r in stored if r != "hr"] or ["viewer"]
+            u.roles = json.dumps(remaining)
+            session.add(u)
+            affected.append({"username": u.username,
+                             "in_hr_department": u.department_id in hr_dept_ids})
+        if not affected:
+            return []
+        session.commit()
+        lost = sorted(a["username"] for a in affected if not a["in_hr_department"])
+        from services.audit import record_event
+        record_event(session, action="user.hr_role_removed", target_type="user",
+                     username="system", details={
+                         "reason": "Rola „hr” zniesiona — zdolność kadrową daje "
+                                   "przynależność do komórki kadrowej",
+                         "usernames": sorted(a["username"] for a in affected),
+                         "lost_hr_capability": lost,
+                     })
+    _mlog.warning("Usunięto rolę „hr” z %d kont(a): %s. Bez dostępu do funkcji kadr "
+                  "(nie należą do komórki kadrowej): %s", len(affected),
+                  ", ".join(sorted(a["username"] for a in affected)),
+                  ", ".join(lost) or "brak")
+    return sorted(a["username"] for a in affected)
 
 
 def _backfill_admin_permissions():
@@ -372,6 +424,11 @@ def _run_migrations():
         ("accessrequest",    "taken_over_at",       "DATETIME DEFAULT NULL"),
         # Typ bieżącego węzła obiegu (filtr widoczności etapu kierownika w SQL)
         ("accessrequest",    "current_node_type",   "VARCHAR DEFAULT NULL"),
+        # Archiwizacja komórki i miękkie usunięcie uprawnień (superadmin, 3.9)
+        ("department",       "archived_at",         "DATETIME DEFAULT NULL"),
+        ("department",       "archived_reason",     "VARCHAR DEFAULT NULL"),
+        ("systempermission", "deleted_at",          "DATETIME DEFAULT NULL"),
+        ("systempermission", "deleted_reason",      "VARCHAR DEFAULT NULL"),
     ]
     from sqlalchemy import text
     with engine.connect() as conn:

@@ -392,13 +392,17 @@ def test_creator_who_can_act_gets_no_mail_about_own_request(api, monkeypatch):
     assert "kier@t.local" not in _stage_to(sent)
 
 
-def test_superadmin_release_informs_previous_taker(api, monkeypatch):
+def test_superadmin_cannot_release_and_taker_release_notifies_manager(api, monkeypatch):
+    """Superadmin nie działa w obiegu (decyzje 3.9) — „Oddaj” → 403 bez maili;
+    oddanie przez przejmującego przypomina kierownikowi komórki o wniosku."""
     w = _world(api)
     rid = _create(api, w)
     _take_over(api, rid, "kierP")
     sent = _mails(monkeypatch)
-    assert api.post(f"/requests/{rid}/release", token=w["sup"]).status_code == 200
-    assert ("request_take_over_released", "kierP@t.local") in sent
+    assert api.post(f"/requests/{rid}/release", token=w["sup"]).status_code == 403
+    assert sent == []
+    assert api.post(f"/requests/{rid}/release", token=api.login("kierP")).status_code == 200
+    assert not [x for x in sent if x[0] == "request_take_over_released"]
     assert "kier@t.local" in _stage_to(sent)
 
 

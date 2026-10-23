@@ -1,7 +1,8 @@
 """E2E: przejęcie wniosku, oddanie i przekazanie w IT (porządki 3.5).
 
 - wyścig dwóch przełożonych: przegrany `claim_take_over` → 409 i brak śladów,
-- `can_release` / „Oddaj” dla superadmina i poza etapem kierownika,
+- `can_release` / „Oddaj” — superadmin nie oddaje cudzych przejęć; poza etapem
+  kierownika nikt,
 - walidacje `POST /requests/{id}/assign` (etap, ukryty etap roboczy, adresat)."""
 from __future__ import annotations
 
@@ -122,7 +123,9 @@ def test_take_over_after_workflow_moved_on_is_409(api):
 # can_release / „Oddaj”
 # ---------------------------------------------------------------------------
 
-def test_superadmin_can_release_foreign_take_over(api):
+def test_superadmin_cannot_release_foreign_take_over(api):
+    """Superadmin nie działa w obiegu (decyzje 3.9) — przejęcie oddaje wyłącznie
+    przejmujący."""
     from services.workflow import can_release
     w = _world(api)
     rid = _create(api, w, api.login("hr"))
@@ -130,23 +133,23 @@ def test_superadmin_can_release_foreign_take_over(api):
     assert api.post(f"/requests/{rid}/take-over", token=kierP).status_code == 200
 
     assert _det(api, rid, kierP)["can_release"] is True
-    assert _det(api, rid, w["sup"])["can_release"] is True
+    assert _det(api, rid, w["sup"])["can_release"] is False
     # Zastępca P (przełożony, ale nie przejmujący) nie oddaje cudzego przejęcia.
     zast = api.login("zastP")
     assert _det(api, rid, zast)["can_release"] is False
     assert api.post(f"/requests/{rid}/release", token=zast).status_code == 403
     with Session(engine) as s:
         root = s.exec(select(User).where(User.username == "root")).one()
-        assert can_release(s, s.get(AccessRequest, rid), root) is True
+        assert can_release(s, s.get(AccessRequest, rid), root) is False
 
-    r = api.post(f"/requests/{rid}/release", token=w["sup"])
+    assert api.post(f"/requests/{rid}/release", token=w["sup"]).status_code == 403
+    r = api.post(f"/requests/{rid}/release", token=kierP)
     assert r.status_code == 200, r.text
     assert r.json()["taken_over_by_id"] is None
     events = api.get(f"/requests/{rid}/workflow", token=w["sup"]).json()["events"]
     assert [e["action"] for e in events] == ["take_over", "release"]
-    assert events[1]["note"] == "Zwolniono przejęcie: Anna Przełożona"
     # Nic do oddania → 409.
-    assert api.post(f"/requests/{rid}/release", token=w["sup"]).status_code == 409
+    assert api.post(f"/requests/{rid}/release", token=kierP).status_code == 409
 
 
 def test_release_not_possible_outside_manager_stage(api):
@@ -169,7 +172,8 @@ def test_release_not_possible_outside_manager_stage(api):
             u = s.exec(select(User).where(User.username == name)).one()
             assert can_release(s, r, u) is False, name
     assert api.post(f"/requests/{rid}/release", token=kierP).status_code == 409
-    assert api.post(f"/requests/{rid}/release", token=w["sup"]).status_code == 409
+    # Superadmin w ogóle nie oddaje cudzych przejęć.
+    assert api.post(f"/requests/{rid}/release", token=w["sup"]).status_code == 403
 
     # Po zakończeniu obiegu — 409 (brak aktywnego kroku).
     assert api.post(f"/requests/{rid}/workflow/action", token=api.login("it"),

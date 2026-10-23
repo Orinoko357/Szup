@@ -6,7 +6,7 @@ import {
   Package, GitBranch, ListFilter, Truck, ClipboardList, ChevronRight,
 } from 'lucide-react'
 import WodsLogo from './WodsLogo'
-import { getUserRoles } from '../../roles'
+import { workRoles } from '../../roles'
 import { focusableIn, lockScroll } from '../ui/useDialog'
 
 /* global __APP_VERSION__ */
@@ -64,7 +64,8 @@ export function setNavOpen(open) {
 }
 
 export default function Sidebar() {
-  const userRoles = getUserRoles()
+  // Superadmin widzi wyłącznie sekcje konfiguracyjne (bez Wniosków / Kartoteki / Moich pracowników).
+  const userRoles = workRoles()
   const { pathname } = useLocation()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const asideRef = useRef(null)

@@ -48,10 +48,12 @@ def test_fresh_defaults_are_secure():
     assert cfg.tls_verify is True and cfg.allow_insecure is False
 
 
-def test_plain_ldap_refused_unless_allowed():
-    import pytest
+def test_plain_ldap_allowed_without_consent(monkeypatch):
+    """v3.9: zwykły LDAP działa bez zgody (`allow_insecure` jest ignorowane) —
+    szyfrowanie jest tylko zalecane (rekomendacja w liście kontrolnej)."""
+    import ldap3
     from models import LdapSettings
-    from services.ldap_service import open_connection, LdapInsecureError
-    cfg = LdapSettings(host="dc.local", port=389, use_ssl=False)
-    with pytest.raises(LdapInsecureError):
-        open_connection(cfg, None, "svc", "haslo")
+    from services.ldap_service import open_connection
+    monkeypatch.setattr(ldap3, "Connection", lambda server, **kw: "conn")
+    cfg = LdapSettings(host="dc.local", port=389, use_ssl=False, allow_insecure=False)
+    assert open_connection(cfg, None, "svc", "haslo") == "conn"

@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Check, ChevronDown } from 'lucide-react'
+import { Check, ChevronDown, Info } from 'lucide-react'
 import { getAdminHealth } from '../api'
 
 /**
  * Lista kontrolna konfiguracji + sygnały jakości danych (v3.1) — pulpit admina.
  * Dane: GET /api/settings/health →
- *   { checks: [{key, label, ok, detail, link}], issues: [{key, label, count, link}] }
+ *   { checks: [{key, label, ok, detail, link, level?}], issues: [{key, label, count, link}] }
+ * level: "recommendation" — zalecenie (np. szyfrowanie LDAP): łagodniejszy styl,
+ * NIE liczy się do „Gotowe X z Y” ani nie blokuje stanu „Konfiguracja kompletna”.
  * Gdy wszystko gotowe i brak problemów — jedna kompaktowa linia z „Pokaż szczegóły”.
  * Błąd/ładowanie → nic nie renderujemy (pulpit ma działać bez tej karty).
  */
@@ -29,8 +31,11 @@ export default function AdminChecklist() {
   if (!data) return null
   const checks = Array.isArray(data.checks) ? data.checks : []
   const issues = (Array.isArray(data.issues) ? data.issues : []).filter(i => (i.count || 0) > 0)
-  const done = checks.filter(c => c.ok).length
-  const allGood = done === checks.length && issues.length === 0
+  const isRec = c => c.level === 'recommendation'
+  const required = checks.filter(c => !isRec(c))
+  const done = required.filter(c => c.ok).length
+  const allGood = done === required.length && issues.length === 0
+  const recPending = checks.filter(c => isRec(c) && !c.ok).length
   const expanded = !allGood || open
 
   return (
@@ -47,7 +52,13 @@ export default function AdminChecklist() {
           </span>
         ) : (
           <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
-            Gotowe <strong style={{ color: 'var(--color-text)' }}>{done}</strong> z {checks.length}
+            Gotowe <strong style={{ color: 'var(--color-text)' }}>{done}</strong> z {required.length}
+          </span>
+        )}
+        {recPending > 0 && (
+          <span className="badge badge--info" style={{ fontSize: 11 }}
+                title="Zalecenia nie blokują pracy systemu">
+            zalecenia: {recPending}
           </span>
         )}
         <div style={{ flex: 1 }} />
@@ -68,12 +79,14 @@ export default function AdminChecklist() {
               {!allGood && (
                 <div aria-hidden="true" style={{ height: 6, borderRadius: 3, background: 'var(--color-border)',
                                                  overflow: 'hidden', margin: '8px 0 6px' }}>
-                  <div style={{ width: `${checks.length ? (done / checks.length) * 100 : 0}%`, height: '100%',
+                  <div style={{ width: `${required.length ? (done / required.length) * 100 : 0}%`, height: '100%',
                                 background: 'var(--color-success)' }} />
                 </div>
               )}
               <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-                {checks.map((c, i) => (
+                {checks.map((c, i) => {
+                  const rec = isRec(c) && !c.ok
+                  return (
                   <li key={c.key || i} style={{
                     display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, minHeight: 44, padding: '6px 0',
                     borderBottom: i < checks.length - 1 ? '1px solid var(--color-border)' : 'none',
@@ -81,12 +94,16 @@ export default function AdminChecklist() {
                     <span aria-hidden="true" style={{
                       width: 24, height: 24, flexShrink: 0, borderRadius: '50%', display: 'grid', placeItems: 'center',
                       fontSize: 13, fontWeight: 800,
-                      background: c.ok ? 'var(--color-success-bg)' : 'var(--color-warning-bg)',
-                      color: c.ok ? 'var(--color-success)' : 'var(--color-warning-text)',
-                    }}>{c.ok ? <Check size={14} /> : '!'}</span>
+                      background: c.ok ? 'var(--color-success-bg)' : rec ? 'var(--color-info-bg)' : 'var(--color-warning-bg)',
+                      color: c.ok ? 'var(--color-success)' : rec ? 'var(--color-info)' : 'var(--color-warning-text)',
+                    }}>{c.ok ? <Check size={14} /> : rec ? <Info size={14} /> : '!'}</span>
                     <span style={{ flex: '1 1 240px', fontSize: 14 }}>
-                      <span style={SR_ONLY}>{c.ok ? 'Gotowe: ' : 'Do zrobienia: '}</span>
-                      <strong style={{ fontWeight: c.ok ? 600 : 700 }}>{c.label}</strong>
+                      <span style={SR_ONLY}>{c.ok ? 'Gotowe: ' : rec ? 'Zalecenie: ' : 'Do zrobienia: '}</span>
+                      <strong style={{ fontWeight: c.ok || rec ? 600 : 700 }}>{c.label}</strong>
+                      {rec && (
+                        <span className="badge badge--info" aria-hidden="true"
+                              style={{ fontSize: 10, marginLeft: 6, verticalAlign: 'middle' }}>zalecenie</span>
+                      )}
                       {c.detail && <span style={{ color: 'var(--color-text-muted)' }}> — {c.detail}</span>}
                     </span>
                     {!c.ok && c.link && (
@@ -96,7 +113,8 @@ export default function AdminChecklist() {
                       </Link>
                     )}
                   </li>
-                ))}
+                  )
+                })}
               </ul>
             </div>
           )}

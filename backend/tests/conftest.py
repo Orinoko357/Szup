@@ -77,6 +77,9 @@ def _reset_module_state() -> None:
     _auth._ip_hits.clear()
     _auth._sso_codes.clear()
     _settings._factory_reset_failures.clear()
+    from services import audit as _audit_svc
+    if hasattr(_audit_svc, "_confirm_failures"):
+        _audit_svc._confirm_failures.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -166,11 +169,17 @@ class Api:
         return r.json()["access_token"]
 
     def mk_user(self, admin_token, username, roles, full_name=None, unit_ids=None):
+        """Zakłada konto i zdejmuje must_change_password.
+
+        Roli „hr” już nie ma (v3.9) — `roles` zawierające „hr” oznacza
+        pracownika kadr: konto trafia do komórki kadrowej (Department.is_hr)
+        w jednostce `unit_ids[0]` (albo w pomocniczej jednostce „Kadry”).
+        `unit_ids` nie ogranicza już zakresu kadr — kadry widzą wszystko."""
+        wants_hr = "hr" in roles
+        roles = [r for r in roles if r != "hr"] or ["viewer"]
         body = {"username": username, "password": PW,
                 "full_name": full_name or username, "email": f"{username}@t.local",
                 "roles": roles}
-        if unit_ids is not None:
-            body["unit_ids"] = unit_ids
         r = self.post("/users/", token=admin_token, json=body)
         assert r.status_code in (200, 201), r.text
         uid = r.json()["id"]
@@ -182,8 +191,29 @@ class Api:
         with _S(engine) as s:
             u = s.get(_U, uid)
             u.must_change_password = False
+            if wants_hr:
+                u.department_id = self.hr_department(unit_ids[0] if unit_ids else None)
             s.add(u); s.commit()
         return uid
+
+    def hr_department(self, unit_id=None):
+        """Komórka kadrowa (is_hr) w danej jednostce — tworzona leniwie, jedna
+        na jednostkę. Bez `unit_id` — w pomocniczej jednostce „Kadry”."""
+        from sqlmodel import Session as _S, select as _sel
+        from models import Department as _D, Unit as _Un
+        with _S(engine) as s:
+            if unit_id is None:
+                unit = s.exec(_sel(_Un).where(_Un.name == "Kadry")).first()
+                if unit is None:
+                    unit = _Un(name="Kadry", code="KADRY")
+                    s.add(unit); s.commit(); s.refresh(unit)
+                unit_id = unit.id
+            dept = s.exec(_sel(_D).where(_D.unit_id == unit_id)
+                          .where(_D.is_hr == True)).first()  # noqa: E712
+            if dept is None:
+                dept = _D(unit_id=unit_id, name="Komórka kadrowa", is_hr=True)
+                s.add(dept); s.commit(); s.refresh(dept)
+            return dept.id
 
     def mk_unit(self, admin_token, name=None, code=None):
         name = name or f"Jednostka-{uuid.uuid4().hex[:6]}"

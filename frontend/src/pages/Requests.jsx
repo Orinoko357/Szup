@@ -5,7 +5,7 @@ import { RequestsTab } from './IT'
 import NameChangeQueue from '../components/NameChangeQueue'
 import { workflowDashboard, errorMessage } from '../api'
 import { toast } from '../components/ui/feedback'
-import { getUserRoles, hasAnyRole } from '../roles'
+import { workRoles, hasAnyRole } from '../roles'
 
 /**
  * v3.0 — jedna strona „Wnioski” zamiast osobnych „Wnioski” (kierownik)
@@ -42,7 +42,9 @@ function onTablistKeyDown(e) {
 }
 
 export default function Requests() {
-  const roles = getUserRoles()
+  // Zakładki operacyjne (w tym kolejka zmian nazwiska — tylko IT); admin
+  // i superadmin bez roli IT ich nie widzą.
+  const roles = workRoles()
   const tabs = TABS.filter(t => hasAnyRole(roles, t.roles))
   const [params, setParams] = useSearchParams()
   const wanted = params.get('tab')

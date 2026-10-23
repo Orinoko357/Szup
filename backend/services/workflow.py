@@ -413,6 +413,10 @@ def landing_node_type(
     dept = session.get(Department, request.department_id) if request.department_id else None
 
     node_id = instance.current_node_id
+    acted = find_node(graph, node_id)
+    # Automatyczna akceptacja wyższa (`auto_higher_approval`) liczy się tylko
+    # wtedy, gdy `actor_user` faktycznie może wykonać bieżący krok.
+    acted_type = (acted or {}).get("type") if actor_user is not None else None
     for _ in range(100):
         nxt = next_node(graph, node_id)
         if not nxt:
@@ -422,8 +426,43 @@ def landing_node_type(
             return "end"
         if should_skip(nxt, request, dept, actor_user):
             continue
+        if (acted_type and auto_higher_approval(session, request, dept, acted_type,
+                                                nxt, actor_user)
+                and can_act(acted, request, dept, actor_user, session)[0]):
+            acted_type = None
+            continue
         return nxt["type"]
     return None
+
+
+AUTO_HIGHER_COMMENT = ("Akceptacja wyższa zaliczona automatycznie — wybór wykonał "
+                       "przełożony uprawniony do akceptacji")
+
+
+def auto_higher_approval(session: Session, request: AccessRequest,
+                         dept: Optional[Department], acted_type: Optional[str],
+                         nxt: dict, actor_user: Optional[User]) -> bool:
+    """Czy akceptację wyższą (`nxt`) zaliczyć automatycznie zaraz po kroku
+    kierownika komórki (`acted_type`) wykonanym przez `actor_user`.
+
+    Tak, gdy krok kierownika wysłał ktoś, kto sam może wykonać akceptację
+    wyższą (`can_act`) — przełożony, który przejął wniosek albo złożył go dla
+    podległej komórki, kierownik wyżej działający w komórce bez kierownika,
+    dyrektor jednostki. Akceptowałby wtedy własny wybór drugi raz.
+
+    Nigdy dla wniosku „dla siebie” (pracownik nie zatwierdza sam siebie) ani
+    dla kierownika / zastępcy samej komórki — wyjątek: dyrektor jednostki,
+    o ile `can_act` pozwala mu na akceptację wyższą. Superadmin w obiegu nie
+    działa, więc też nigdy."""
+    if actor_user is None or acted_type not in MANAGER_STAGE_TYPES:
+        return False
+    if nxt.get("type") != "higher_manager_approve":
+        return False
+    if has_role(actor_user, "superadmin") or is_self_request(request, actor_user):
+        return False
+    # Kierownik / zastępca samej komórki — `can_act` odmawia im akceptacji
+    # wyższej (poza dyrektorem jednostki), więc wystarczy jego werdykt.
+    return can_act(nxt, request, dept, actor_user, session)[0]
 
 
 def grants_permissions(session: Session, request: AccessRequest) -> bool:
@@ -649,10 +688,10 @@ def manager_stage_visibility(session: Session, request: AccessRequest, user: Use
     dostępu), True — gdy jest i `user` może go zobaczyć, False — gdy jest
     i wniosek ma być przed `user` ukryty (np. IT, administrator, inni kierownicy).
 
-    Widzą go: superadmin, twórca wniosku (np. kadry), kierownik komórki i jego
-    zastępcy, osoba, która wniosek przejęła, oraz przełożeni (kierownik / zastępca
-    komórki wyżej w strukturze, dyrektor jednostki) — ci ostatni tylko do odczytu,
-    dopóki wniosku nie przejmą.
+    Widzą go: superadmin (tylko podgląd), twórca wniosku (np. kadry), kierownik
+    komórki i jego zastępcy, osoba, która wniosek przejęła, oraz przełożeni
+    (kierownik / zastępca komórki wyżej w strukturze, dyrektor jednostki) — ci
+    ostatni tylko do odczytu, dopóki wniosku nie przejmą.
 
     Zapisana wersja robocza (`draft_saved_at`) jest ukryta w tym samym kręgu
     także wtedy, gdy komórka NIE ma (już) własnego aktywnego kierownika — np. po
@@ -759,6 +798,8 @@ def can_take_over(session: Session, request: AccessRequest, user: User,
     """
     from services.permissions import is_department_manager_or_deputy, is_superior_for
 
+    if has_role(user, "superadmin"):
+        return False, 403, SUPERADMIN_NO_ACT_MSG
     if dept is _UNSET:
         dept = session.get(Department, request.department_id) if request.department_id else None
     if node_type is _UNSET:
@@ -785,11 +826,12 @@ def can_take_over(session: Session, request: AccessRequest, user: User,
 
 def can_release(session: Session, request: AccessRequest, user: User,
                 node_type: Any = _UNSET, dept: Any = _UNSET) -> bool:
-    """Czy `user` może oddać przejęcie („Oddaj”) — przejmujący albo superadmin,
-    tylko póki wniosek stoi na etapie kierownika komórki."""
+    """Czy `user` może oddać przejęcie („Oddaj”) — wyłącznie przejmujący
+    (superadmin nie działa w obiegu), tylko póki wniosek stoi na etapie
+    kierownika komórki."""
     if not getattr(request, "taken_over_by_id", None):
         return False
-    if not (request.taken_over_by_id == user.id or has_role(user, "superadmin")):
+    if request.taken_over_by_id != user.id:
         return False
     if dept is _UNSET:
         dept = session.get(Department, request.department_id) if request.department_id else None
@@ -1090,6 +1132,22 @@ def serialize_request_events(session: Session, request_id: int) -> list[dict]:
 # Uprawnienia — kto może wykonać akcję na węźle danego typu
 # ---------------------------------------------------------------------------
 
+SUPERADMIN_NO_ACT_MSG = (
+    "Superadmin jest kontem konfiguracyjnym (break-glass) i nie działa w obiegu "
+    "wniosków — może je jedynie podglądać.")
+
+
+def superadmin_acts(session: Session, node: dict, request: AccessRequest,
+                    dept: Optional[Department]) -> bool:
+    """Czy na tym kroku działa superadmin — wyłącznie akceptacja wyższa wniosku
+    „dla siebie” kierownika, nad którym w strukturze nie ma nikogo, kto mógłby
+    go zatwierdzić (rezerwa `_stage_actor_info`). Poza tym superadmin w obiegu
+    nie działa."""
+    if node.get("type") != "higher_manager_approve":
+        return False
+    return _stage_actor_info(session, node, dept, request)[1]
+
+
 def can_act(node: dict, request: AccessRequest, dept: Optional[Department],
             user: User, session: Session) -> tuple[bool, str]:
     """Zwraca (dozwolone, powód-jeśli-nie).
@@ -1097,7 +1155,13 @@ def can_act(node: dict, request: AccessRequest, dept: Optional[Department],
     Wariant A (czysty rozdział obowiązków): działać w obiegu mogą wyłącznie role
     OPERACYJNE (kierownik / zastępca / pracownik IT). Administrator KONFIGURUJE
     system i NIE działa w obiegu — jeśli ma realizować/akceptować, dostaje
-    właściwą rolę operacyjną. Superadmin pozostaje break-glass (może wszystko).
+    właściwą rolę operacyjną.
+
+    Superadmin to konto KONFIGURACYJNE (break-glass) — wnioski widzi, ale w
+    obiegu nie działa (`superadmin_acts`). Jedyny wyjątek, żeby wniosek nie
+    utknął: akceptacja wyższa wniosku „dla siebie” kierownika, nad którym
+    w strukturze nie ma nikogo (np. dyrektora jednostki) — patrz
+    `_stage_actor_info`.
 
     Zastępcy (DepartmentDeputy) traktowani na równi z głównym kierownikiem
     komórki — mogą wykonać krok `select_permissions` / `manager_approve`
@@ -1108,10 +1172,12 @@ def can_act(node: dict, request: AccessRequest, dept: Optional[Department],
         is_department_manager_or_deputy, effective_manager_dept, is_superior_for,
     )
 
-    if has_role(user, "superadmin"):
-        return True, ""
-
     ntype = node["type"]
+
+    if has_role(user, "superadmin"):
+        if superadmin_acts(session, node, request, dept) and not is_self_request(request, user):
+            return True, ""
+        return False, SUPERADMIN_NO_ACT_MSG
 
     if ntype in MANAGER_STAGE_TYPES:
         if dept_has_own_manager(session, dept):
@@ -1268,9 +1334,16 @@ def advance(
 
     Interaktywne = wszystko oprócz start/end oraz węzłów które silnik pomija.
     end → zamyka instancję.
+
+    Po kroku kierownika komórki wykonanym przez osobę, która może też wykonać
+    akceptację wyższą (`auto_higher_approval`), ten krok zapisujemy od razu
+    jako akceptację z jej nazwiskiem i komentarzem `AUTO_HIGHER_COMMENT`,
+    a obieg idzie dalej (zwykle do IT).
     """
     graph = json.loads(instance.template_snapshot)
     dept = session.get(Department, request.department_id) if request.department_id else None
+    acted = find_node(graph, instance.current_node_id) if instance.current_node_id else None
+    acted_type = (acted or {}).get("type") if actor_user is not None else None
 
     guard = 0
     while True:
@@ -1317,6 +1390,14 @@ def advance(
                          action=WorkflowStepAction.auto_skip, actor_user=None,
                          comment="Warunek pominięcia spełniony")
             continue  # przejdź do kolejnego
+
+        if acted_type and auto_higher_approval(session, request, dept, acted_type,
+                                               nxt, actor_user):
+            _record_step(session, instance, nxt,
+                         action=WorkflowStepAction.approve, actor_user=actor_user,
+                         comment=AUTO_HIGHER_COMMENT)
+            acted_type = None   # tylko bezpośrednio po kroku kierownika
+            continue
 
         # Węzeł interaktywny — czekamy na akcję użytkownika. Powiadom aktora.
         _sync_request_status(request, instance)
@@ -1380,7 +1461,7 @@ def _stage_actor_ids(session: Session, node: dict,
     Gdy nikogo takiego nie ma (komórka najwyższego poziomu, łańcuch bez
     kierownika) — dyrektor jednostki, który i tak może wykonać ten krok.
     Akceptacja wyższa wniosku „dla siebie”, gdy poza pracownikiem nie ma
-    żadnego przełożonego — superadmin (`_superadmin_fallback`).
+    żadnego przełożonego — superadmin (`superadmin_acts`).
     """
     return _stage_actor_info(session, node, dept, request)[0]
 
@@ -1626,9 +1707,8 @@ def _notify_stage(session: Session, request: AccessRequest, node: dict,
 
     Nadawcą powiadomienia jest `actor_user` — osoba, której akcja przesunęła
     wniosek do tego etapu (np. kierownik, który zaakceptował). To ona figuruje
-    jako „od kogo" w skrzynce adresata, ale sama maila NIE dostaje (np.
-    przełożony, który przejął i wysłał wniosek dwustopniowy, a teraz może
-    wykonać też akceptację wyższą — krok zostaje, bez „czeka na Ciebie”).
+    jako „od kogo" w skrzynce adresata, ale sama maila NIE dostaje (nie
+    powiadamiamy nikogo o kroku, który sam właśnie wysłał).
     `exclude_ids` — dodatkowe osoby do pominięcia (np. już powiadomione).
     """
     try:

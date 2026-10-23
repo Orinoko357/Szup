@@ -33,6 +33,7 @@ from models import (
     Unit,
     User,
 )
+from services.csv_utils import csv_safe_row
 from services.permissions import require_it_staff
 
 router = APIRouter()
@@ -182,7 +183,8 @@ def granted_registry_csv(
     for r in rows:
         zakres = "; ".join(f"{k}: {v}" for k, v in (r["custom_values"] or {}).items())
         granted = r["granted_at"]
-        w.writerow([
+        # Neutralizacja formuł — pola tekstowe pochodzą od użytkowników i z AD.
+        w.writerow(csv_safe_row([
             r["request_id"], r["worker_name"], r["unit_name"] or "",
             r["department_name"] or "", r["system_name"] or "",
             r["permission_name"] or "", r["group_name"] or "",
@@ -191,7 +193,7 @@ def granted_registry_csv(
             r["request_status"] or "",
             r["declared_by_name"] or "", r["declared_date"] or "",
             r["reference_code"] or "",
-        ])
+        ]))
     buf.seek(0)
     fname = f"szup-rejestr-uprawnien-{datetime.utcnow().date()}.csv"
     return StreamingResponse(

@@ -6,6 +6,38 @@ Wersjonowanie: [Semantic Versioning](https://semver.org/lang/pl/).
 
 ## [Unreleased]
 
+## [3.9.0] — 2026-10-23
+
+Decyzje właściciela systemu: role, superadmin, kadry, AD.
+
+### Zmieniono
+- **Rola HR zlikwidowana.** Kadry to członkowie komórki kadrowej (flaga „komórka
+  kadrowa”), z zakresem wszystkich jednostek. Migracja usuwa rolę „hr” z kont
+  i zapisuje w dzienniku listę osób, które straciły funkcję kadr (nie należą
+  do komórki kadrowej) — przypisz je do takiej komórki.
+- **Administrator i superadmin tylko konfigurują.** Zmiany nazwisk i dowiązywanie
+  kont wykonuje wyłącznie IT (rola it_staff). Superadmin nie składa wniosków,
+  nie wykonuje kroków obiegu, nie pełni funkcji w strukturze i nie łączy roli
+  z rolami operacyjnymi (wyjątek: akceptacja wniosku dyrektora jednostki dla
+  siebie, gdy nad nim nikogo nie ma).
+- **Akceptacja wyższa zaliczana automatycznie,** gdy wybór wysłał przełożony
+  uprawniony do niej (po przejęciu albo przy wniosku złożonym przez przełożonego);
+  krok jest widoczny w historii.
+- **Szyfrowanie połączenia z AD zalecane, nie wymagane** — lista kontrolna pokazuje
+  zalecenie zamiast błędu.
+
+### Dodano (superadmin)
+- Czyszczenie dziennika zdarzeń i zdarzeń bezpieczeństwa: hasło, powód, jedna
+  transakcja z przywróceniem ochrony; ślad czyszczenia jest nieusuwalny.
+- Usuwanie dowolnej komórki z powodem: komórka bez historii jest usuwana,
+  z historią — archiwizowana (pracownicy odpięci, podkomórki przepięte wyżej,
+  wnioski w toku odrzucone z podanym powodem).
+- Usuwanie przyznanej grupy uprawnień z powodem: posiadaczom uprawnienia są
+  odbierane (wnioski odebrania w historii), zdarzenie w dzienniku.
+
+### Bezpieczeństwo
+- Eksporty CSV (rejestr, migawki, dziennik) neutralizują formuły arkusza.
+
 ## [3.8.0] — 2026-10-23
 
 Poprawki po gruntownym audycie 3.7 (wysokie i średnie) oraz akceptacja

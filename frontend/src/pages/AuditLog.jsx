@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Download, RefreshCw, Filter } from 'lucide-react'
-import { listAudit, auditStats, exportAuditCsv, errorMessage } from '../api'
+import { Download, RefreshCw, Filter, Trash2 } from 'lucide-react'
+import { listAudit, auditStats, exportAuditCsv, purgeAudit, errorMessage } from '../api'
+import { getUserRoles } from '../roles'
+import PurgeLogModal from '../components/PurgeLogModal'
 import { toast } from '../components/ui/feedback'
 import { fmtDateTime } from '../serverTime'
 import { LoadError } from '../components/ui/LoadState'
@@ -20,6 +22,9 @@ export default function AuditLog() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState(null)
   const [filters, setFilters] = useState({ username: '', action: '', since: '', until: '' })
+  // Czyszczenie dziennika — wyłącznie superadmin (hasło + powód; samo czyszczenie zostaje w dzienniku).
+  const isSuperadmin = getUserRoles().includes('superadmin')
+  const [purgeOpen, setPurgeOpen] = useState(false)
 
   async function load() {
     setLoading(true); setErr(null)
@@ -83,7 +88,8 @@ export default function AuditLog() {
         <div>
           <h1 className="page-header__title">Dziennik zdarzeń</h1>
           <div className="page-header__sub">
-            Ślad zdarzeń w systemie (NIS2 / KSC). Wpisów nie można zmieniać ani usuwać.
+            Ślad zdarzeń w systemie (NIS2 / KSC). Wpisów nie można zmieniać
+            {isSuperadmin ? ' — usunąć je może tylko superadmin (operacja jest odnotowywana).' : ' ani usuwać.'}
           </div>
           {stats && (
             <div style={{ marginTop: 8, fontSize: 13, color: 'var(--color-text-muted)' }}>
@@ -93,7 +99,19 @@ export default function AuditLog() {
             </div>
           )}
         </div>
+        {isSuperadmin && (
+          <button type="button" className="btn btn--ghost" style={{ color: 'var(--color-error-text)' }}
+                  onClick={() => setPurgeOpen(true)}
+                  title="Usuń wpisy dziennika (tylko superadmin, z hasłem i powodem)">
+            <Trash2 size={14} aria-hidden="true" /> Wyczyść…
+          </button>
+        )}
       </div>
+      {purgeOpen && (
+        <PurgeLogModal title="Wyczyść dziennik zdarzeń" what="wpisy dziennika zdarzeń"
+                       purge={purgeAudit} onClose={() => setPurgeOpen(false)}
+                       onDone={() => { setPurgeOpen(false); load() }} />
+      )}
 
       <form aria-label="Filtry" className="card" onSubmit={e => e.preventDefault()}
             style={{ padding: '16px 18px', marginBottom: 18, display: 'grid',

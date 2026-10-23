@@ -22,7 +22,7 @@ from sqlmodel import Session, select
 from database import engine
 from models import (
     AccessRequest, Department, RequestEvent, RequestType, SecurityEvent, User,
-    WorkflowTemplate,
+    WorkflowInstance, WorkflowStep, WorkflowTemplate,
 )
 
 
@@ -154,16 +154,21 @@ def test_dept_manager_who_is_parent_deputy_cannot_do_higher_approval(api, monkey
 
 def test_unit_director_managing_own_dept_keeps_higher_approval_exception(api):
     w = _world(api, two_stage=True)
-    # Dyrektor jednostki kieruje też komórką K — wyjątek: akceptację wyższą wykona.
+    # Dyrektor jednostki kieruje też komórką K — wyjątek: akceptację wyższą
+    # może wykonać, więc po jego wyborze jest ona zaliczana automatycznie.
     assert api.patch(f"/units/departments/{w['dep']}", token=w["sup"],
                      json={"manager_user_id": w["did"]}).status_code == 200
     rid = _create(api, w)
     dyr = api.login("dyr")
+    assert _det(api, rid, dyr)["next_node_type"] == "it_execute"
     assert _act(api, rid, dyr, "select", items=_items(w)).status_code == 200
-    assert api.node_type(rid, dyr) == "higher_manager_approve"
-    r = _act(api, rid, dyr, "approve")
-    assert r.status_code == 200, r.text
     assert api.node_type(rid, dyr) == "it_execute"
+    from services.workflow import AUTO_HIGHER_COMMENT
+    with Session(engine) as s:
+        inst = s.exec(select(WorkflowInstance).where(WorkflowInstance.request_id == rid)).one()
+        auto = s.exec(select(WorkflowStep).where(WorkflowStep.instance_id == inst.id)
+                      .where(WorkflowStep.node_type == "higher_manager_approve")).all()
+        assert [(x.actor_name, x.comment) for x in auto] == [("Dorota Dyrektor", AUTO_HIGHER_COMMENT)]
 
 
 # ---------------------------------------------------------------------------
@@ -281,12 +286,12 @@ def test_taker_sending_two_stage_request_gets_no_self_mail(api, monkeypatch):
     sent = _mails(monkeypatch)
     kierP = api.login("kierP")
     assert _act(api, rid, kierP, "select", items=_items(w)).status_code == 200
-    assert api.node_type(rid, kierP) == "higher_manager_approve"
+    # Przejmujący może też wykonać akceptację wyższą — zaliczona automatycznie
+    # (decyzje 3.9), wniosek trafia od razu do IT; nikt nie dostaje „czeka na
+    # Ciebie” o akceptacji wyższej.
+    assert api.node_type(rid, kierP) == "it_execute"
     assert "kierP@t.local" not in _stage_to(sent)
-    assert "zastP@t.local" in _stage_to(sent)
-    # Krok zostaje (bez auto-akceptacji) — przejmujący wykonuje go sam.
-    assert _det(api, rid, kierP)["can_act"] is True
-    assert _act(api, rid, kierP, "approve").status_code == 200
+    assert "zastP@t.local" not in _stage_to(sent)
 
 
 # ---------------------------------------------------------------------------

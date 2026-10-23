@@ -161,12 +161,20 @@ def test_superior_can_do_both_manager_steps_and_own_manager_cannot_higher(api):
         "action": "select",
         "items": [{"system_id": w["sid"], "permission_id": w["pid"]}]})
     assert r.status_code == 200, r.text
-    assert api.node_type(rid, kierP) == "higher_manager_approve"
+    # Przełożony może też wykonać akceptację wyższą — zaliczona automatycznie
+    # (decyzje 3.9), wniosek trafia od razu do IT.
+    assert api.node_type(rid, kierP) == "it_execute"
 
-    # Kierownik samej komórki NIE może zatwierdzić akceptacji wyższej…
+    # Wybór kierownika samej komórki → akceptacja wyższa, której sam NIE wykona…
+    rid = _new_request(api, w)
+    r = api.post(f"/requests/{rid}/workflow/action", token=kier, json={
+        "action": "select",
+        "items": [{"system_id": w["sid"], "permission_id": w["pid"]}]})
+    assert r.status_code == 200, r.text
+    assert api.node_type(rid, kier) == "higher_manager_approve"
     r = api.post(f"/requests/{rid}/workflow/action", token=kier, json={"action": "approve"})
     assert r.status_code == 403
-    # …a przełożony może (także drugi stopień — decyzja biznesowa).
+    # …a przełożony może.
     r = api.post(f"/requests/{rid}/workflow/action", token=kierP, json={"action": "approve"})
     assert r.status_code == 200, r.text
     assert api.node_type(rid, kierP) == "it_execute"
@@ -204,9 +212,7 @@ def test_unit_director_can_do_every_step_for_subordinate_departments(api):
     r = api.post(f"/requests/{rid}/workflow/action", token=dyr, json={
         "action": "select", "items": [{"system_id": w["sid"], "permission_id": w["pid"]}]})
     assert r.status_code == 200, r.text
-    assert api.node_type(rid, dyr) == "higher_manager_approve"
-    r = api.post(f"/requests/{rid}/workflow/action", token=dyr, json={"action": "approve"})
-    assert r.status_code == 200, r.text
+    # Akceptację wyższą dyrektor też może wykonać — zaliczona automatycznie.
     assert api.node_type(rid, dyr) == "it_execute"
 
 

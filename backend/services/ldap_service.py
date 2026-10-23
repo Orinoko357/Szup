@@ -9,15 +9,9 @@ import re
 logger = logging.getLogger(__name__)
 
 
-class LdapInsecureError(RuntimeError):
-    """Odmowa wysłania hasła do serwera LDAP bez szyfrowania."""
-
-
-LDAP_INSECURE_MSG = (
-    "Odmowa logowania do LDAP bez szyfrowania — hasło poszłoby otwartym tekstem. "
-    "Włącz LDAPS (SSL, zwykle port 636) albo STARTTLS w Ustawieniach → AD/LDAP "
-    "(awaryjnie: „Zezwól na połączenie bez szyfrowania”)."
-)
+# Szyfrowanie połączenia z AD jest ZALECANE, ale nie wymagane: zwykły LDAP
+# (port 389, bez TLS) działa — lista kontrolna (/settings/health) pokazuje
+# wtedy rekomendację włączenia LDAPS albo STARTTLS.
 
 
 def ldap_tls_enabled(settings) -> bool:
@@ -53,11 +47,10 @@ def build_server(settings, **kwargs):
 
 def open_connection(settings, server, user: str, password: str):
     """Połączenie z automatycznym bind. Przy STARTTLS szyfrowanie zestawiamy
-    PRZED bind; hasła nie wysyłamy nigdy do serwera bez TLS (LdapInsecureError)."""
+    PRZED bind. Bez LDAPS/STARTTLS łączymy się zwykłym LDAP (hasło idzie
+    otwartym tekstem) — dopuszczalne, ale niezalecane; ostrzega o tym lista
+    kontrolna w Ustawieniach."""
     from ldap3 import Connection, AUTO_BIND_NO_TLS, AUTO_BIND_TLS_BEFORE_BIND
-    if password and not ldap_tls_enabled(settings) \
-            and not getattr(settings, "allow_insecure", False):
-        raise LdapInsecureError(LDAP_INSECURE_MSG)
     use_starttls = bool(getattr(settings, "use_starttls", False)) and not settings.use_ssl
     return Connection(server, user=user, password=password,
                       auto_bind=AUTO_BIND_TLS_BEFORE_BIND if use_starttls else AUTO_BIND_NO_TLS)
@@ -355,10 +348,6 @@ def authenticate_ldap(settings, username: str, password: str) -> bool:
         with open_connection(settings, server, user_dn, password):
             logger.info("LDAP: user %r authenticated", username)
             return True
-
-    except LdapInsecureError:
-        logger.error("LDAP: %s", LDAP_INSECURE_MSG)
-        return False
 
     except Exception as exc:
         logger.warning("LDAP error for %r: %s", username, exc)

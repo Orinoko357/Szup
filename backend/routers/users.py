@@ -5,7 +5,10 @@ Superadmin (break-glass): pełny dostęp, może nadawać/odbierać dowolną rol�
 Admin: może zakładać konta i zarządzać użytkownikami z wyjątkiem kont z rolą
        admin lub superadmin (edycja, reset hasła, odblokowanie, dezaktywacja,
        usunięcie — tylko superadmin); nadaje wyłącznie role operacyjne
-       (kierownik, IT, kadry, podgląd) — ról admin/superadmin nie nadaje ani nie odbiera.
+       (kierownik, IT, podgląd) — ról admin/superadmin nie nadaje ani nie odbiera.
+
+Roli „hr” nie ma (v3.9): pracownikiem kadr jest każdy członek komórki kadrowej
+(Department.is_hr). Superadmin nie łączy swojej roli z rolami operacyjnymi.
 """
 from __future__ import annotations
 
@@ -26,8 +29,8 @@ from models import (
 from services.auth_service import hash_password, validate_password_strength
 from services.auth_service import get_current_user
 from services.permissions import (
-    require_admin, require_manager, managed_dept_ids, hr_scoped_unit_ids,
-    users_with_role, manager_scope_ids,
+    require_admin, require_manager, managed_dept_ids,
+    users_with_role, manager_scope_ids, SUPERADMIN_FORBIDDEN_ROLES,
 )
 
 router = APIRouter()
@@ -36,8 +39,36 @@ _log = logging.getLogger("szup.users")
 
 # Role, których nadanie poszerza dostęp do wniosków i danych pracowników —
 # każde nadanie trafia też do zdarzeń bezpieczeństwa (konto „marionetka”).
-OPERATIONAL_ROLES = {"manager", "it_staff", "hr"}
+OPERATIONAL_ROLES = {"manager", "it_staff"}
 ADMIN_ROLES = {"admin", "superadmin"}
+
+HR_ROLE_REMOVED_MSG = (
+    "Roli „hr” nie można już nadawać — pracownikiem kadr jest każdy członek "
+    "komórki kadrowej. Przypisz osobę do takiej komórki (Struktura → oznacz "
+    "komórkę jako kadrową)"
+)
+
+
+def _validate_roles(roles: list[str]) -> None:
+    """Walidacja listy ról przy zakładaniu / edycji konta (400 przy błędzie):
+      - „hr” — rola zniesiona (zdolność kadrowa = komórka kadrowa),
+      - nieznane role,
+      - superadmin razem z rolą operacyjną (kierownik, IT) — superadmin to konto
+        awaryjne do konfiguracji, nie do pracy w obiegu wniosków."""
+    if "hr" in roles:
+        raise HTTPException(400, HR_ROLE_REMOVED_MSG)
+    invalid = [r for r in roles if r not in VALID_ROLES]
+    if invalid:
+        raise HTTPException(400, f"Nieznane role: {invalid}")
+    if "superadmin" in roles:
+        mixed = sorted(set(roles) & SUPERADMIN_FORBIDDEN_ROLES)
+        if mixed:
+            raise HTTPException(
+                400,
+                "Konto superadmina służy wyłącznie do konfiguracji — nie można go "
+                f"łączyć z rolami operacyjnymi ({', '.join(mixed)}). Do pracy "
+                "w obiegu wniosków użyj osobnego konta",
+            )
 
 
 def _audit_user(session: Session, request: Optional[Request], actor: User, *,
@@ -54,7 +85,7 @@ def _audit_user(session: Session, request: Optional[Request], actor: User, *,
 def _roles_granted_event(session: Session, request: Optional[Request], actor: User,
                          target: User, granted: set[str]) -> None:
     """Nadanie roli operacyjnej lub administracyjnej → zdarzenie bezpieczeństwa
-    (admin → high, kierownik / IT / kadry → medium)."""
+    (admin → high, kierownik / IT → medium)."""
     sensitive = granted & (OPERATIONAL_ROLES | ADMIN_ROLES)
     if not sensitive:
         return
@@ -148,8 +179,6 @@ class UserCreate(BaseModel):
     auth_type: AuthType = AuthType.local
     roles: list[str] = ["viewer"]
     department_id: Optional[int] = None
-    # Jednostki obsługiwane przez pracownika kadr (widoczne w jego formularzach).
-    unit_ids: Optional[list[int]] = None
 
 
 class UserRead(BaseModel):
@@ -170,6 +199,7 @@ class UserRead(BaseModel):
     department_name: Optional[str] = None
     title: str = ""                      # stanowisko z AD (NULL → "")
     is_manager_title: bool = False       # stanowisko wskazuje na kierowanie komórką
+    # Dawne jednostki kadr (UserUnit) — tylko do odczytu, niczego nie ograniczają.
     unit_ids: list[int] = []
     # Komunikat informacyjny po zapisie (np. „komórka ma już kierownika”).
     # Nie jest błędem — operacja się powiodła, ale coś wymaga uwagi admina.
@@ -182,7 +212,6 @@ class UserUpdate(BaseModel):
     roles: Optional[list[str]] = None
     is_active: Optional[bool] = None
     department_id: Optional[int] = None
-    unit_ids: Optional[list[int]] = None
 
 
 class PasswordResetRequest(BaseModel):
@@ -195,20 +224,6 @@ def _user_unit_ids(session, user_id: int) -> list[int]:
         return []
     rows = session.exec(select(UserUnit.unit_id).where(UserUnit.user_id == user_id)).all()
     return sorted(int(x) for x in rows)
-
-
-def _set_user_units(session: Session, user_id: int, unit_ids: list[int]) -> None:
-    """Zastąp listę jednostek obsługiwanych przez użytkownika (kadry)."""
-    from models import UserUnit
-    for uid in unit_ids:
-        if not session.get(Unit, uid):
-            raise HTTPException(400, f"Jednostka id={uid} nie istnieje")
-    current = session.exec(select(UserUnit).where(UserUnit.user_id == user_id)).all()
-    for row in current:
-        session.delete(row)
-    session.flush()
-    for uid in set(unit_ids):
-        session.add(UserUnit(user_id=user_id, unit_id=uid))
 
 
 def _user_read(u: User, dept_name: Optional[str] = None, session=None,
@@ -471,12 +486,13 @@ def users_by_department(
     session: Session = Depends(get_session),
 ):
     """Aktywni pracownicy danej komórki — dla formularza HR (ustanie stosunku
-    pracy: wybór pracownika z listy). Dostęp operacyjny: HR i kierownik,
-    superadmin — break-glass. Administrator (Wariant A) nie działa operacyjnie.
+    pracy: wybór pracownika z listy). Dostęp operacyjny: kadry (komórka
+    kadrowa) i kierownik, superadmin — break-glass. Administrator (Wariant A)
+    nie działa operacyjnie.
 
     IDOR/RODO: sam fakt roli nie wystarcza — zakres musi obejmować tę komórkę:
       - kierownik: tylko wydziały, którymi kieruje (bezpośrednio/zastępczo/2-st.),
-      - HR: tylko jednostki (unit) przypisane temu pracownikowi kadr.
+      - kadry: wszystkie jednostki (komórka kadrowa obsługuje całą organizację).
     """
     from services.permissions import user_is_hr
     hr_cap = user_is_hr(session, current_user)
@@ -492,11 +508,9 @@ def users_by_department(
         if has_role(current_user, "manager"):
             if department_id in manager_scope_ids(session, current_user):
                 allowed = True
-        # Ścieżka HR (rola lub komórka kadrowa) — zakres jednostek (unit).
+        # Ścieżka kadr (komórka kadrowa) — wszystkie jednostki.
         if not allowed and hr_cap:
-            scoped_units = hr_scoped_unit_ids(session, current_user)
-            if scoped_units is None or dept.unit_id in scoped_units:
-                allowed = True
+            allowed = True
         if not allowed:
             raise HTTPException(status.HTTP_403_FORBIDDEN,
                 "Brak dostępu do pracowników tej komórki")
@@ -521,7 +535,7 @@ def users_by_department(
         stack.extend(children_of.get(cur, []))
 
     # Zakres: dla kierownika ogranicz podkomórki do tych, którymi faktycznie
-    # zarządza (bezpieczeństwo); HR (zakres po jednostce) i superadmin — całe poddrzewo.
+    # zarządza (bezpieczeństwo); kadry i superadmin — całe poddrzewo.
     if not has_role(current_user, "superadmin") and has_role(current_user, "manager") \
             and not hr_cap:
         managed = manager_scope_ids(session, current_user)
@@ -572,13 +586,11 @@ def users_search(
 
     rows = session.exec(select(User).where(User.is_active == True)).all()  # noqa: E712
 
+    # Kierownik — tylko swój zakres komórek; kadry i superadmin — wszyscy.
     allowed_dept_ids = None     # None = bez ograniczenia
-    allowed_unit_ids = None
     if not has_role(current_user, "superadmin"):
         if has_role(current_user, "manager") and not hr_cap:
             allowed_dept_ids = manager_scope_ids(session, current_user)
-        else:
-            allowed_unit_ids = hr_scoped_unit_ids(session, current_user)  # None = wszystkie
 
     dept_map = {d.id: d for d in session.exec(select(Department)).all()}
     unit_map = {u.id: u.name for u in session.exec(select(Unit)).all()}
@@ -590,8 +602,6 @@ def users_search(
             continue
         d = dept_map.get(u.department_id)
         if allowed_dept_ids is not None and u.department_id not in allowed_dept_ids:
-            continue
-        if allowed_unit_ids is not None and (not d or d.unit_id not in allowed_unit_ids):
             continue
         out.append({
             "id": u.id, "full_name": u.full_name, "username": u.username, "email": u.email,
@@ -850,6 +860,7 @@ def create_user(
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin),
 ):
+    _validate_roles(data.roles)
     _guard_admin_role_change(current_user, data.roles)
     from services.ldap_service import normalize_login, find_user_by_login
     if data.auth_type == AuthType.ldap:
@@ -864,9 +875,6 @@ def create_user(
         raise HTTPException(400, "Hasło jest wymagane dla konta lokalnego")
     if data.password:
         validate_password_strength(data.password)
-    invalid = [r for r in data.roles if r not in VALID_ROLES]
-    if invalid:
-        raise HTTPException(400, f"Nieznane role: {invalid}")
 
     if data.department_id is not None:
         if not session.get(Department, data.department_id):
@@ -907,9 +915,6 @@ def create_user(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             f"Nie udało się utworzyć konta w bazie: {type(exc).__name__}: {exc}",
         )
-    if data.unit_ids is not None:
-        _set_user_units(session, user.id, data.unit_ids)
-        session.commit(); session.refresh(user)
     # Rola → struktura: kierownik przypisany do komórki bez kierownika
     # obejmuje ją automatycznie (bez podmieniania obsadzonego stanowiska).
     from services.org_sync import sync_after_user_change
@@ -920,7 +925,6 @@ def create_user(
         "auth_type": user.auth_type.value if hasattr(user.auth_type, "value") else user.auth_type,
         "roles": parse_roles(user.roles),
         "department_id": user.department_id,
-        "unit_ids": _user_unit_ids(session, user.id),
     })
     _roles_granted_event(session, request, current_user, user, set(parse_roles(user.roles)))
     return _user_read(user, session=session, warning=warning)
@@ -939,12 +943,10 @@ def update_user(
         raise HTTPException(404, "Użytkownik nie istnieje")
     _guard_admin_account(current_user, user)
     if data.roles is not None:
+        _validate_roles(data.roles)
         _guard_admin_role_change(current_user, data.roles, parse_roles(user.roles))
-        invalid = [r for r in data.roles if r not in VALID_ROLES]
-        if invalid:
-            raise HTTPException(400, f"Nieznane role: {invalid}")
         # Admin (nie superadmin) nie zmienia SWOICH ról — ani nie nadaje sobie
-        # ról operacyjnych (kierownik, IT, HR), ani nie odbiera. Robi to superadmin.
+        # ról operacyjnych (kierownik, IT), ani nie odbiera. Robi to superadmin.
         if (user.id == current_user.id and not has_role(current_user, "superadmin")
                 and set(data.roles) != set(parse_roles(user.roles))):
             raise HTTPException(status.HTTP_403_FORBIDDEN,
@@ -959,19 +961,12 @@ def update_user(
         if user.id == current_user.id and not data.is_active:
             raise HTTPException(400, "Nie możesz dezaktywować własnego konta")
     if user.id == current_user.id and not has_role(current_user, "superadmin"):
-        # Zmiana własnej komórki / jednostek kadrowych poszerza własny zakres
-        # (np. kierownik obejmuje komórkę bez kierownika) — tylko superadmin.
-        from models import UserUnit
+        # Zmiana własnej komórki poszerza własny zakres (np. kierownik obejmuje
+        # komórkę bez kierownika, komórka kadrowa daje funkcje kadr) — tylko superadmin.
         if ("department_id" in data.model_fields_set
                 and (data.department_id or None) != user.department_id):
             raise HTTPException(status.HTTP_403_FORBIDDEN,
                 "Administrator nie może zmieniać własnej komórki — poproś o to superadmina")
-        if data.unit_ids is not None:
-            own_units = set(session.exec(
-                select(UserUnit.unit_id).where(UserUnit.user_id == user.id)).all())
-            if set(data.unit_ids) != own_units:
-                raise HTTPException(status.HTTP_403_FORBIDDEN,
-                    "Administrator nie może zmieniać własnych jednostek — poproś o to superadmina")
     deactivated = data.is_active is False and user.is_active
     # Stan „kto odpowiada za krok” wniosków w toku — PRZED zmianą is_active
     # (po niej nieaktywny kierownik już się nie liczy i nowy odpowiedzialny
@@ -981,7 +976,6 @@ def update_user(
         "roles": sorted(parse_roles(user.roles)),
         "department_id": user.department_id,
         "is_active": user.is_active,
-        "unit_ids": sorted(_user_unit_ids(session, user.id)),
     }
 
     if data.full_name is not None:  user.full_name = data.full_name
@@ -998,10 +992,6 @@ def update_user(
             user.department_id = data.department_id
         else:
             user.department_id = None
-
-    # Jednostki obsługiwane (kadry) — podanie listy zastępuje całość.
-    if data.unit_ids is not None:
-        _set_user_units(session, user.id, data.unit_ids)
 
     session.add(user); session.commit(); session.refresh(user)
 
@@ -1029,7 +1019,6 @@ def update_user(
         "roles": sorted(parse_roles(user.roles)),
         "department_id": user.department_id,
         "is_active": user.is_active,
-        "unit_ids": sorted(_user_unit_ids(session, user.id)),
     }
     diff = {k: {"old": before[k], "new": after[k]} for k in before if before[k] != after[k]}
     if diff:

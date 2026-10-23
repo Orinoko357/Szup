@@ -245,7 +245,6 @@ class LdapSettingsSchema(BaseModel):
     tls_verify: bool = True
     ca_cert_file: Optional[str] = None
     use_starttls: bool = False
-    allow_insecure: bool = False
 
 
 class LdapSettingsRead(BaseModel):
@@ -264,7 +263,6 @@ class LdapSettingsRead(BaseModel):
     tls_verify: bool = True
     ca_cert_file: Optional[str] = None
     use_starttls: bool = False
-    allow_insecure: bool = False
     # Komunikat po zapisie, gdy coś wymaga uwagi (np. wyczyszczone hasło konta usługowego).
     warning: Optional[str] = None
 
@@ -309,7 +307,6 @@ def _ldap_read(cfg: LdapSettings, warning: Optional[str] = None) -> "LdapSetting
         tls_verify=getattr(cfg, "tls_verify", True) is not False,
         ca_cert_file=(getattr(cfg, "ca_cert_file", None) or None),
         use_starttls=bool(getattr(cfg, "use_starttls", False)),
-        allow_insecure=bool(getattr(cfg, "allow_insecure", False)),
         warning=warning,
     )
 
@@ -480,7 +477,6 @@ def update_ldap(
         "sso_enabled": data.sso_enabled, "sso_auto": data.sso_auto,
         "tls_verify": data.tls_verify, "ca_cert_file": ca_file,
         "use_starttls": data.use_starttls,
-        "allow_insecure": data.allow_insecure,
     })
     warning = None
     if data.bind_password is not None:
@@ -1081,32 +1077,32 @@ def config_health(
          "link": "/settings"},
     ]
 
-    # LDAP bez szyfrowania albo bez weryfikacji certyfikatu — hasła AD może
-    # przechwycić podstawiony serwer (ARP / DNS spoofing w sieci do DC).
+    # LDAP bez szyfrowania albo bez weryfikacji certyfikatu — działa, ale hasła
+    # AD może przechwycić podsłuch lub podstawiony serwer (ARP / DNS spoofing
+    # w sieci do DC). To REKOMENDACJA, nie warunek gotowości systemu.
     if ldap and ldap.enabled:
         from services.ldap_service import ldap_tls_enabled, ldap_tls_verified
         if not ldap_tls_enabled(ldap):
             checks.append({
                 "key": "ldap_tls", "label": "LDAP bez szyfrowania", "ok": False,
-                "detail": (("Hasła AD idą do serwera otwartym tekstem (zezwolono na "
-                            "połączenie bez szyfrowania). Włącz LDAPS (port 636) albo STARTTLS")
-                           if getattr(ldap, "allow_insecure", False) else
-                           ("Włącz LDAPS (port 636) albo STARTTLS — bez tego logowanie AD "
-                            "jest odrzucane, bo hasło poszłoby otwartym tekstem")),
+                "level": "recommendation",
+                "detail": ("Logowanie AD działa, ale hasła idą do serwera otwartym tekstem. "
+                           "Zalecamy włączenie LDAPS (port 636) albo STARTTLS"),
                 "link": "/settings",
             })
         elif not ldap_tls_verified(ldap):
             checks.append({
                 "key": "ldap_tls", "label": "LDAP bez weryfikacji certyfikatu", "ok": False,
+                "level": "recommendation",
                 "detail": ("Weryfikacja certyfikatu serwera jest wyłączona — podstawiony "
-                           "serwer mógłby przechwycić hasła AD. Wskaż plik CA domeny "
-                           "i włącz weryfikację"),
+                           "serwer mógłby przechwycić hasła AD. Zalecamy wskazanie pliku "
+                           "CA domeny i włączenie weryfikacji"),
                 "link": "/settings",
             })
         else:
             checks.append({
                 "key": "ldap_tls", "label": "LDAP: szyfrowanie i weryfikacja certyfikatu",
-                "ok": True,
+                "ok": True, "level": "recommendation",
                 "detail": ("LDAPS" if ldap.use_ssl else "STARTTLS")
                           + (f", CA: {ldap.ca_cert_file}" if ldap.ca_cert_file
                              else ", systemowy magazyn CA"),
@@ -1127,6 +1123,32 @@ def config_health(
                        else "Nagłówek X-SSO-Proxy-Secret jest weryfikowany"),
             "link": "/settings",
         })
+
+    # Superadmin to konto awaryjne (break-glass) do KONFIGURACJI — nie powinien
+    # mieć ról operacyjnych (kierownik, IT). Nowych takich połączeń nie da się
+    # już zapisać; ostrzegamy o kontach sprzed tej zmiany.
+    from services.permissions import SUPERADMIN_FORBIDDEN_ROLES
+    mixed_superadmins = sorted(
+        u.username for u in session.exec(select(User).where(User.is_active == True)).all()  # noqa: E712
+        if "superadmin" in parse_roles(u.roles)
+        and set(parse_roles(u.roles)) & SUPERADMIN_FORBIDDEN_ROLES
+    )
+    checks.append({
+        "key": "superadmin_operational",
+        "label": ("Superadmin z rolami operacyjnymi" if mixed_superadmins
+                  else "Superadmin bez ról operacyjnych"),
+        "ok": not mixed_superadmins, "level": "warning",
+        "detail": ("Konto superadmina służy wyłącznie do konfiguracji — odbierz role "
+                   "kierownika / IT kontom: " + ", ".join(mixed_superadmins)
+                   if mixed_superadmins else
+                   "Żadne konto superadmina nie ma roli kierownika ani IT"),
+        "link": "/users",
+    })
+
+    # Domyślny poziom elementu listy kontrolnej: "required" (warunek gotowości).
+    # "warning" i "recommendation" nie blokują pracy systemu.
+    for c in checks:
+        c.setdefault("level", "required")
 
     # Użytkownicy bez komórki — pomijamy nieaktywnych i konta czysto administracyjne.
     admin_only = {"admin", "superadmin"}

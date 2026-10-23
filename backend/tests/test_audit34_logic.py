@@ -159,7 +159,7 @@ def test_release_returns_request_to_department_manager(api):
     out = api.post(f"/requests/{rid}/take-over", token=kierP).json()
     assert out["can_release"] is True
     assert _det(api, rid, kier)["can_release"] is False
-    # Tylko przejmujący albo superadmin.
+    # Tylko przejmujący.
     assert api.post(f"/requests/{rid}/release", token=kier).status_code == 403
     assert api.post(f"/requests/{rid}/release", token=zastP).status_code == 403
 
@@ -170,13 +170,13 @@ def test_release_returns_request_to_department_manager(api):
     assert out["can_take_over"] is True
     assert _det(api, rid, kier)["can_act"] is True
 
-    # Superadmin może zwolnić cudze przejęcie.
+    # Superadmin nie działa w obiegu — cudzego przejęcia nie zwolni.
     assert api.post(f"/requests/{rid}/take-over", token=zastP).status_code == 200
-    r = api.post(f"/requests/{rid}/release", token=w["sup"])
+    assert api.post(f"/requests/{rid}/release", token=w["sup"]).status_code == 403
+    r = api.post(f"/requests/{rid}/release", token=zastP)
     assert r.status_code == 200, r.text
     ev = _events(api, rid, kier)
     assert [e["action"] for e in ev] == ["take_over", "release", "take_over", "release"]
-    assert ev[-1]["note"] == "Zwolniono przejęcie: Zenon Zastępca"
     with Session(engine) as s:
         assert s.exec(select(AuditLog).where(
             AuditLog.action == "request.take_over_released")).first()

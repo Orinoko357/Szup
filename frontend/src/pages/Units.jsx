@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Plus, Trash2, Edit2, ChevronDown, ChevronRight, Building2, Download,
-  FolderTree, Layers, User as UserIcon, UserCog, Save,
+  FolderTree, Layers, User as UserIcon, UserCog, Save, ShieldAlert,
 } from 'lucide-react'
 import {
   listUnits, createUnit, updateUnit, deleteUnit,
@@ -10,12 +10,16 @@ import {
   listUsers, ldapPreviewUnits, ldapImportUnits,
   ldapPreviewUsers, ldapImportUsers,
   listDeputies, addDeputy, updateDeputy, deleteDeputy,
-  dedupeDepartments,
+  dedupeDepartments, forceDeleteDepartment,
  errorMessage} from '../api'
+import { getUserRoles } from '../roles'
 import { toast, ask } from '../components/ui/feedback'
 import Modal from '../components/ui/Modal'
 import { ErrorAlert, LoadError } from '../components/ui/LoadState'
 
+
+// Rola „HR” zniesiona — funkcję kadr wyznacza wyłącznie flaga komórki (is_hr).
+const HR_DEPT_HINT = 'Członkowie komórki kadrowej pełnią funkcję kadr dla wszystkich jednostek'
 
 // Typy węzłów struktury organizacyjnej (zsynchronizowane z backend: models.DEPARTMENT_KINDS)
 const DEPT_KINDS = [
@@ -257,7 +261,7 @@ function UnitAccordion({ unit: u, depts, users, onChanged, onlyDeptIds = null })
 
           <div style={{ overflowX: 'auto' }}>
             <table className="data-table" style={{ minWidth: 1040 }}>
-              <thead><tr><th>Nazwa</th><th>Typ</th><th>Kierownik</th><th>Aktywny</th><th title="Wymaga zatwierdzenia kierownika wydziału nadrzędnego">Wyższa akcept.</th><th title="Komórka kadrowa — jej pracownicy mogą zgłaszać nowych pracowników i ustania">Kadry</th><th><span className="sr-only">Akcje</span></th></tr></thead>
+              <thead><tr><th>Nazwa</th><th>Typ</th><th>Kierownik</th><th>Aktywny</th><th title="Wymaga zatwierdzenia kierownika wydziału nadrzędnego">Wyższa akcept.</th><th title={HR_DEPT_HINT}>Kadry</th><th><span className="sr-only">Akcje</span></th></tr></thead>
               <tbody>
                 {flattenDeptTree(depts).filter(({ dept: d }) => !onlyDeptIds || onlyDeptIds.has(d.id)).map(({ dept: d, depth }) => (
                   <DeptRow key={d.id} dept={d} depth={depth} users={users}
@@ -271,6 +275,9 @@ function UnitAccordion({ unit: u, depts, users, onChanged, onlyDeptIds = null })
           </div>
 
           <div style={{ padding: '14px 18px', borderTop: '1px solid var(--color-border)', background: 'var(--bg-secondary)' }}>
+            <div className="form-hint" style={{ marginTop: 0, marginBottom: 10 }}>
+              Kolumna „Kadry”: {HR_DEPT_HINT}. Funkcji kadr nie nadaje się już per osoba.
+            </div>
             <AddDeptForm unitId={u.id} users={users} unitDepts={depts} onAdded={onChanged} />
           </div>
         </div>
@@ -367,6 +374,8 @@ function collectDescendants(depts, rootId) {
 function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
   const [editing, setEditing] = useState(false)
   const [deputiesOpen, setDeputiesOpen] = useState(false)
+  const [forceOpen, setForceOpen] = useState(false)
+  const superadmin = getUserRoles().includes('superadmin')
   const [name, setName]       = useState(d.name)
   const [kind, setKind]       = useState(d.kind || 'department')
   const [parentId, setParentId] = useState(d.parent_dept_id || '')
@@ -459,7 +468,7 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
         <td>
           <input type="checkbox" checked={isHr} onChange={e => setIsHr(e.target.checked)}
                  aria-label={`Komórka ${d.name}: komórka kadrowa`}
-                 title="Komórka kadrowa — jej pracownicy mogą zgłaszać nowych pracowników i ustania bez przydzielania roli HR" />
+                 title={HR_DEPT_HINT} />
         </td>
         <td style={{ whiteSpace: 'nowrap' }}>
           <button type="button" className="btn btn--primary btn--sm" onClick={save}>Zapisz</button>
@@ -507,7 +516,7 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
       </td>
       <td>
         {d.is_hr
-          ? <span className="badge badge--warning" title="Komórka kadrowa — jej pracownicy zgłaszają nowych pracowników i ustania">kadry</span>
+          ? <span className="badge badge--warning" title={HR_DEPT_HINT}>kadry</span>
           : <span style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>—</span>}
       </td>
       <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
@@ -519,13 +528,120 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged }) {
         </button>
         <button type="button" className="btn btn--ghost btn--sm" style={{ border: 0, color: 'var(--color-error-text)' }} onClick={del}
                 title="Usuń" aria-label="Usuń"><Trash2 size={15} /></button>
+        {superadmin && (
+          <button type="button" className="btn btn--ghost btn--sm" style={{ border: 0, color: 'var(--color-error-text)' }}
+                  onClick={() => setForceOpen(true)}
+                  title="Usuń komórkę mimo powiązań (pracownicy, podkomórki, wnioski) — tylko superadmin"
+                  aria-label={`Usuń (superadmin) komórkę ${d.name}`}>
+            <ShieldAlert size={15} aria-hidden="true" /> Usuń (superadmin)…
+          </button>
+        )}
       </td>
+      {forceOpen && (
+        <ForceDeleteDeptModal dept={d} onClose={() => setForceOpen(false)}
+                              onDone={() => { setForceOpen(false); onChanged() }} />
+      )}
       {deputiesOpen && (
         <DeputiesModal dept={d} users={users} unitDepts={unitDepts}
                        onClose={() => setDeputiesOpen(false)}
                        onChanged={onChanged} />
       )}
     </tr>
+  )
+}
+
+// Czytelne podsumowanie odpowiedzi force-delete (pola liczbowe/logiczne z backendu).
+const FORCE_DELETE_LABELS = {
+  users_detached: 'Odpięci pracownicy',
+  detached_users: 'Odpięci pracownicy',
+  children_moved: 'Przepięte podkomórki',
+  moved_children: 'Przepięte podkomórki',
+  requests_rejected: 'Odrzucone wnioski w toku',
+  rejected_requests: 'Odrzucone wnioski w toku',
+  deputies_removed: 'Usunięci zastępcy',
+  archived: 'Zarchiwizowana (ma historię)',
+  deleted: 'Usunięta trwale',
+}
+function forceDeleteSummary(data) {
+  if (!data || typeof data !== 'object') return []
+  const out = []
+  for (const [k, v] of Object.entries(data)) {
+    if (typeof v === 'number') out.push(`${FORCE_DELETE_LABELS[k] || k}: ${v}`)
+    else if (Array.isArray(v)) out.push(`${FORCE_DELETE_LABELS[k] || k}: ${v.length}`)
+    else if (typeof v === 'boolean' && v && FORCE_DELETE_LABELS[k]) out.push(FORCE_DELETE_LABELS[k])
+  }
+  return out
+}
+
+/** Superadmin: usunięcie komórki mimo powiązań (POST …/force-delete). */
+function ForceDeleteDeptModal({ dept: d, onClose, onDone }) {
+  const [reason, setReason]     = useState('')
+  const [password, setPassword] = useState('')
+  const [busy, setBusy]         = useState(false)
+  const [err, setErr]           = useState(null)
+  const [result, setResult]     = useState(null)
+  const canSubmit = reason.trim().length > 0 && password.length > 0 && !busy
+
+  async function submit(e) {
+    e?.preventDefault()
+    if (!canSubmit) return
+    setBusy(true); setErr(null)
+    try {
+      const r = await forceDeleteDepartment(d.id, { reason: reason.trim(), password })
+      setResult(r.data || {})
+      toast(r.data?.message || `Usunięto komórkę „${d.name}”`)
+    } catch (ex) {
+      setErr(errorMessage(ex, 'Nie udało się usunąć komórki'))
+    } finally { setBusy(false) }
+  }
+
+  if (result) {
+    const lines = forceDeleteSummary(result)
+    return (
+      <Modal title={`Usunięto — ${d.name}`} onClose={onDone} width={520}
+             footer={<button type="button" className="btn btn--primary" onClick={onDone}>Zamknij</button>}>
+        {result.message && <p style={{ marginTop: 0 }}>{result.message}</p>}
+        {lines.length > 0 ? (
+          <ul style={{ margin: 0, paddingLeft: 20, fontSize: 14 }}>
+            {lines.map(l => <li key={l}>{l}</li>)}
+          </ul>
+        ) : !result.message && <p style={{ margin: 0 }}>Operacja zakończona.</p>}
+      </Modal>
+    )
+  }
+
+  return (
+    <Modal title={`Usuń komórkę (superadmin) — ${d.name}`} onClose={onClose} closable={!busy} width={560}
+           onSubmit={submit}
+           footer={<>
+             <button type="button" className="btn btn--ghost" onClick={onClose} disabled={busy}>Anuluj</button>
+             <button type="submit" className="btn btn--danger" disabled={!canSubmit}>
+               <Trash2 size={14} aria-hidden="true" /> {busy ? 'Usuwanie…' : 'Usuń komórkę'}
+             </button>
+           </>}>
+      <div className="alert alert--warning" style={{ marginTop: 0 }}>
+        <strong>Skutki operacji:</strong>
+        <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+          <li>pracownicy komórki zostaną odpięci (bez komórki),</li>
+          <li>podkomórki zostaną przepięte poziom wyżej,</li>
+          <li>wnioski w toku zostaną odrzucone,</li>
+          <li>komórka z historią (wnioski, uprawnienia) zostanie zarchiwizowana zamiast usunięta.</li>
+        </ul>
+      </div>
+      <div className="form-group">
+        <label className="form-label" htmlFor={`fd-reason-${d.id}`}>Powód *</label>
+        <textarea id={`fd-reason-${d.id}`} className="form-control" rows={3} required data-autofocus
+                  value={reason} onChange={e => setReason(e.target.value)}
+                  placeholder="np. likwidacja komórki zarządzeniem nr …" />
+      </div>
+      <div className="form-group">
+        <label className="form-label" htmlFor={`fd-pw-${d.id}`}>Twoje hasło *</label>
+        <input id={`fd-pw-${d.id}`} className="form-control" type="password" required
+               autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} />
+        <div className="form-hint">Operacja zostanie zapisana w dzienniku zdarzeń.</div>
+      </div>
+      {err && <div className="alert alert--error" role="alert">{err}</div>}
+    </Modal>
   )
 }
 

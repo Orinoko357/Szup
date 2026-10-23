@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Check, Lock, RefreshCw } from 'lucide-react'
-import { listSecurityEvents, securityEventsSummary, resolveSecurityEvent, errorMessage } from '../api'
+import { Check, Lock, RefreshCw, Trash2 } from 'lucide-react'
+import { listSecurityEvents, securityEventsSummary, resolveSecurityEvent, purgeSecurity, errorMessage } from '../api'
+import PurgeLogModal from '../components/PurgeLogModal'
 import { fmtDateTime } from '../serverTime'
 import { toast, promptDialog } from '../components/ui/feedback'
 import { SEVERITY_LABEL } from '../labels'
@@ -43,6 +44,7 @@ export default function SecurityEvents() {
   const [err, setErr] = useState(null)
   const isSuperadmin = getUserRoles().includes('superadmin')
   const myId = getCurrentUser().id ?? null
+  const [purgeOpen, setPurgeOpen] = useState(false)
 
   async function load() {
     setLoading(true); setErr(null)
@@ -81,7 +83,19 @@ export default function SecurityEvents() {
             {!isSuperadmin && ' Zdarzenia o wadze wysokiej i krytycznej zamyka superadmin.'}
           </div>
         </div>
+        {isSuperadmin && (
+          <button type="button" className="btn btn--ghost" style={{ color: 'var(--color-error-text)' }}
+                  onClick={() => setPurgeOpen(true)}
+                  title="Usuń zdarzenia bezpieczeństwa (tylko superadmin, z hasłem i powodem)">
+            <Trash2 size={14} aria-hidden="true" /> Wyczyść…
+          </button>
+        )}
       </div>
+      {purgeOpen && (
+        <PurgeLogModal title="Wyczyść zdarzenia bezpieczeństwa" what="zdarzenia bezpieczeństwa"
+                       purge={purgeSecurity} onClose={() => setPurgeOpen(false)}
+                       onDone={() => { setPurgeOpen(false); load() }} />
+      )}
 
       {sum && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 18 }}>

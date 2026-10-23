@@ -549,6 +549,11 @@ export default function Settings() {
             <div id="set-ldap-starttls-hint" style={{ fontSize: 11, color: 'var(--color-text-muted)', margin: '-4px 0 10px 24px' }}>
               Szyfrowanie zwykłego połączenia (port 389). Nie łączy się z LDAPS.
             </div>
+            {/* Szyfrowanie jest zalecane, nie wymagane — połączenie bez LDAPS/STARTTLS
+                jest dozwolone (lista kontrolna pokazuje je jako zalecenie). */}
+            <div className="form-hint" style={{ margin: '0 0 10px' }}>
+              Zalecane: LDAPS lub STARTTLS z weryfikacją certyfikatu
+            </div>
             <label className="form-check" style={{ marginBottom: 8 }}>
               <input type="checkbox" checked={ldap.tls_verify ?? true}
                      onChange={e => setL('tls_verify', e.target.checked)} />
@@ -559,20 +564,6 @@ export default function Settings() {
                 Bez weryfikacji certyfikatu połączenie można przechwycić (podszycie się pod kontroler domeny)
                 — hasła logujących się osób mogą wyciec. Wyłączaj tylko na czas diagnozy.
               </div>
-            )}
-            {!ldap.use_ssl && !ldap.use_starttls && (
-              <>
-                <label className="form-check" style={{ marginBottom: 8 }}>
-                  <input type="checkbox" checked={!!ldap.allow_insecure}
-                         onChange={e => setL('allow_insecure', e.target.checked)} />
-                  Zezwól na połączenie bez szyfrowania (niezalecane)
-                </label>
-                <div className="alert alert--warning" role="status" style={{ marginBottom: 10, fontSize: 12 }}>
-                  {ldap.allow_insecure
-                    ? 'Hasła logujących się osób idą do serwera AD otwartym tekstem. Włącz LDAPS albo STARTTLS.'
-                    : 'Bez LDAPS lub STARTTLS logowanie przez AD jest odrzucane.'}
-                </div>
-              </>
             )}
             <div className="form-group">
               <label className="form-label" htmlFor="set-ldap-ca">Plik CA (ścieżka na serwerze)</label>

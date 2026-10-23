@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Search, FileText, User, X, ClipboardList } from 'lucide-react'
 import { searchUsers, listUsers, listRequests, getRequest, errorMessage } from '../api'
-import { getUserRoles, hasAnyRole } from '../roles'
+import { workRoles, hasAnyRole } from '../roles'
 import { MANAGER_NODES, statusLabel } from '../labels'
 
 /**
@@ -15,7 +15,7 @@ import { MANAGER_NODES, statusLabel } from '../labels'
  */
 export default function GlobalSearch() {
   const navigate = useNavigate()
-  const roles = getUserRoles()
+  const roles = workRoles()   // superadmin — bez wniosków (tylko konfiguracja)
   const isManager = hasAnyRole(roles, ['manager'])
   const isIT      = hasAnyRole(roles, ['it_staff'])
   const isHR      = hasAnyRole(roles, ['hr'])

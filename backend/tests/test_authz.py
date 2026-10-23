@@ -49,15 +49,18 @@ def test_admin_cannot_act_in_workflow_but_operational_roles_can(api):
                     json={"action": "execute", "ad_username": "p"}).status_code == 200
 
 
-def test_superadmin_breakglass_can_act(api):
+def test_superadmin_breakglass_cannot_act_but_can_view(api):
+    """Superadmin to konto konfiguracyjne — wniosek widzi, w obiegu nie działa
+    (decyzje 3.9)."""
     w = _world(api)
     rid = api.post("/requests/", token=w["hr"], json={
         "worker_name": "P", "unit_id": w["unit"], "department_id": w["dep"],
         "items": [], "request_type_id": w["rtype"]}).json()["id"]
+    assert api.get(f"/requests/{rid}", token=w["sup"]).status_code == 200
     r = api.post(f"/requests/{rid}/workflow/action", token=w["sup"], json={
         "action": "select",
         "items": [{"system_id": w["sid"], "permission_id": w["pid"], "kind": "grant"}]})
-    assert r.status_code == 200
+    assert r.status_code == 403
 
 
 def test_admin_config_access_it_no_admin_pages(api):
@@ -80,11 +83,13 @@ def test_by_department_scoping_hr(api):
     other_unit = api.mk_unit(w["sup"], "Inna", "I")
     other_kier = api.mk_user(w["sup"], "kier2", ["manager"], "K2")
     other_dep = api.mk_department(w["sup"], other_unit, other_kier, name="Obca")
-    # HR przypisany tylko do w["unit"] — nie widzi pracowników obcej jednostki
-    r = api.get(f"/users/by-department/{other_dep}", token=w["hr"])
-    assert r.status_code == 403
-    # ale widzi swoją komórkę
+    # v3.9: komórka kadrowa obsługuje WSZYSTKIE jednostki — także obcą.
+    assert api.get(f"/users/by-department/{other_dep}", token=w["hr"]).status_code == 200
     assert api.get(f"/users/by-department/{w['dep']}", token=w["hr"]).status_code == 200
+    # Zwykły pracownik (bez komórki kadrowej i roli kierownika) — nie.
+    api.mk_user(w["sup"], "zwykly", ["viewer"])
+    r = api.get(f"/users/by-department/{other_dep}", token=api.login("zwykly"))
+    assert r.status_code == 403
 
 
 def test_by_department_scoping_manager(api):
@@ -104,16 +109,17 @@ def test_deputies_admin_only(api):
     assert api.get(f"/units/departments/{w['dep']}/deputies", token=w["adm"]).status_code == 200
 
 
-# --- M3: HR bez jednostki nie utworzy wniosku -------------------------------
+# --- M3 (v3.9): kadry bez przypisanych jednostek składają wnioski wszędzie --
 
-def test_hr_without_unit_cannot_create(api):
+def test_hr_without_unit_can_create(api):
     w = _world(api)
+    # Komórka kadrowa w innej jednostce niż wniosek — zakres jest pełny.
     api.mk_user(w["sup"], "hr2", ["hr"], "HR bez jednostki")  # brak unit_ids
     hr2 = api.login("hr2")
     r = api.post("/requests/", token=hr2, json={
         "worker_name": "P", "unit_id": w["unit"], "department_id": w["dep"],
         "items": [], "request_type_id": w["rtype"]})
-    assert r.status_code == 403
+    assert r.status_code == 201, r.text
 
 
 # --- M1: FK egzekwowane — brak osieroceń ------------------------------------

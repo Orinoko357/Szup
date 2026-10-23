@@ -3,6 +3,7 @@ Router: Security events — superadmin/admin only.
 
 Przegląd: admin i superadmin. Zamykanie: zdarzenia high/critical wyłącznie
 superadmin; admin zamyka low/medium, z wyjątkiem dotyczących jego konta.
+Czyszczenie (POST /purge) — wyłącznie superadmin, z hasłem i powodem.
 """
 from __future__ import annotations
 
@@ -10,13 +11,13 @@ import json
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlmodel import Session, select, col
 
 from database import get_session
 from models import SecurityEvent, SecuritySeverity, User, has_role
-from services.permissions import require_admin
+from services.permissions import require_admin, require_superadmin
 
 router = APIRouter()
 
@@ -141,3 +142,29 @@ def resolve(
     ev.resolution_note = (data.note or "")[:1000] or None
     session.add(ev); session.commit()
     return {"ok": True}
+
+
+class PurgeRequest(BaseModel):
+    password: str                    # potwierdzenie hasłem wykonującego
+    reason: str                      # wymagany, co najmniej 10 znaków
+    mode: str                        # "before" | "all"
+    before: Optional[str] = None     # data ISO (RRRR-MM-DD) — dla mode="before"
+
+
+@router.post("/purge")
+def purge_events(
+    data: PurgeRequest,
+    request: Request,
+    current_user: User = Depends(require_superadmin),
+    session: Session = Depends(get_session),
+):
+    """Czyszczenie zdarzeń bezpieczeństwa — WYŁĄCZNIE superadmin.
+
+    Jak POST /api/audit/purge: hasło + powód, tryb „wszystko” albo „przed
+    datą”, ślady czyszczeń są nieusuwalne. Po operacji powstaje wpis audytu
+    `security.purged` i zdarzenie krytyczne o tym samym typie.
+    """
+    from services.audit import run_log_purge
+    return run_log_purge(session, request, current_user, log="security",
+                         password=data.password, reason=data.reason,
+                         mode=data.mode, before=data.before)

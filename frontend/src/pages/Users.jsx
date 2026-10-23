@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import {
-  Plus, Trash2, KeyRound, Unlock, Ban, Building2, Check, X,
+  Plus, Trash2, KeyRound, Unlock, Ban, Building2, X,
   ChevronRight, ChevronDown, FolderTree, Users as UsersIcon, UserCog, Lock,
 } from 'lucide-react'
 import {
@@ -12,7 +12,6 @@ import { serverTs, serverNow, fmtDate } from '../serverTime'
 import { toast, promptDialog, ask } from '../components/ui/feedback'
 import { ROLE_META, ROLE_LABEL } from '../labels'
 import { getUserRoles } from '../roles'
-import Modal from '../components/ui/Modal'
 import Field from '../components/ui/Field'
 import { LoadError } from '../components/ui/LoadState'
 
@@ -219,8 +218,13 @@ function DeptCombo({ depts = [], units = [], value, onChange, className = 'form-
 // pisane tak samo jak w belce (bez lokalnej kopii ROLE_META).
 // Role administracyjne nadaje i odbiera wyłącznie superadmin (backend odrzuca
 // to samo — tu tylko nie pokazujemy opcji, których admin i tak nie zapisze).
+// Rola „HR” zniesiona: kadrami są członkowie komórki kadrowej (Department.is_hr),
+// ustawianej w „Jednostkach” — tu nie nadajemy jej per osoba.
 const ADMIN_ROLES = ['superadmin', 'admin']
-const ROLES = ['superadmin', 'admin', 'hr', 'manager', 'it_staff', 'viewer'].map(v => ({
+// Superadmin to konto awaryjne — tylko konfiguracja, bez ról operacyjnych.
+const OPERATIONAL_ROLES = ['manager', 'it_staff']
+const SUPERADMIN_OPS_HINT = 'Superadmin to konto awaryjne — tylko konfiguracja'
+const ROLES = ['superadmin', 'admin', 'manager', 'it_staff', 'viewer'].map(v => ({
   value: v, label: ROLE_LABEL[v] || v, badge: ROLE_META[v]?.badge || 'badge--neutral',
   superadminOnly: ADMIN_ROLES.includes(v),
 }))
@@ -231,6 +235,31 @@ const isSuperadmin = () => getUserRoles().includes('superadmin')
 const assignableRoles = () => isSuperadmin() ? ROLES : ROLES.filter(r => !r.superadminOnly)
 
 const ADMIN_ROLES_HINT = 'Role administracyjne (Administrator, Superadmin) nadaje i odbiera wyłącznie superadmin.'
+
+// Przełączenie roli z regułą „superadmin bez ról operacyjnych” (zaznaczenie
+// superadmina zdejmuje kierownika/IT; same role operacyjne są wtedy zablokowane).
+// „hr” (dawna rola per osoba) nie jest już nadawana — odfiltrowujemy ją.
+function toggleRoleIn(prev, rv) {
+  const base = prev.filter(r => r !== 'hr')
+  if (base.includes(rv)) return base.filter(r => r !== rv)
+  if (rv === 'superadmin') return [...base.filter(r => !OPERATIONAL_ROLES.includes(r)), rv]
+  if (OPERATIONAL_ROLES.includes(rv) && base.includes('superadmin')) return base
+  return [...base, rv]
+}
+
+/** Checkbox roli; role operacyjne zablokowane, gdy wybrano superadmina. */
+function RoleCheckbox({ role: r, selected, onToggle, compact = false }) {
+  const locked = OPERATIONAL_ROLES.includes(r.value) && selected.includes('superadmin')
+  return (
+    <label title={locked ? SUPERADMIN_OPS_HINT : undefined}
+           style={{ display: 'flex', alignItems: 'center', gap: compact ? 3 : 4, fontSize: compact ? 12 : 13,
+                    cursor: locked ? 'not-allowed' : 'pointer', opacity: locked ? 0.55 : 1 }}>
+      <input type="checkbox" checked={selected.includes(r.value)} disabled={locked}
+             onChange={() => onToggle(r.value)} />
+      {compact ? r.label : <span className={`badge ${r.badge}`} style={{ fontSize: 10 }}>{r.label}</span>}
+    </label>
+  )
+}
 
 /** Wyciąga czytelny komunikat błędu z odpowiedzi axiosa (FastAPI/Pydantic). */
 function extractErr(ex) {
@@ -493,7 +522,7 @@ export default function Users() {
                       <thead>
                         <tr>
                           <th>Login</th><th>Imię i nazwisko</th><th>E-mail</th><th>Rola</th>
-                          <th>Komórka organizacyjna</th><th>Jednostki (kadry)</th><th>Typ</th>
+                          <th>Komórka organizacyjna</th><th>Typ</th>
                           <th>Status</th><th>Ostatnia zmiana hasła</th><th><span className="sr-only">Akcje</span></th>
                         </tr>
                       </thead>
@@ -514,7 +543,7 @@ export default function Users() {
                           return (
                             <Fragment key={`d-${g.key}-${d.key}`}>
                               <tr>
-                                <td colSpan={10}
+                                <td colSpan={9}
                                     style={{ padding: '4px 18px 4px 40px', background: 'var(--bg-secondary)' }}>
                                   {/* Przycisk zamiast klikalnej komórki — działa z klawiatury. */}
                                   <button type="button" aria-expanded={deptOpen}
@@ -555,12 +584,12 @@ export default function Users() {
 
 function UserRow({ user: u, depts = [], units = [], onChanged }) {
   const [editRoles, setEditRoles] = useState(false)
-  const [selectedRoles, setSelectedRoles] = useState(u.roles || [u.role])
+  // „hr” to rola efektywna (z komórki kadrowej) — nie jest edytowalna per osoba.
+  const ownRoles = (u.roles || [u.role]).filter(r => r && r !== 'hr')
+  const [selectedRoles, setSelectedRoles] = useState(ownRoles)
   const [editDept, setEditDept] = useState(false)
   const [deptId, setDeptId] = useState(u.department_id || '')
-  const [editUnits, setEditUnits] = useState(false)
 
-  const hasHrRole = (u.roles || [u.role]).includes('hr')
   // Zdolność HR z KOMÓRKI kadrowej (Department.is_hr) — bez roli per osoba.
   const deptHr = !!depts.find(d => d.id === u.department_id)?.is_hr
   const isLocked = u.locked_until && serverTs(u.locked_until) > serverNow()
@@ -576,15 +605,13 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
   }
 
   function toggleRole(rv) {
-    setSelectedRoles(prev =>
-      prev.includes(rv) ? prev.filter(r => r !== rv) : [...prev, rv]
-    )
+    setSelectedRoles(prev => toggleRoleIn(prev, rv))
   }
 
   async function saveRoles() {
     if (!selectedRoles.length) { toast('Wybierz co najmniej jedną rolę', { tone: 'warning' }); return }
     try {
-      const r = await updateUser(u.id, { roles: selectedRoles })
+      const r = await updateUser(u.id, { roles: selectedRoles.filter(rv => rv !== 'hr') })
       if (r.data?.warning) toast(r.data.warning, { tone: 'warning' })
       setEditRoles(false); onChanged()
     }
@@ -637,11 +664,7 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
         {editRoles ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
             {assignableRoles().map(r => (
-              <label key={r.value} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 12, cursor: 'pointer' }}>
-                <input type="checkbox" checked={selectedRoles.includes(r.value)}
-                       onChange={() => toggleRole(r.value)} />
-                {r.label}
-              </label>
+              <RoleCheckbox key={r.value} role={r} selected={selectedRoles} onToggle={toggleRole} compact />
             ))}
             {/* Admin nie widzi ról administracyjnych — posiadane przez konto
                 zostają bez zmian (zapis wysyła je dalej w selectedRoles). */}
@@ -656,7 +679,10 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
             <button type="button" className="btn btn--primary btn--sm" onClick={saveRoles}
                     aria-label={`Zapisz role użytkownika ${u.username}`}>Zapisz</button>
             <button type="button" className="btn btn--ghost btn--sm" aria-label="Anuluj zmianę ról"
-                    onClick={() => { setEditRoles(false); setSelectedRoles(u.roles || [u.role]) }}>Anuluj</button>
+                    onClick={() => { setEditRoles(false); setSelectedRoles(ownRoles) }}>Anuluj</button>
+            {selectedRoles.includes('superadmin') && (
+              <div className="form-hint" style={{ flexBasis: '100%', margin: 0 }}>{SUPERADMIN_OPS_HINT}.</div>
+            )}
           </div>
         ) : (
           <button type="button" style={{ display: 'flex', flexWrap: 'wrap', gap: 3, cursor: 'pointer', border: 0,
@@ -664,17 +690,17 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
                                          textAlign: 'left', minHeight: 32 }}
                onClick={() => setEditRoles(true)} title="Kliknij, aby zmienić role"
                aria-label={`Zmień role użytkownika ${u.username}`}>
-            {(u.roles || [u.role]).map(rv => {
+            {ownRoles.map(rv => {
               const m = ROLE_META[rv]
               return m ? (
                 <span key={rv} className={`badge ${m.badge}`} style={{ fontSize: 10 }}>{m.label}</span>
               ) : null
             })}
             {/* Zdolność HR z komórki kadrowej — bez roli przypisanej per osoba. */}
-            {deptHr && !hasHrRole && (
+            {deptHr && (
               <span className={`badge ${ROLE_META.hr?.badge || 'badge--info'}`}
                     style={{ fontSize: 10, opacity: 0.85 }}
-                    title="Zdolność HR wynika z przynależności do komórki kadrowej (bez roli przypisanej per osoba)">
+                    title="Członek komórki kadrowej — pełni funkcję kadr dla wszystkich jednostek">
                 HR (kadry)
               </span>
             )}
@@ -703,42 +729,6 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
               ? <span>{u.department_name}</span>
               : <span style={{ color: 'var(--color-text-muted)', fontStyle: 'italic' }}>nieprzypisany</span>}
           </button>
-        )}
-      </td>
-
-      {/* Jednostki obsługiwane — przypisanie dotyczy ROLI HR. Komórka kadrowa
-          (is_hr) daje dostęp do CAŁEJ struktury, więc tam nie przypisujemy. */}
-      <td>
-        {deptHr && !hasHrRole ? (
-          <span style={{ color: 'var(--color-text-muted)', fontSize: 12, fontStyle: 'italic' }}
-                title="Komórka kadrowa — dostęp do wszystkich jednostek">
-            cała struktura (kadry)
-          </span>
-        ) : !hasHrRole ? (
-          <span style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>—</span>
-        ) : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            {(u.unit_ids || []).length === 0 ? (
-              <span style={{ color: 'var(--color-warning-text, var(--color-warning))', fontSize: 12, fontStyle: 'italic' }}>
-                brak — nie zobaczy żadnej
-              </span>
-            ) : (
-              (u.unit_ids || []).map(id => {
-                const un = units.find(x => x.id === id)
-                return <span key={id} className="badge badge--info" style={{ fontSize: 10 }}>{un ? un.name : id}</span>
-              })
-            )}
-            <button className="btn btn--ghost btn--sm" onClick={() => setEditUnits(true)}>
-              <Building2 size={12} /> Zmień
-            </button>
-          </div>
-        )}
-        {editUnits && (
-          <UnitsAssignModal
-            user={u} units={units} initial={u.unit_ids || []}
-            onClose={() => setEditUnits(false)}
-            onSaved={() => { setEditUnits(false); onChanged() }}
-          />
         )}
       </td>
 
@@ -782,79 +772,15 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
   )
 }
 
-// Modal przypisania jednostek obsługiwanych do pracownika kadr.
-function UnitsAssignModal({ user: u, units = [], initial = [], onClose, onSaved }) {
-  const [ids, setIds] = useState(initial)
-  const hintId = useId()
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState(null)
-
-  function toggle(id) {
-    setIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
-  }
-  async function save() {
-    setBusy(true); setErr(null)
-    try {
-      await updateUser(u.id, { unit_ids: ids })
-      onSaved()
-    } catch (ex) {
-      setErr(errorMessage(ex, 'Nie udało się zapisać jednostek')); setBusy(false)
-    }
-  }
-
-  // Wspólne ui/Modal (pułapka fokusu, Escape, zwrot fokusu, blokada przewijania).
-  return (
-    <Modal title={`Jednostki obsługiwane — ${u.full_name || u.username}`} onClose={onClose} width={520}
-           describedBy={hintId}
-           footer={<>
-             <button type="button" className="btn btn--ghost" onClick={onClose} disabled={busy}>Anuluj</button>
-             <button type="button" className="btn btn--primary" onClick={save} disabled={busy}>
-               <Check size={14} aria-hidden="true" /> {busy ? 'Zapisywanie…' : `Zapisz (${ids.length})`}
-             </button>
-           </>}>
-      <p id={hintId} style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 0, marginBottom: 12 }}>
-        Zaznacz jednostki, które ten pracownik kadr obsługuje. W formularzach
-        „Nowy pracownik" i „Ustanie stosunku pracy" zobaczy wyłącznie te jednostki.
-        Brak zaznaczenia = nie zobaczy żadnej.
-      </p>
-      <div role="group" aria-label="Jednostki obsługiwane" style={{
-        maxHeight: 300, overflowY: 'auto', border: '1px solid var(--color-border)',
-        borderRadius: 4, padding: 10, background: 'var(--bg-secondary)',
-      }}>
-        {units.length === 0 && (
-          <div style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>Brak zdefiniowanych jednostek.</div>
-        )}
-        {units.map(un => (
-          <label key={un.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', padding: '4px 0' }}>
-            <input type="checkbox" checked={ids.includes(un.id)}
-                   style={{ width: 16, height: 16 }} onChange={() => toggle(un.id)} />
-            {un.name}
-          </label>
-        ))}
-      </div>
-      {err && <div className="alert alert--error" role="alert" style={{ marginTop: 10 }}>{err}</div>}
-    </Modal>
-  )
-}
-
-
 function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
   const [form, setForm] = useState({ username: '', full_name: '', email: '', password: '', auth_type: 'local', department_id: '' })
   const [selectedRoles, setSelectedRoles] = useState(['admin'])
-  const [unitIds, setUnitIds] = useState([])
   const [err, setErr] = useState(null)
   const [busy, setBusy] = useState(false)
   const formId = useId()
 
-  const isHr = selectedRoles.includes('hr')
-
   function toggleRole(rv) {
-    setSelectedRoles(prev =>
-      prev.includes(rv) ? prev.filter(r => r !== rv) : [...prev, rv]
-    )
-  }
-  function toggleUnit(id) {
-    setUnitIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+    setSelectedRoles(prev => toggleRoleIn(prev, rv))
   }
 
   async function submit(e) {
@@ -865,7 +791,6 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
       const r = await createUser({
         ...form, roles: selectedRoles,
         department_id: form.department_id ? Number(form.department_id) : null,
-        unit_ids: isHr ? unitIds : [],
       })
       if (r.data?.warning) toast(r.data.warning, { tone: 'warning' })
       onAdded()
@@ -901,14 +826,14 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
             <div className="form-label" id={`${formId}-roles`}>Role</div>
             <div role="group" aria-labelledby={`${formId}-roles`} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
               {assignableRoles().map(r => (
-                <label key={r.value} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, cursor: 'pointer' }}>
-                  <input type="checkbox" checked={selectedRoles.includes(r.value)}
-                         onChange={() => toggleRole(r.value)} />
-                  <span className={`badge ${r.badge}`} style={{ fontSize: 10 }}>{r.label}</span>
-                </label>
+                <RoleCheckbox key={r.value} role={r} selected={selectedRoles} onToggle={toggleRole} />
               ))}
             </div>
             {!isSuperadmin() && <div className="form-hint">{ADMIN_ROLES_HINT}</div>}
+            {selectedRoles.includes('superadmin') && <div className="form-hint">{SUPERADMIN_OPS_HINT}.</div>}
+            <div className="form-hint">
+              Funkcję kadr pełnią członkowie komórki kadrowej (ustawienie komórki w „Jednostkach”) — bez roli nadawanej per osoba.
+            </div>
           </div>
         </div>
         <div className="form-row">
@@ -919,33 +844,6 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
                        placeholder="— brak (można przypisać później) —" />
           </div>
         </div>
-
-        {/* Zakres kadr — jednostki, które ten pracownik HR obsługuje */}
-        {isHr && (
-          <div className="form-row">
-            <div className="form-group">
-              <div className="form-label" id={`${formId}-units`}>Jednostki obsługiwane przez kadry *</div>
-              <div role="group" aria-labelledby={`${formId}-units`} style={{
-                maxHeight: 160, overflowY: 'auto', border: '1px solid var(--color-border)',
-                borderRadius: 4, padding: 8, background: 'var(--bg-secondary)',
-              }}>
-                {units.length === 0 && (
-                  <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>Brak jednostek</div>
-                )}
-                {units.map(un => (
-                  <label key={un.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-                    <input type="checkbox" checked={unitIds.includes(un.id)}
-                           onChange={() => toggleUnit(un.id)} />
-                    {un.name}
-                  </label>
-                ))}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 4 }}>
-                Pracownik kadr zobaczy w formularzach wyłącznie te jednostki. Brak zaznaczenia = nie zobaczy żadnej.
-              </div>
-            </div>
-          </div>
-        )}
 
         <div className="form-row">
           <Field label="Typ konta">

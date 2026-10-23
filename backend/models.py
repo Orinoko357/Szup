@@ -19,14 +19,17 @@ from sqlmodel import Field, SQLModel
 class UserRole(str, enum.Enum):
     superadmin = "superadmin"
     admin      = "admin"
-    hr         = "hr"
     manager    = "manager"
     it_staff   = "it_staff"
     viewer     = "viewer"
 
 
+# Roli „hr” nie ma (v3.9): zdolność kadrowa wynika wyłącznie z przynależności do
+# komórki kadrowej (Department.is_hr) — patrz services.permissions.user_is_hr.
+# Zapisana w bazie „hr” jest pomijana przez parse_roles (i usuwana migracją).
+
 # Priority order for primary_role()
-ROLE_HIERARCHY = ["superadmin", "admin", "it_staff", "manager", "hr", "viewer"]
+ROLE_HIERARCHY = ["superadmin", "admin", "it_staff", "manager", "viewer"]
 VALID_ROLES    = {r.value for r in UserRole}
 
 
@@ -132,10 +135,10 @@ class Unit(SQLModel, table=True):
 
 
 class UserUnit(SQLModel, table=True):
-    """Przypisanie użytkownika (HR) do jednostek, które obsługuje.
+    """Dawne przypisanie pracownika kadr do obsługiwanych jednostek.
 
-    Pracownik kadr widzi w formularzach (nowy pracownik / ustanie stosunku
-    pracy) wyłącznie jednostki tu przypisane. Admin/superadmin widzi wszystkie.
+    Nieużywane od v3.9 — pracownik komórki kadrowej obsługuje wszystkie
+    jednostki. Tabela zostaje (dane historyczne), API zwraca ją tylko do odczytu.
     """
     user_id: int = Field(foreign_key="user.id", primary_key=True)
     unit_id: int = Field(foreign_key="unit.id", primary_key=True)
@@ -164,6 +167,11 @@ class Department(SQLModel, table=True):
     is_hr: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     ldap_dn: Optional[str] = Field(default=None, index=True)   # znormalizowany DN z AD
+    # Komórka zarchiwizowana przez superadmina (usunięcie komórki, do której
+    # odwołują się wnioski). Zostaje w bazie dla historii wniosków, ale znika
+    # ze wszystkich list i wyborów (is_active=False + archived_at).
+    archived_at: Optional[datetime] = Field(default=None, index=True)
+    archived_reason: Optional[str] = None
 
 
 # Dozwolone wartości pola Department.kind — walidowane w routerze.
@@ -309,6 +317,11 @@ class SystemPermission(SQLModel, table=True):
     # się po zaznaczeniu uprawnienia (np. „Podaj login AD, np. jan.kowalski").
     input_prompt: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    # Usunięcie miękkie (usunięcie grupy, którą ktoś posiadał — superadmin).
+    # Wiersz zostaje, żeby historia wniosków i ewidencja zachowały nazwy;
+    # pozycja znika z rejestru oprogramowania i nie da się jej przywrócić.
+    deleted_at: Optional[datetime] = Field(default=None, index=True)
+    deleted_reason: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -516,9 +529,8 @@ class LdapSettings(SQLModel, table=True):
     tls_verify: bool = Field(default=True)
     ca_cert_file: Optional[str] = None
     use_starttls: bool = Field(default=False)
-    # Jawna zgoda na LDAP bez szyfrowania (niezalecane). Nowe instalacje: False.
-    # Migracja ustawia True dla istniejących instalacji bez SSL, żeby wdrożenie
-    # nie odcięło logowania AD — lista kontrolna ostrzega do czasu włączenia TLS.
+    # Nieużywane od v3.9 — szyfrowanie LDAP jest zalecane, nie wymagane, więc
+    # zgoda na połączenie bez TLS nie jest już potrzebna. Kolumna zostaje w bazie.
     allow_insecure: bool = Field(default=False)
 
 

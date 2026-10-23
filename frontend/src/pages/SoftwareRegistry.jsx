@@ -10,8 +10,11 @@ import {
   copySystemPermissions, setSystemDefaultPermissions,
   listActiveUnits, listVendors,
   setPermissionGroupState, renamePermissionGroup, deletePermissionGroup,
+  getPermissionGroupUsage,
   setPermissionGroupOrder, assignPermissionSubgroup,
  errorMessage} from '../api'
+import { getUserRoles } from '../roles'
+import Modal from '../components/ui/Modal'
 import PermissionImportModal from '../components/PermissionImportModal'
 import PermissionGroupModal from '../components/PermissionGroupModal'
 import CopyGroupModal from '../components/CopyGroupModal'
@@ -1418,6 +1421,88 @@ function EditSystemForm({ system: s, units, vendors = [], onCancel, onSaved }) {
 }
 
 
+// Liczba osób, którym odebrano uprawnienia (nazwa pola z backendu bywa różna).
+function revokedCount(data, fallback) {
+  for (const k of ['affected_user_ids', 'revoked_users', 'revoked_holders', 'holders_revoked', 'revoked']) {
+    const v = data?.[k]
+    if (typeof v === 'number') return v
+    if (Array.isArray(v)) return v.length
+  }
+  return fallback
+}
+
+/** Superadmin: usunięcie grupy uprawnień przyznanej konkretnym osobom —
+ *  lista posiadaczy, obowiązkowy powód; uprawnienia zostaną im odebrane. */
+function GroupForceDeleteModal({ system: s, group, count, usage, onClose, onDone }) {
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const fid = useId()
+  const holders = usage.holders || []
+  const inProgress = usage.in_progress_requests || []
+
+  async function submit(e) {
+    e?.preventDefault()
+    if (!reason.trim() || busy) return
+    setBusy(true); setErr(null)
+    try {
+      const r = await deletePermissionGroup(s.id, group, reason.trim())
+      const n = revokedCount(r.data, holders.length)
+      toast(`Usunięto grupę „${group}”. Odebrano uprawnienia ${n} ${n === 1 ? 'osobie' : 'osobom'}.`)
+      onDone()
+    } catch (ex) {
+      setErr(errorMessage(ex, 'Nie udało się usunąć grupy'))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal title={`Usuń grupę „${group}” (superadmin)`} onClose={onClose} closable={!busy} width={620}
+           onSubmit={submit}
+           footer={<>
+             <button type="button" className="btn btn--ghost" onClick={onClose} disabled={busy}>Anuluj</button>
+             <button type="submit" className="btn btn--danger" disabled={busy || !reason.trim()}>
+               <Trash2 size={14} aria-hidden="true" /> {busy ? 'Usuwanie…' : 'Usuń grupę i odbierz uprawnienia'}
+             </button>
+           </>}>
+      <div className="alert alert--warning" style={{ marginTop: 0 }}>
+        Grupa ({count} pozycji) jest przyznana <strong>{holders.length}</strong>{' '}
+        {holders.length === 1 ? 'osobie' : 'osobom'}. Po usunięciu uprawnienia z tej grupy
+        zostaną im odebrane (z wpisem w rejestrze i dzienniku zdarzeń).
+        {inProgress.length > 0 && <> Grupy dotyczą też wnioski w toku: <strong>{inProgress.length}</strong>{' '}
+          (nr {inProgress.join(', ')}).</>}
+      </div>
+      <div style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 6,
+                    marginBottom: 12 }}>
+        <table className="data-table" style={{ margin: 0 }}>
+          <thead><tr><th>Osoba</th><th>Login</th><th>Uprawnienia z grupy</th></tr></thead>
+          <tbody>
+            {holders.map(h => (
+              <tr key={h.user_id}>
+                <td style={{ fontWeight: 600 }}>{h.full_name || '—'}</td>
+                <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{h.username}</td>
+                <td style={{ fontSize: 12 }}>
+                  {Array.isArray(h.permissions)
+                    ? h.permissions.map(p => (typeof p === 'string' ? p : p?.permission_name || p?.name || '')).filter(Boolean).join(', ')
+                    : (h.permissions ?? '')}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="form-group">
+        <label className="form-label" htmlFor={`${fid}-reason`}>Powód *</label>
+        <textarea id={`${fid}-reason`} className="form-control" rows={3} required data-autofocus
+                  value={reason} onChange={e => setReason(e.target.value)}
+                  placeholder="np. wycofanie modułu z eksploatacji" />
+      </div>
+      {err && <div className="alert alert--error" role="alert">{err}</div>}
+    </Modal>
+  )
+}
+
+
 function PermissionsPanel({ system: s }) {
   const [perms, setPerms]     = useState([])
   const [loading, setLoading] = useState(true)
@@ -1427,6 +1512,8 @@ function PermissionsPanel({ system: s }) {
   const [showCopyGroup, setShowCopyGroup] = useState(false)
   const [renaming, setRenaming] = useState(null)      // nazwa grupy w edycji
   const [renameValue, setRenameValue] = useState('')
+  // Usuwanie grupy przyznanej komuś (tylko superadmin): { group, count, usage }
+  const [groupDel, setGroupDel] = useState(null)
   // Zaznaczone uprawnienia do operacji masowej (przypisanie podgrupy).
   const [selPerms, setSelPerms] = useState(() => new Set())
   const toggleSel = (id) => setSelPerms(prev => {
@@ -1510,10 +1597,30 @@ function PermissionsPanel({ system: s }) {
   }
 
   async function removeGroup(group, count) {
+    // Najpierw sprawdź, czy ktoś ma przyznane uprawnienia z tej grupy.
+    let usage
+    try {
+      usage = (await getPermissionGroupUsage(s.id, group)).data || {}
+    } catch (ex) {
+      toast(errorMessage(ex, 'Nie udało się sprawdzić, komu przyznano grupę'), { tone: 'error' })
+      return
+    }
+    const holders = usage.holders || []
+    const inProgress = usage.in_progress_requests || []
+    if (holders.length > 0) {
+      if (!getUserRoles().includes('superadmin')) {
+        toast(`Grupa jest przyznana ${holders.length} ${holders.length === 1 ? 'osobie' : 'osobom'} — `
+              + 'usunąć może tylko superadmin', { tone: 'warning', timeout: 7000 })
+        return
+      }
+      setGroupDel({ group, count, usage: { holders, in_progress_requests: inProgress } })
+      return
+    }
     if (!await ask(
       `Usunąć grupę „${group}" (${count} pozycji)?\n\n`
       + 'Uprawnienia użyte już we wnioskach nie zostaną usunięte — '
-      + 'zostaną wygaszone, żeby nie zerwać ewidencji.',
+      + 'zostaną wygaszone, żeby nie zerwać ewidencji.'
+      + (inProgress.length ? `\n\nGrupy dotyczą wnioski w toku: ${inProgress.length}.` : ''),
       { title: 'Usunąć grupę?', confirmLabel: 'Usuń grupę', danger: true }
     )) return
     try {
@@ -1531,6 +1638,11 @@ function PermissionsPanel({ system: s }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {loadErr && <div className="alert alert--error" role="alert">{loadErr}</div>}
+      {groupDel && (
+        <GroupForceDeleteModal system={s} {...groupDel}
+                               onClose={() => setGroupDel(null)}
+                               onDone={() => { setGroupDel(null); load() }} />
+      )}
       {loading ? (
         <div style={{ color: 'var(--color-text-muted)' }}>Ładowanie…</div>
       ) : (

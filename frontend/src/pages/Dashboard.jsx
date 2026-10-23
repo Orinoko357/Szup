@@ -4,7 +4,7 @@ import { RefreshCw, CheckCircle } from 'lucide-react'
 import { workflowDashboard, vendorContractAlerts, securityEventsSummary, errorMessage } from '../api'
 import { serverNow, serverTs, fmtDateTime } from '../serverTime'
 import { deptFull } from '../components/RequestView'
-import { getUserRoles, hasAnyRole } from '../roles'
+import { workRoles, hasAnyRole } from '../roles'
 import { nodeLabel, daysSince, waitText, NODE_TONE, SEVERITY_LABEL } from '../labels'
 import AdminChecklist from '../components/AdminChecklist'
 
@@ -30,7 +30,8 @@ function waitsLabel(p) {
 const sinceTs = (p) => serverTs(p.step_since || p.created_at) || 0
 
 export default function Dashboard() {
-  const roles = getUserRoles()
+  // Superadmin: tylko konfiguracja (lista kontrolna, alerty) — bez kolejek pracy.
+  const roles = workRoles()
   // Endpointy alertów mają własne wymagania ról — pytamy tylko, gdy rola pasuje,
   // żeby nie generować 403 przy każdym wejściu na pulpit.
   const canSeeContracts = hasAnyRole(roles, ['it_staff', 'admin', 'superadmin'])
@@ -98,7 +99,9 @@ export default function Dashboard() {
     data.show_prepare && { id: 'prepare', label: 'Uprawnienia do przypisania', count: data.pending_prepare_count },
     data.show_approve && { id: 'approve', label: 'Wnioski do akceptacji',     count: data.pending_approve_count },
     data.show_execute && { id: 'execute', label: 'Wnioski do realizacji',     count: data.pending_execute_count },
-    data.show_execute && { id: 'names',   label: 'Zmiany nazwiska do realizacji', count: data.pending_names_count },
+    // Zmiany nazwiska realizuje wyłącznie IT (nie admin/superadmin).
+    data.show_execute && roles.includes('it_staff')
+      && { id: 'names',   label: 'Zmiany nazwiska do realizacji', count: data.pending_names_count },
   ].filter(Boolean) : [], [data])
 
   const FILTER_NODES = {
@@ -113,7 +116,8 @@ export default function Dashboard() {
     return all.filter(p => FILTER_NODES[filter].includes(p.node_type))
   }, [data, filter])
 
-  const totalWaiting = (data?.pending_approvals_count || 0) + (data?.pending_names_count || 0)
+  const totalWaiting = (data?.pending_approvals_count || 0)
+    + (roles.includes('it_staff') ? (data?.pending_names_count || 0) : 0)
   // Backend zwraca najwyżej 50 najdłużej czekających — gdy spraw jest więcej,
   // mówimy o tym wprost i odsyłamy do pełnej listy.
   const serverShown = data?.pending_approvals_list?.length || 0

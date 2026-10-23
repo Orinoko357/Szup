@@ -18,6 +18,7 @@ from sqlmodel import Session, col, select
 from database import get_session
 from models import PermissionSnapshot, User
 from services.permissions import require_admin, require_it_staff
+from services.csv_utils import csv_safe_row
 from services.snapshots import create_snapshot, get_by_date, unpack
 
 router = APIRouter()
@@ -88,14 +89,16 @@ def snapshot_csv(
     w = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_MINIMAL)
     w.writerow(["Pracownik", "Login", "Jednostka", "Wydział", "System",
                 "Uprawnienie", "Zakres", "Nadano", "Kod oświadczenia"])
+    # Każda komórka przez csv_safe — dane pochodzą m.in. z AD i wniosków
+    # (imiona, nazwy komórek, zakres), więc mogą zawierać „formułę".
     for r in rows:
         zakres = "; ".join(f"{k}: {v}" for k, v in (r.get("custom_values") or {}).items())
-        w.writerow([
+        w.writerow(csv_safe_row([
             r.get("worker_name") or "", r.get("username") or "",
             r.get("unit_name") or "", r.get("department_name") or "",
             r.get("system_name") or "", r.get("permission_name") or "",
             zakres, r.get("granted_at") or "", r.get("reference_code") or "",
-        ])
+        ]))
     buf.seek(0)
     fname = f"szup-migawka-{snapshot_date}.csv"
     return StreamingResponse(

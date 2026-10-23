@@ -1,6 +1,6 @@
 # Kontrola dostępu — SZUP
 
-Stan na wersję 3.8. Model: RBAC z rozdziałem obowiązków („Wariant A”) oraz
+Stan na wersję 3.9. Model: RBAC z rozdziałem obowiązków („Wariant A”) oraz
 uprawnieniami wynikającymi ze struktury organizacyjnej (kierownik, zastępca,
 przełożony, dyrektor jednostki).
 
@@ -8,16 +8,31 @@ przełożony, dyrektor jednostki).
 
 | Rola | Opis | Zakres |
 |------|------|--------|
-| `superadmin` | Break-glass | Wszystko, także kroki obiegu i wnioski na etapie roboczym. Jedyny, który zmienia ustawienia LDAP/AD i SMTP, wykonuje reset fabryczny, nadaje i odbiera role `admin` i `superadmin`, zarządza kontami z tymi rolami i zamyka zdarzenia bezpieczeństwa *high* / *critical*. |
+| `superadmin` | Break-glass (konto konfiguracyjne) | Podgląd wszystkiego, także wniosków na etapie roboczym. **Nie działa w obiegu** (nie wybiera, nie akceptuje, nie realizuje, nie przejmuje, nie rozpatruje zmian nazwiska) i nie łączy się z rolami operacyjnymi `manager` / `it_staff` (400 przy zapisie konta; `/settings/health` ostrzega o kontach sprzed tej zmiany). Jedyny, który zmienia ustawienia LDAP/AD i SMTP, wykonuje reset fabryczny, nadaje i odbiera role `admin` i `superadmin`, zarządza kontami z tymi rolami i zamyka zdarzenia bezpieczeństwa *high* / *critical*. |
 | `admin` | Konfiguracja systemu | Użytkownicy, struktura, rejestr oprogramowania, szablony obiegu, powiadomienia, dziennik zdarzeń. **Nie działa w obiegu** (nie wybiera, nie akceptuje, nie realizuje) i nie widzi wniosków na etapie roboczym kierownika. |
-| `hr` | Kadry | Składa wnioski dla jednostek przypisanych mu w „Jednostkach obsługiwanych”. Ten sam zakres ma każdy pracownik komórki oznaczonej jako kadrowa (`is_hr`). |
 | `manager` | Kierownik / zastępca / dyrektor jednostki | Kroki kierownicze obiegu i wnioski dla pracowników w swoim zakresie (zob. „Struktura”). Rola nadawana i zdejmowana automatycznie razem ze stanowiskiem w strukturze. |
-| `it_staff` | Pracownik IT | Realizacja wniosków (krok `it_execute`), rejestr oprogramowania, dowiązanie konta do wniosku, zmiany nazwisk. Nie widzi wniosków na etapie roboczym. |
+| `it_staff` | Pracownik IT | Realizacja wniosków (krok `it_execute`), rejestr oprogramowania, dowiązanie konta do wniosku, rozpatrywanie zmian nazwisk (te dwie operacje — wyłącznie z rolą `it_staff`, bramka `require_it_operator`). Nie widzi wniosków na etapie roboczym. |
 | `viewer` | Pracownik | Podgląd własnych uprawnień i własnych wniosków. |
 
 Osoba może mieć kilka ról. Administrator, który ma też działać operacyjnie,
-dostaje właściwą rolę operacyjną (`manager`, `it_staff`, `hr`) — sama rola
-`admin` nie daje dostępu do paneli operacyjnych.
+dostaje właściwą rolę operacyjną (`manager`, `it_staff`) — sama rola
+`admin` nie daje dostępu do paneli operacyjnych. Superadmin ról operacyjnych
+nie dostaje — do pracy w obiegu służy osobne konto.
+
+### Kadry — komórka kadrowa (bez roli)
+
+Roli `hr` nie ma (od 3.9; nadanie jej zwraca 400). Pracownikiem kadr jest
+każdy członek komórki oznaczonej jako kadrowa (`Department.is_hr`, „komórka
+kadrowa”) — `services/permissions.py: user_is_hr`. Kadry obsługują
+**wszystkie jednostki** (wyszukiwanie pracowników, lista pracowników komórki,
+składanie wniosków); dawne „Jednostki obsługiwane” (`UserUnit`) zostają
+w bazie tylko do odczytu i niczego nie ograniczają. Front dostaje efektywną
+rolę `hr` w odpowiedzi logowania i `/auth/me` (role konta + `hr` dla członka
+komórki kadrowej); w bazie i w tokenie jej nie ma.
+
+Migracja przy starcie usuwa `hr` z ról wszystkich kont, zapisuje w audit logu
+wpis `user.hr_role_removed` (lista loginów i tych, którzy stracili zdolność
+kadrową, bo nie są w komórce kadrowej) i ostrzega w logu aplikacji.
 
 ### Ograniczenia administratora (ochrona przed samoeskalacją)
 
@@ -27,7 +42,7 @@ Administrator (nie superadmin):
   niżej): nie edytuje ich (także ról operacyjnych i aktywności), nie resetuje
   hasła, nie odblokowuje, nie dezaktywuje ani nie usuwa — robi to superadmin.
   Import z AD pomija takie konta, gdy uruchamia go administrator;
-- nie zmienia własnych ról, własnej komórki ani własnych jednostek kadrowych;
+- nie zmienia własnych ról ani własnej komórki;
 - nie przypisuje siebie jako kierownika komórki, kierownika jednostki ani zastępcy;
 - nie oznacza własnej komórki jako kadrowej;
 - nie zmienia ustawień LDAP/AD ani SMTP (serwer uwierzytelniający, konto
@@ -40,7 +55,7 @@ Zdarzenia bezpieczeństwa (i wpisy w audit logu) powstają m.in. przy:
 
 | Zdarzenie | Waga |
 |---|---|
-| nadanie roli `manager`, `it_staff`, `hr` | *medium* |
+| nadanie roli `manager`, `it_staff` | *medium* |
 | nadanie roli `admin` / `superadmin` | *high* |
 | reset hasła konta z rolą operacyjną lub administracyjną (`user.password_reset`) | *high* |
 | zmiana loginu przy zmianie nazwiska (`user.login_changed`) | *high* |
@@ -97,7 +112,7 @@ Kto może wykonać krok (`services/workflow.py: can_act`):
 | `higher_manager_approve` | Kierownik lub zastępca komórki nadrzędnej albo przełożony wyżej (w tym dyrektor jednostki). Kierownik lub zastępca **samej komórki wniosku** nie zatwierdza (nawet gdy kieruje też komórką nadrzędną) — wyjątek: dyrektor jednostki. | jw. |
 | `it_execute` | Rola `it_staff`. | Rola `it_staff`. |
 
-Superadmin może wykonać każdy krok. Administrator bez roli operacyjnej — żadnego.
+Superadmin i administrator bez roli operacyjnej nie wykonują żadnego kroku.
 
 Rozdział obowiązków przy wniosku „dla siebie” (pracownik wniosku = osoba
 działająca na kroku): nikt nie zatwierdza akceptacji wyższej własnego wniosku
@@ -117,7 +132,7 @@ Widzą go wyłącznie:
 - kierownik komórki i jego zastępcy,
 - twórca wniosku (np. kadry),
 - przełożeni (tylko do odczytu, dopóki nie przejmą wniosku),
-- superadmin.
+- superadmin (tylko do odczytu).
 
 IT, administrator i pozostali kierownicy nie widzą takiego wniosku na liście
 ani w szczegółach, dopóki kierownik go nie wyśle.
@@ -130,7 +145,7 @@ dostaje e-mail i komunikat o przejęciu. Zasady:
 - przejęcie jest możliwe tylko na etapie roboczym; zapis jest warunkowy
   (dwóch przełożonych naraz → drugi dostaje 409);
 - przełożony stojący wyżej niż obecny przejmujący może przejąć wniosek ponownie;
-- przejmujący albo superadmin może przejęcie oddać („Oddaj”);
+- tylko przejmujący może przejęcie oddać („Oddaj”);
 - przejęcie wygasa samo, gdy przejmujący zostanie dezaktywowany albo przestanie
   być przełożonym tej komórki — wtedy kierownik komórki odzyskuje wniosek;
 - każda zmiana struktury (kierownik lub zastępca komórki, kierownik jednostki,
@@ -147,7 +162,7 @@ dostaje e-mail i komunikat o przejęciu. Zasady:
 | superadmin | Wszystkie. |
 | admin, it_staff | Wszystkie poza wnioskami na etapie roboczym kierownika komórki. |
 | manager | Wnioski komórek ze swojego zakresu (bezpośrednie, podległe, z akceptacją wyższą, cała jednostka dyrektora); własne spoza zakresu — w widoku „Moje wnioski” i w szczegółach. Etap roboczy obcych komórek — ukryty. |
-| hr, viewer | Wnioski, które sami złożyli. |
+| kadry (komórka kadrowa), viewer | Wnioski, które sami złożyli. |
 
 Twórca zawsze widzi swój wniosek. Regułę etapu roboczego definiuje jedno
 miejsce — `services/workflow.py: manager_stage_visibility` (szczegóły wniosku);
@@ -171,10 +186,12 @@ albo później (`link-worker`). Obie ścieżki mają te same reguły:
 
 ## Zmiana nazwiska i loginu
 
-Pracownik zgłasza zmianę nazwiska dla siebie; realizuje ją IT (oraz admin
-i superadmin), opcjonalnie zmieniając login:
+Pracownik zgłasza zmianę nazwiska dla siebie; realizuje ją wyłącznie IT
+(rola `it_staff`; admin i superadmin mają podgląd kolejki, rozpatrują tylko
+z rolą `it_staff`), opcjonalnie zmieniając login:
 - nikt nie rozpatruje własnego wniosku (403);
-- login konta z rolą `admin` / `superadmin` zmienia wyłącznie superadmin;
+- loginu konta z rolą `admin` / `superadmin` w tym obiegu się nie zmienia
+  (realizacja tylko ze zmianą nazwiska);
 - zajętość loginu sprawdzana bez względu na wielkość liter (jak przy
   logowaniu AD/SSO); konto AD dostaje login znormalizowany i poprawny
   dla domeny;
@@ -183,10 +200,10 @@ i superadmin), opcjonalnie zmieniając login:
 
 ## Składanie wniosków
 
-- **Kadry**: tylko dla jednostek przypisanych w „Jednostkach obsługiwanych”.
+- **Kadry** (komórka kadrowa): dla wszystkich jednostek.
 - **Kierownik** (bez zdolności kadrowej): dla komórek ze swojego zakresu.
 - Komórka wniosku musi należeć do wskazanej jednostki.
-- Superadmin: bez ograniczeń.
+- Superadmin i administrator: nie składają wniosków (tylko konfiguracja systemu).
 
 ## Uwierzytelnianie
 
@@ -196,11 +213,12 @@ i superadmin), opcjonalnie zmieniając login:
 - **AD/LDAP**: konto domenowe (`auth_type=ldap`). Konto lokalne — także
   superadmin — nie zaloguje się przez LDAP ani SSO. Login normalizowany
   (małe litery, bez domeny), więc jedno konto AD = jedno konto w aplikacji.
-  Puste hasło jest odrzucane przed wysłaniem do AD. Połączenie z AD jest
-  szyfrowane (LDAPS albo STARTTLS) z weryfikacją certyfikatu serwera
-  (`tls_verify`, plik CA `ca_cert_file`, minimum TLS 1.2); bez szyfrowania
-  hasła nie są wysyłane, a `/settings/health` ostrzega o LDAP bez TLS lub bez
-  weryfikacji certyfikatu.
+  Puste hasło jest odrzucane przed wysłaniem do AD. Szyfrowanie połączenia
+  z AD jest **zalecane, ale nie wymagane**: LDAPS albo STARTTLS z weryfikacją
+  certyfikatu serwera (`tls_verify`, plik CA `ca_cert_file`, minimum TLS 1.2).
+  Zwykły LDAP (bez TLS) działa — hasła idą wtedy otwartym tekstem, a
+  `/settings/health` pokazuje rekomendację (`level: "recommendation"`) przy
+  LDAP bez TLS lub bez weryfikacji certyfikatu.
 - **SSO (Kerberos)**: Apache (`mod_auth_gssapi`) przekazuje login z sekretem
   `SZUP_SSO_PROXY_SECRET`; backend sprawdza sekret i realm, a token wydaje
   przez jednorazowy, krótko ważny kod (`/auth/sso-exchange`).
@@ -231,8 +249,8 @@ i superadmin), opcjonalnie zmieniając login:
 
 Audit log jest append-only (triggery w bazie) i dostępny dla administratora.
 Poza ogólnym wpisem każdego żądania zmieniającego dane zapisujemy zdarzenia:
-- kont: utworzenie, zmiana ról, komórki, jednostek i aktywności (stara i nowa
-  wartość), reset hasła przez administratora, import, aktualizacja
+- kont: utworzenie, zmiana ról, komórki i aktywności (stara i nowa
+  wartość), usunięcie zniesionej roli `hr` przy migracji, reset hasła przez administratora, import, aktualizacja
   i dezaktywacja z AD, zmiana nazwiska i loginu;
 - struktury: zmiana kierownika komórki i jednostki, dodanie i usunięcie zastępcy;
 - szablonów obiegu: utworzenie, zmiana, usunięcie;
@@ -249,6 +267,12 @@ na 15 minut, każda porażka to zdarzenie bezpieczeństwa).
   administrator, a rolę `manager` — struktura (objęcie stanowiska).
 - Role nie są pobierane z grup AD — zawsze ustala je aplikacja.
 - Przegląd uprawnień: rejestr i nocne migawki uprawnień.
+
+## Eksport CSV
+
+Komórki eksportów CSV, które zaczynają się (także po początkowych spacjach)
+od `=`, `+`, `-`, `@`, tabulatora lub CR, dostają prefiks `'` — arkusz nie
+wykona ich jako formuły (`services/csv_utils.py: csv_safe`).
 
 ## Podstawa prawna
 

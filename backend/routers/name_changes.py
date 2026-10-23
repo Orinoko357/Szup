@@ -7,8 +7,10 @@ realizuje: zmienia `full_name`, a login (`username`) może — ale nie musi —
 zmienić. Zmiana loginu unieważnia dotychczasowe sesje (`tokens_valid_from`)
 i wymusza ponowne logowanie.
 
-Rozdział obowiązków: nikt nie rozpatruje własnego wniosku, a login konta
-z rolą admin / superadmin zmienia wyłącznie superadmin.
+Rozdział obowiązków: rozpatruje wyłącznie pracownik IT (rola it_staff — sama
+rola admin / superadmin nie wystarcza, bo administrator nie działa operacyjnie),
+nikt nie rozpatruje własnego wniosku, a loginu konta z rolą admin / superadmin
+w tym obiegu się nie zmienia (tylko nazwisko).
 """
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ from sqlmodel import Session, col, select
 from database import get_session
 from models import AuthType, NameChangeRequest, SecuritySeverity, User, has_role
 from services.auth_service import get_current_user, invalidate_tokens_now
-from services.permissions import require_it_staff
+from services.permissions import require_it_operator, require_it_staff
 
 router = APIRouter()
 _log = logging.getLogger("szup.name_changes")
@@ -148,6 +150,7 @@ def my_name_changes(
 # IT — kolejka i realizacja
 # ---------------------------------------------------------------------------
 
+# Podgląd kolejki: IT, a także admin / superadmin (odczyt). Rozpatruje tylko IT.
 @router.get("")
 def list_name_changes(
     status: Optional[str] = None,
@@ -201,7 +204,7 @@ def resolve_name_change(
     req_id: int,
     data: NameChangeResolve,
     request: Request,
-    current_user: User = Depends(require_it_staff),
+    current_user: User = Depends(require_it_operator),
     session: Session = Depends(get_session),
 ):
     """IT realizuje wniosek: zmienia nazwisko (i ewentualnie login) albo odrzuca."""
@@ -230,9 +233,10 @@ def resolve_name_change(
             if not _USERNAME_RE.match(new_login):
                 raise HTTPException(
                     400, "Login może zawierać litery, cyfry oraz . _ - (3–64 znaki).")
-            if has_role(user, "admin", "superadmin") and not has_role(current_user, "superadmin"):
+            if has_role(user, "admin", "superadmin"):
                 raise HTTPException(
-                    403, "Login konta z rolą administratora zmienia wyłącznie superadmin.")
+                    403, "Loginu konta z rolą administratora nie zmienia się w tym "
+                         "obiegu — zrealizuj wniosek bez zmiany loginu.")
             if user.auth_type == AuthType.ldap:
                 # Konto AD: login musi być loginem domenowym w postaci, w jakiej
                 # zapisuje go logowanie AD/SSO (małe litery, bez realmu).

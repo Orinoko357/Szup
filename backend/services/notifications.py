@@ -10,8 +10,8 @@ Obieg odbywa się w całości w aplikacji — treści nie odwołują się do
 dokumentów poza nią.
 
 Szablony oznaczone `"hidden": True` nie są już wysyłane (zastąpiło je
-powiadomienie etapu `workflow_stage`); zostają w rejestrze, żeby nie gubić
-treści zapisanych wcześniej w Ustawieniach.
+powiadomienie etapu `workflow_stage` albo zdarzenie przestało występować);
+zostają w rejestrze, żeby nie gubić treści zapisanych wcześniej w Ustawieniach.
 """
 from __future__ import annotations
 
@@ -175,9 +175,11 @@ EVENTS: dict[str, dict] = {
         ),
     },
     "request_take_over_released": {
+        "hidden": True,
         "label": "Przejęcie wniosku zwolnione przez superadmina (do przejmującego)",
-        "description": "Trafia do dotychczasowego przejmującego, gdy superadmin zwolni "
-                       "(„Oddaj”) jego przejęcie wniosku na etapie kierownika komórki.",
+        "description": "(nieużywany — przejęcie może oddać już tylko sam przejmujący; "
+                       "superadmin nie działa w obiegu wniosków) Trafiał do dotychczasowego "
+                       "przejmującego, gdy superadmin zwolnił („Oddaj”) jego przejęcie.",
         "macros": _COMMON + ["{released_by_name}"],
         "subject": "[SZUP] Wniosek #{request_id} — zwolniono Twoje przejęcie",
         "body": (

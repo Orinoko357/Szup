@@ -131,16 +131,14 @@ class ChangePasswordRequest(BaseModel):
 
 
 def _effective_roles(session, user: User, user_roles: list[str]) -> list[str]:
-    """Role widoczne dla frontu. Pracownik komórki kadrowej (Department.is_hr)
-    dostaje efektywnie rolę 'hr' — żeby zobaczył Kartotekę i mógł zgłaszać
-    nowych pracowników/ustania. Token (JWT) i baza pozostają bez zmian;
-    autoryzację po stronie backendu i tak egzekwuje `user_is_hr`."""
+    """Role widoczne dla frontu: zapisane role konta plus „hr” dla pracownika
+    komórki kadrowej (Department.is_hr) — roli „hr” nie nadaje się już per
+    osoba. Token (JWT) i baza pozostają bez zmian; autoryzację po stronie
+    backendu egzekwuje `user_is_hr`."""
+    from services.permissions import user_is_hr
     try:
-        if "hr" not in user_roles and getattr(user, "department_id", None):
-            from models import Department
-            d = session.get(Department, user.department_id)
-            if d and getattr(d, "is_hr", False):
-                return [*user_roles, "hr"]
+        if "hr" not in user_roles and user_is_hr(session, user):
+            return [*user_roles, "hr"]
     except Exception:
         pass
     return user_roles

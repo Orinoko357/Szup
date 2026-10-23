@@ -22,8 +22,8 @@ from models import (
 )
 from services.auth_service import get_current_user
 from services.permissions import (
-    require_it_staff,
-    is_admin, managed_dept_ids, hr_scoped_unit_ids, unit_manager_dept_ids, manager_scope,
+    require_it_operator,
+    is_admin, managed_dept_ids, unit_manager_dept_ids, manager_scope,
     manager_scope_ids,
 )
 
@@ -559,7 +559,8 @@ def _attach_node_info(session: Session, out: list[dict], rows: list, user: User)
     """Dopisz do zserializowanych wniosków `current_node_type` (typ bieżącego
     węzła aktywnego obiegu albo None), `can_act` (czy `user` może na nim działać),
     `next_node_type` (typ węzła, na który trafi wniosek po wysłaniu bieżącego
-    kroku — z pominięciami silnika, np. „it_execute” albo „higher_manager_approve”)
+    kroku przez `user` — z pominięciami silnika i automatyczną akceptacją wyższą,
+    np. „it_execute” albo „higher_manager_approve”)
     oraz informacje o etapie kierownika komórki: `manager_stage` (etap roboczy
     komórki z własnym kierownikiem), `is_draft` (jest zapisana wersja robocza),
     `can_take_over` (czy `user` może wniosek przejąć jako przełożony)
@@ -586,7 +587,9 @@ def _attach_node_info(session: Session, out: list[dict], rows: list, user: User)
             stage = is_manager_stage(session, node_type, dept)
             try:
                 # Z perspektywy oglądającego: wniosek „dla siebie” trafia do
-                # akceptacji przełożonego („Wyślij do akceptacji”), nie do IT.
+                # akceptacji przełożonego („Wyślij do akceptacji”), nie do IT;
+                # przełożony, który sam może zatwierdzić akceptację wyższą,
+                # wysyła od razu do realizacji („Wyślij do realizacji”).
                 next_type = landing_node_type(session, inst, r, "approve", actor_user=user)
             except Exception:   # podpowiedź dla etykiety — nie może wywrócić listy
                 next_type = None
@@ -890,6 +893,21 @@ def workflow_dashboard(
             if e:
                 pending.append(e); seen_ids.add(r.id)
 
+    # 3) Superadmin w obiegu nie działa — z jednym wyjątkiem: akceptacja wyższa
+    #    wniosku „dla siebie” kierownika, nad którym nie ma nikogo w strukturze
+    #    (`services.workflow.superadmin_acts`). Takie wnioski też trafiają na pulpit.
+    if has_role(user, "superadmin"):
+        for r in session.exec(
+            select(AccessRequest)
+            .where(AccessRequest.current_node_type == "higher_manager_approve")
+            .where(col(AccessRequest.status).notin_([RequestStatus.completed, RequestStatus.rejected]))
+        ).all():
+            if r.id in seen_ids:
+                continue
+            e = _entry(r)
+            if e:
+                pending.append(e); seen_ids.add(r.id)
+
     # Najdłużej czekające na bieżącym kroku najpierw — sortujemy PRZED obcięciem
     # listy, żeby najstarsze sprawy nie wypadały z pulpitu.
     pending.sort(key=lambda p: p["step_since"] or p["created_at"])
@@ -943,13 +961,14 @@ def get_request(
 
 def _require_request_creator(current_user: User = Depends(get_current_user),
                              session: Session = Depends(get_session)) -> User:
-    # Wariant A: wnioski składa HR (rola lub komórka kadrowa) albo kierownik.
-    # Administrator konfiguruje system i NIE tworzy wniosków; superadmin — break-glass.
+    # Wariant A: wnioski składa kierownik albo kadry (członek komórki kadrowej).
+    # Administrator i superadmin (konto awaryjne) tylko konfigurują system
+    # i NIE tworzą wniosków.
     from services.permissions import user_is_hr
-    if not (has_role(current_user, "superadmin", "manager")
-            or user_is_hr(session, current_user)):
+    if has_role(current_user, "superadmin") or not (
+            has_role(current_user, "manager") or user_is_hr(session, current_user)):
         raise HTTPException(status.HTTP_403_FORBIDDEN,
-            "Wymagana rola HR (lub komórka kadrowa) albo kierownika")
+            "Wnioski składa kierownik albo pracownik komórki kadrowej.")
     return current_user
 
 
@@ -1028,7 +1047,9 @@ def create_request(
     #    jednostki, którą kieruje), żeby nie odmawiać złożenia wniosku dla
     #    osoby, na której wniosku ten kierownik i tak działa w obiegu (od razu
     #    albo — w komórce z własnym kierownikiem — po przejęciu wniosku),
-    #  - pracownik HR — tylko dla przypisanych mu jednostek.
+    #  - kadry (członkowie komórki kadrowej — `user_is_hr`) — dla wszystkich
+    #    jednostek; zdolność HR wynika wyłącznie z przynależności do komórki
+    #    kadrowej i ma pełny zakres.
     # Superadmin (break-glass) — bez ograniczeń.
     if not has_role(current_user, "superadmin"):
         from services.permissions import user_is_hr
@@ -1039,11 +1060,6 @@ def create_request(
             if data.department_id not in scope_ids:
                 raise HTTPException(status.HTTP_403_FORBIDDEN,
                     "Możesz składać wnioski tylko dla pracowników swoich wydziałów")
-        elif hr_cap:
-            scoped_units = hr_scoped_unit_ids(session, current_user)
-            if scoped_units is not None and data.unit_id not in scoped_units:
-                raise HTTPException(status.HTTP_403_FORBIDDEN,
-                    "Możesz składać wnioski tylko dla przypisanych Ci jednostek")
 
     # H3 — całość (wniosek + pozycje + instancja obiegu + ewentualny
     # auto-select) w JEDNEJ transakcji. Przy dowolnym błędzie rollback,
@@ -1357,11 +1373,13 @@ def assign_request(
 def link_worker(
     request_id: int,
     data: LinkWorker,
-    current_user: User = Depends(require_it_staff),
+    current_user: User = Depends(require_it_operator),
     session: Session = Depends(get_session),
 ):
     """
     Retroaktywne dowiązanie konta AD do wniosku (również zrealizowanego).
+    Operacja wyłącznie dla pracownika IT (rola it_staff) — administrator ani
+    superadmin bez tej roli jej nie wykonają.
     Używane do „posprzątania" starych wniosków, w których worker_user_id
     nie został zapisany.
 
@@ -1748,9 +1766,7 @@ def _self_request_blocked(session: Session, inst, r: AccessRequest, user: User,
     """Czy krok kierownika wykonywany przez pracownika, którego wniosek dotyczy,
     ominąłby akceptację przełożonego (szablon bez `higher_manager_approve`)."""
     from services.workflow import MANAGER_STAGE_TYPES, is_self_request, landing_node_type
-    if action not in ("select", "approve") or has_role(user, "superadmin"):
-        return False
-    if not is_self_request(r, user):
+    if action not in ("select", "approve") or not is_self_request(r, user):
         return False
     landing = landing_node_type(session, inst, r, action, actor_user=user)
     return landing not in ("higher_manager_approve", *MANAGER_STAGE_TYPES)
@@ -1861,6 +1877,8 @@ def workflow_action(
         # uprawnienia w „Moje uprawnienia", a wniosek pojawia się w strukturze.
         # Reguły jak w `link-worker` (własne konto, komórka, istniejące dowiązanie).
         if data.ad_username and data.ad_username.strip():
+            # Dowiązanie konta to operacja IT (jak `link-worker`).
+            require_it_operator(current_user)
             prev_worker = r.worker_user_id
             worker, existing = _link_worker_account(session, r, data.ad_username, current_user)
             if worker.id != prev_worker:
@@ -2171,33 +2189,14 @@ def take_over_request(
     return _request_out(session, r, current_user)
 
 
-def _notify_take_over_released(session: Session, r: AccessRequest,
-                               dept: Optional[Department], taker_id: Optional[int],
-                               actor: User) -> None:
-    """E-mail do dotychczasowego przejmującego, gdy jego przejęcie zwolnił
-    ktoś inny (superadmin)."""
-    try:
-        from services.after_commit import defer
-        from services.email_alerts import notify_take_over_released
-        u = session.get(User, taker_id) if taker_id else None
-        if not u or not u.is_active or not u.email or u.id == actor.id:
-            return
-        actor_name = actor.full_name or actor.username
-        defer(session, notify_take_over_released,
-              to_address=u.email, request_id=r.id, worker_name=r.worker_name,
-              dept_name=dept.name if dept else "", released_by_name=actor_name,
-              from_name=actor_name, from_email=actor.email)
-    except Exception as exc:
-        _log.warning("Powiadomienie o zwolnieniu przejęcia nie zostało zlecone: %s", exc)
-
-
 @router.post("/{request_id}/release")
 def release_request(
     request_id: int,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
-    """„Oddaj” — przejmujący (albo superadmin) zwalnia przejęcie wniosku.
+    """„Oddaj” — przejmujący zwalnia przejęcie wniosku (nikt inny — także
+    superadmin, który w obiegu nie działa).
     Wniosek wraca do kierownika komórki (z powiadomieniem o etapie); przełożeni
     mogą go znowu przejąć. Tylko na etapie kierownika komórki.
 
@@ -2215,9 +2214,9 @@ def release_request(
     inst, node = _active_node(session, request_id)
     if not r.taken_over_by_id:
         raise HTTPException(status.HTTP_409_CONFLICT, "Wniosek nie jest przejęty.")
-    if r.taken_over_by_id != current_user.id and not has_role(current_user, "superadmin"):
+    if r.taken_over_by_id != current_user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN,
-            "Przejęcie może oddać tylko osoba, która przejęła wniosek, albo superadmin.")
+            "Przejęcie może oddać tylko osoba, która przejęła wniosek.")
     dept = session.get(Department, r.department_id) if r.department_id else None
     if not is_manager_stage(session, node.get("type"), dept):
         raise HTTPException(status.HTTP_409_CONFLICT,
@@ -2230,9 +2229,7 @@ def release_request(
         raise HTTPException(status.HTTP_409_CONFLICT,
             "Wniosek zmienił stan w międzyczasie (przejął go ktoś inny albo został "
             "wysłany dalej). Odśwież wniosek.")
-    # Superadmin zwalniający cudze przejęcie — w historii widać czyje.
-    note = f"Zwolniono przejęcie: {prev_name}" if prev_id != current_user.id else None
-    record_request_event(session, r.id, "release", actor_user=current_user, note=note)
+    record_request_event(session, r.id, "release", actor_user=current_user)
     try:
         record_event(
             session, action="request.take_over_released",
@@ -2246,9 +2243,6 @@ def release_request(
         _log.exception(AUDIT_WRITE_FAILED_MSG)
     # Kierownik komórki znów jest adresatem kroku — przypomnij mu o wniosku.
     _notify_stage(session, r, node, dept, current_user, exclude_ids=(prev_id,))
-    if prev_id != current_user.id:
-        # Superadmin zwolnił cudze przejęcie — przejmujący musi o tym wiedzieć.
-        _notify_take_over_released(session, r, dept, prev_id, current_user)
     session.commit()
     session.refresh(r)
     return _request_out(session, r, current_user)

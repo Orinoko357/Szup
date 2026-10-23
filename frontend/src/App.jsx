@@ -13,7 +13,7 @@ import { getAuthStatus, getMe } from './api'
 import useIdleLogout from './hooks/useIdleLogout'
 import { ChangePasswordModal } from './components/Layout/Header'
 import { syncServerTime } from './serverTime'
-import { getCurrentUser, getUserRoles, updateCurrentUser } from './roles'
+import { getCurrentUser, getUserRoles, updateCurrentUser, workRoles } from './roles'
 
 const HR                 = lazy(() => import('./pages/HR'))
 const Requests           = lazy(() => import('./pages/Requests'))
@@ -261,7 +261,9 @@ function AuthGate() {
     )
   }
 
-  const roles = getUserRoles()
+  // Superadmin (konto awaryjne) — bez paneli operacyjnych: workRoles odcina
+  // mu role manager/it_staff/hr, więc trasy operacyjne przekierowują na pulpit.
+  const roles = workRoles(getUserRoles())
 
   // Rozdział ról (Wariant A — czysty rozdział obowiązków):
   //  administrator KONFIGURUJE system, pracownik IT REALIZUJE wnioski.

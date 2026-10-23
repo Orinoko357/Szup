@@ -52,6 +52,11 @@ ADMIN_PERM_NAME = "Uprawnienia administratora"
 # Nazwy zarezerwowane — administrator nie może ich utworzyć ręcznie.
 SYNTHETIC_PERM_NAMES = (ACCESS_PERM_NAME, ADMIN_PERM_NAME)
 
+# Uprawnienia usunięte miękko (usunięcie posiadanej grupy przez superadmina)
+# zostają w bazie tylko dla historii — rejestr oprogramowania ich nie pokazuje
+# i nie pozwala ich edytować, kopiować ani przywrócić.
+_LIVE_PERM = SystemPermission.deleted_at == None  # noqa: E711
+
 
 # ---------------------------------------------------------------------------
 # Helpery
@@ -621,6 +626,7 @@ def list_permissions(
 ):
     rows = session.exec(
         select(SystemPermission).where(SystemPermission.system_id == system_id)
+        .where(_LIVE_PERM)
         .order_by(SystemPermission.permission_name)
     ).all()
     # Pozycja administratora zawsze na koncu listy - to wyjatek, nie powinna
@@ -744,6 +750,7 @@ def copy_permissions(
             raise HTTPException(400, "Nie można kopiować z tego samego oprogramowania")
         src_perms = [p for p in session.exec(
             select(SystemPermission).where(SystemPermission.system_id == source.id)
+            .where(_LIVE_PERM)
         ).all() if p.permission_name not in SYNTHETIC_PERM_NAMES]
         if not src_perms:
             raise HTTPException(
@@ -754,6 +761,7 @@ def copy_permissions(
 
     have = {p.permission_name for p in session.exec(
         select(SystemPermission).where(SystemPermission.system_id == target.id)
+        .where(_LIVE_PERM)
     ).all()}
     copied = 0
     for p in src_perms:
@@ -831,6 +839,7 @@ def copy_permission_group(
 
     src_perms = [p for p in session.exec(
         select(SystemPermission).where(SystemPermission.system_id == source.id)
+        .where(_LIVE_PERM)
     ).all() if p.permission_name not in SYNTHETIC_PERM_NAMES
         and (getattr(p, "group_name", None) or "") == src_group]
     if not src_perms:
@@ -843,6 +852,7 @@ def copy_permission_group(
         select(SystemPermission)
         .where(SystemPermission.system_id == target.id)
         .where(SystemPermission.group_name == tgt_group)
+        .where(_LIVE_PERM)
     ).all()}
 
     copied = skipped = 0
@@ -875,7 +885,7 @@ def update_permission(
     _: User = Depends(require_it_staff),
 ):
     p = session.get(SystemPermission, perm_id)
-    if not p:
+    if not p or getattr(p, "deleted_at", None):
         raise HTTPException(404, "Uprawnienie nie istnieje")
     if p.permission_name == ADMIN_PERM_NAME or (
         data.permission_name or ""
@@ -914,7 +924,7 @@ def delete_permission(
     _: User = Depends(require_it_staff),
 ):
     p = session.get(SystemPermission, perm_id)
-    if not p:
+    if not p or getattr(p, "deleted_at", None):
         raise HTTPException(404, "Uprawnienie nie istnieje")
     # Blokada przed usunięciem syntetycznego „Dostęp" gdy system jest access_only.
     s = session.get(PermissionSystem, p.system_id)
@@ -1039,6 +1049,7 @@ def _group_perms(session: Session, system_id: int, group: str) -> list[SystemPer
         select(SystemPermission)
         .where(SystemPermission.system_id == system_id)
         .where(SystemPermission.group_name == group)
+        .where(_LIVE_PERM)
     ).all()
     return [p for p in rows if p.permission_name not in SYNTHETIC_PERM_NAMES]
 
@@ -1256,25 +1267,258 @@ def rename_permission_group(
 
 class GroupDeleteIn(BaseModel):
     group_name: str
+    # Wymagany, gdy ktoś posiada uprawnienia z grupy (usuwa wtedy superadmin) —
+    # trafia do audytu, wniosków o odebranie i odmówionych pozycji wniosków.
+    reason: Optional[str] = None
 
 
-@router.post("/{system_id}/permissions/group-delete", response_model=ImportCommitOut)
-def delete_permission_group(
+class GroupDeleteOut(ImportCommitOut):
+    # Tylko przy usunięciu grupy, którą ktoś posiadał (superadmin):
+    affected_user_ids: list[int] = []
+    revoke_request_ids: list[int] = []          # systemowe wnioski o odebranie (completed)
+    updated_request_ids: list[int] = []         # wnioski w toku z odmówionymi pozycjami
+
+
+class GroupHolderOut(BaseModel):
+    user_id: int
+    full_name: Optional[str] = None
+    username: Optional[str] = None
+    permissions: list[str]
+
+
+class GroupUsageOut(BaseModel):
+    holders: list[GroupHolderOut]
+    in_progress_requests: list[int]
+
+
+from models import RequestStatus as _RS  # noqa: E402
+_IN_PROGRESS_STATUSES = (_RS.pending_selection, _RS.pending_manager, _RS.pending_it)
+
+
+def _group_holders(session: Session, perm_ids: list[int]) -> list[tuple[User, list[dict]]]:
+    """Osoby, które OBECNIE posiadają którekolwiek z `perm_ids` — wg uprawnień
+    efektywnych (`routers.users._effective_permissions`: nadania minus
+    odebrania z ukończonych wniosków). Zwraca [(użytkownik, pozycje)]."""
+    from models import AccessRequest, RequestItem, RequestStatus
+    from routers.users import _effective_permissions
+    if not perm_ids:
+        return []
+    wanted = set(perm_ids)
+    uids = session.exec(
+        select(AccessRequest.worker_user_id)
+        .join(RequestItem, RequestItem.request_id == AccessRequest.id)
+        .where(RequestItem.permission_id.in_(perm_ids))
+        .where(AccessRequest.status == RequestStatus.completed)
+        .where(AccessRequest.worker_user_id != None)  # noqa: E711
+        .distinct()
+    ).all()
+    out: list[tuple[User, list[dict]]] = []
+    for uid in sorted({int(u) for u in uids if u}):
+        held = [e for e in _effective_permissions(session, uid)["permissions"]
+                if e["permission_id"] in wanted]
+        user = session.get(User, uid)
+        if held and user:
+            out.append((user, held))
+    return out
+
+
+def _group_in_progress(session: Session, perm_ids: list[int]) -> list[int]:
+    """Wnioski w toku, które zawierają (nieodmówione) pozycje z `perm_ids`."""
+    from models import AccessRequest, RequestItem
+    if not perm_ids:
+        return []
+    rows = session.exec(
+        select(AccessRequest.id)
+        .join(RequestItem, RequestItem.request_id == AccessRequest.id)
+        .where(RequestItem.permission_id.in_(perm_ids))
+        .where(RequestItem.denied == False)  # noqa: E712
+        .where(AccessRequest.status.in_(_IN_PROGRESS_STATUSES))
+        .distinct()
+    ).all()
+    return sorted(int(r) for r in rows)
+
+
+@router.get("/{system_id}/permissions/group-usage", response_model=GroupUsageOut)
+def permission_group_usage(
     system_id: int,
-    data: GroupDeleteIn,
+    group_name: str = Query(...),
     session: Session = Depends(get_session),
     _: User = Depends(require_it_staff),
 ):
-    """Usuń całą grupę — np. gdy zaimportowano nie ten plik.
-
-    Pozycje UŻYTE we wnioskach zostają (historia uprawnień jest nienaruszalna);
-    są wygaszane i raportowane jako pominięte.
-    """
-    from models import RequestItem
-
-    rows = _group_perms(session, system_id, data.group_name.strip())
+    """Kto posiada uprawnienia z grupy i które wnioski w toku je zawierają —
+    przed usunięciem grupy (posiadaną grupę usuwa wyłącznie superadmin)."""
+    rows = _group_perms(session, system_id, group_name.strip())
     if not rows:
         raise HTTPException(404, "Grupa nie istnieje w tym oprogramowaniu.")
+    ids = [p.id for p in rows]
+    holders = [
+        GroupHolderOut(user_id=u.id, full_name=u.full_name, username=u.username,
+                       permissions=[e["permission_name"] or "" for e in held])
+        for u, held in _group_holders(session, ids)
+    ]
+    return GroupUsageOut(holders=holders,
+                         in_progress_requests=_group_in_progress(session, ids))
+
+
+def _system_revoke_request(session: Session, actor: User, user: User,
+                           held: list[dict], comment: str, now) -> int:
+    """Systemowy, od razu ZREALIZOWANY wniosek o odebranie posiadanych pozycji —
+    dzięki niemu uprawnienia efektywne, migawki i historia wniosków pracownika
+    pokazują odebranie. Komórka: bieżąca komórka pracownika, a gdy brak —
+    komórka wniosku, którym nadano uprawnienie."""
+    from models import AccessRequest, Department, RequestItem, RequestStatus
+    dept = session.get(Department, user.department_id) if user.department_id else None
+    if dept is not None and getattr(dept, "archived_at", None):
+        dept = None
+    if dept is not None:
+        unit_id, dept_id = dept.unit_id, dept.id
+    else:
+        src = session.get(AccessRequest, held[0]["request_id"])
+        unit_id, dept_id = src.unit_id, src.department_id
+    actor_name = actor.full_name or actor.username
+    req = AccessRequest(
+        worker_name=user.full_name or user.username,
+        worker_email=user.email,
+        worker_position=getattr(user, "title", None) or None,
+        worker_user_id=user.id,
+        unit_id=unit_id, department_id=dept_id,
+        kind="revoke",
+        status=RequestStatus.completed,
+        created_by_id=actor.id, created_by_name=actor_name,
+        approved_by_id=actor.id, completed_by_id=actor.id,
+        manager_comment=comment, it_comment=comment,
+        created_at=now, approved_at=now, completed_at=now,
+    )
+    session.add(req)
+    session.flush()
+    for e in held:
+        session.add(RequestItem(
+            request_id=req.id, system_id=e["system_id"],
+            permission_id=e["permission_id"], kind="revoke",
+            added_by_user_id=actor.id,
+            fulfilled=True, fulfilled_by_user_id=actor.id, fulfilled_at=now,
+        ))
+    return req.id
+
+
+def _delete_held_group(session: Session, request: Request, actor: User,
+                       system_id: int, group: str, rows: list[SystemPermission],
+                       holders: list[tuple[User, list[dict]]],
+                       reason: str) -> GroupDeleteOut:
+    """Usunięcie grupy, którą ktoś posiada (superadmin): odebranie uprawnień
+    posiadaczom (systemowe wnioski o odebranie), odmowa pozycji we wnioskach
+    w toku, miękkie usunięcie pozycji, audyt + zdarzenie bezpieczeństwa."""
+    from datetime import datetime as _dt
+    from models import RequestItem, SecuritySeverity
+    from services.audit import record_event, request_meta
+    from services.security_events import emit as emit_security_event
+
+    now = _dt.utcnow()
+    system = session.get(PermissionSystem, system_id)
+    sys_name = system.name if system else f"id={system_id}"
+    ids = [p.id for p in rows]
+    comment = f"Usunięcie grupy uprawnień „{group}” ({sys_name}): {reason}"
+
+    revoke_ids: list[int] = []
+    affected: list[dict] = []
+    details: list[str] = []
+    for user, held in holders:
+        revoke_ids.append(_system_revoke_request(session, actor, user, held, comment, now))
+        names = [e["permission_name"] or "" for e in held]
+        affected.append({"user_id": user.id, "username": user.username,
+                         "full_name": user.full_name, "permissions": names})
+        details.append(f"odebrano {len(names)} uprawn. — {user.full_name or user.username}")
+
+    in_progress = _group_in_progress(session, ids)
+    if in_progress:
+        items = session.exec(
+            select(RequestItem)
+            .where(RequestItem.request_id.in_(in_progress))
+            .where(RequestItem.permission_id.in_(ids))
+            .where(RequestItem.denied == False)  # noqa: E712
+        ).all()
+        for it in items:
+            it.denied = True
+            it.deny_comment = f"Uprawnienie usunięte z rejestru: {reason}"[:1000]
+            it.denied_by_user_id = actor.id
+            it.denied_at = now
+            it.fulfilled = False
+            it.fulfilled_by_user_id = None
+            it.fulfilled_at = None
+            session.add(it)
+        details.append("odmówiono pozycji we wnioskach w toku: "
+                       + ", ".join(f"#{r}" for r in in_progress))
+
+    for p in rows:
+        p.is_active = False
+        p.deleted_at = now
+        p.deleted_reason = reason[:1000]
+        session.add(p)
+    session.commit()
+
+    meta = request_meta(request)
+    audit_details = {
+        "system_id": system_id, "system_name": sys_name, "group_name": group,
+        "reason": reason, "permissions": [p.permission_name for p in rows],
+        "affected_users": affected, "revoke_request_ids": revoke_ids,
+        "updated_request_ids": in_progress,
+    }
+    record_event(session, action="permission_group.deleted", user_id=actor.id,
+                 username=actor.username, target_type="permission_system",
+                 target_id=system_id, ip=meta["ip"], user_agent=meta["user_agent"],
+                 details=audit_details)
+    emit_security_event(
+        session, event_type="permission_group.deleted_held", source="systems",
+        severity=SecuritySeverity.high,
+        summary=(f"Superadmin {actor.username} usunął grupę „{group}” ({sys_name}) — "
+                 f"odebrano uprawnienia {len(affected)} os.: {reason}"),
+        details=audit_details, user_id=actor.id, ip=meta["ip"],
+    )
+    return GroupDeleteOut(
+        added=0, reactivated=0, updated=0, deactivated=len(rows), skipped=0,
+        details=details, affected_user_ids=[a["user_id"] for a in affected],
+        revoke_request_ids=revoke_ids, updated_request_ids=in_progress,
+    )
+
+
+@router.post("/{system_id}/permissions/group-delete", response_model=GroupDeleteOut)
+def delete_permission_group(
+    system_id: int,
+    data: GroupDeleteIn,
+    request: Request,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_it_staff),
+):
+    """Usuń całą grupę — np. gdy zaimportowano nie ten plik.
+
+    Gdy NIKT nie posiada uprawnień z grupy: pozycje nieużyte są kasowane,
+    a użyte we wnioskach wygaszane (historia uprawnień jest nienaruszalna).
+
+    Gdy ktoś je posiada: wyłącznie superadmin, z powodem. Posiadacze tracą
+    uprawnienia (systemowy, zrealizowany wniosek o odebranie), pozycje
+    we wnioskach w toku są odmawiane, a same uprawnienia usuwane miękko
+    (zostają w historii pod dotychczasową nazwą).
+    """
+    from models import RequestItem, has_role
+
+    group = data.group_name.strip()
+    rows = _group_perms(session, system_id, group)
+    if not rows:
+        raise HTTPException(404, "Grupa nie istnieje w tym oprogramowaniu.")
+
+    holders = _group_holders(session, [p.id for p in rows])
+    if holders:
+        if not has_role(current_user, "superadmin"):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                f"Uprawnienia z tej grupy posiada {len(holders)} os. — grupę może "
+                "usunąć tylko superadmin, podając powód.")
+        reason = (data.reason or "").strip()
+        if not reason:
+            raise HTTPException(400,
+                "Podaj powód usunięcia grupy — posiadacze stracą te uprawnienia.")
+        return _delete_held_group(session, request, current_user, system_id, group,
+                                  rows, holders, reason)
 
     deleted = skipped = 0
     details: list[str] = []
@@ -1291,8 +1535,8 @@ def delete_permission_group(
         session.delete(p)
         deleted += 1
     session.commit()
-    return ImportCommitOut(added=0, reactivated=0, updated=0,
-                           deactivated=deleted, skipped=skipped, details=details)
+    return GroupDeleteOut(added=0, reactivated=0, updated=0,
+                          deactivated=deleted, skipped=skipped, details=details)
 
 
 class GroupStateIn(BaseModel):
@@ -1348,6 +1592,7 @@ def assign_subgroup(
         select(SystemPermission)
         .where(SystemPermission.system_id == system_id)
         .where(SystemPermission.id.in_(ids))
+        .where(_LIVE_PERM)
     ).all()
     changed = 0
     for p in rows:
@@ -1385,6 +1630,7 @@ def set_group_order(
             order[name] = i
     rows = session.exec(
         select(SystemPermission).where(SystemPermission.system_id == system_id)
+        .where(_LIVE_PERM)
     ).all()
     changed = 0
     for p in rows:

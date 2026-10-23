@@ -103,19 +103,23 @@ def test_rename_cannot_take_over_admin_account(api):
 
     adm = api.login("adm")
     nc_adm = _name_change(api, adm, "Admin Nowak")
+    # v3.9: loginu konta admina w tym obiegu nie zmienia nikt; superadmin
+    # w ogóle nie rozpatruje wniosków (operacja wyłącznie dla IT).
     r = _resolve(api, nc_adm, it_new, new_username="itguy")
     assert r.status_code == 403, r.text
-    # Superadmin może — ale stary token IT (sub=itguy, uid=IT) nie staje się adminem.
     r = _resolve(api, nc_adm, sup, new_username="itguy")
+    assert r.status_code == 403, r.text
+    # Samo nazwisko admina IT zmienia; stary token IT nie przechodzi na nic.
+    r = _resolve(api, nc_adm, it_new)
     assert r.status_code == 200, r.text
     assert api.get("/users/", token=it_old).status_code == 401
     assert api.get("/auth/me", token=it_old).status_code == 401
-    assert api.get("/auth/me", token=adm).status_code == 401   # admin loguje się ponownie
+    assert api.get("/auth/me", token=adm).status_code == 200
 
     evs = _events("user.login_changed")
-    assert len(evs) == 2
+    assert len(evs) == 1
     assert all(e.severity == SecuritySeverity.high for e in evs)
-    assert {json.loads(e.details)["target_user_id"] for e in evs} == {_uid("itguy2"), _uid("itguy")}
+    assert {json.loads(e.details)["target_user_id"] for e in evs} == {_uid("itguy2")}
 
 
 def test_name_change_without_login_change_keeps_session(api):
@@ -418,18 +422,17 @@ def test_ldaps_verifies_certificate_by_default(tmp_path):
     assert server.ssl is False and server.tls.validate == ssl.CERT_REQUIRED
 
 
-def test_ldap_password_never_sent_without_tls(monkeypatch):
+def test_plain_ldap_bind_allowed_without_tls(monkeypatch):
+    """v3.9: szyfrowanie LDAP jest zalecane, nie wymagane — zwykły LDAP
+    (bez LDAPS/STARTTLS) łączy się bez STARTTLS przed bind."""
     import ldap3
     from services import ldap_service as ls
-
-    def _boom(*a, **kw):
-        raise AssertionError("połączenie z LDAP bez TLS nie powinno powstać")
-
-    monkeypatch.setattr(ldap3, "Connection", _boom)
+    seen = {}
+    monkeypatch.setattr(ldap3, "Connection",
+                        lambda server, **kw: seen.update(kw) or "conn")
     plain = _Cfg(use_ssl=False, port=389)
-    with pytest.raises(ls.LdapInsecureError):
-        ls.open_connection(plain, ls.build_server(plain), "CN=jan", "Haslo123!")
-    assert ls.authenticate_ldap(plain, "jan", "Haslo123!") is False
+    assert ls.open_connection(plain, ls.build_server(plain), "CN=jan", "Haslo123!") == "conn"
+    assert seen["auto_bind"] == ldap3.AUTO_BIND_NO_TLS
 
 
 def test_starttls_runs_before_bind(monkeypatch):

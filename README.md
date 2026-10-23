@@ -136,11 +136,25 @@ i kończy się błędem (ze ścieżką kopii bazy), gdy usługa nie odpowiada (b
   `systemctl daemon-reload` (nowe `UMask=0077`; `deploy.sh` ostrzega, gdy go
   brak), a `deploy/szup-apache.conf` — do konfiguracji Apache (limit rozmiaru
   żądań `LimitRequestBody`);
-- logowanie AD wymaga szyfrowania: LDAPS (port 636) albo STARTTLS, z weryfikacją
-  certyfikatu. Gdy certyfikat kontrolera domeny wystawia wewnętrzne CA, zapisz
-  certyfikat CA (PEM) na serwerze, np. `/etc/ssl/certs/ca-domena.pem`, i wskaż
-  go w Ustawieniach → AD/LDAP („Plik CA”). Stan sprawdza lista kontrolna
-  konfiguracji (`/settings/health`).
+- szyfrowanie logowania AD jest zalecane: LDAPS (port 636) albo STARTTLS,
+  z weryfikacją certyfikatu. Gdy certyfikat kontrolera domeny wystawia
+  wewnętrzne CA, zapisz certyfikat CA (PEM) na serwerze, np.
+  `/etc/ssl/certs/ca-domena.pem`, i wskaż go w Ustawieniach → AD/LDAP („Plik CA”).
+  Stan sprawdza lista kontrolna konfiguracji (`/settings/health`).
+
+**Aktualizacja do 3.9 — uwagi dla administratora:**
+- rola `hr` zniesiona: pracownikiem kadr jest każdy członek komórki oznaczonej
+  jako kadrowa (Struktura → komórka kadrowa) i obsługuje wszystkie jednostki.
+  Migracja usuwa `hr` z ról kont i zapisuje w audit logu wpis
+  `user.hr_role_removed` z listą loginów — osoby z listy `lost_hr_capability`
+  (spoza komórki kadrowej) przenieś do komórki kadrowej albo oznacz ich komórkę
+  jako kadrową; ta sama lista trafia do logu aplikacji (ostrzeżenie przy starcie);
+- superadmin to konto konfiguracyjne: nie łączy się z rolami `manager`
+  i `it_staff` (lista kontrolna wskazuje konta, którym trzeba je odebrać);
+  zmiany nazwisk rozpatruje wyłącznie IT (rola `it_staff`);
+- LDAP bez szyfrowania znów działa (bez osobnej zgody) — lista kontrolna
+  pokazuje to jako rekomendację, a nie błąd. Elementy listy mają pole `level`:
+  `required`, `warning` albo `recommendation`.
 
 Nowe tabele tworzą się przy starcie (`create_all`); nowe kolumny dokładane są
 idempotentnie w `database.py` (migracje ręczne, bez Alembica). Po wdrożeniu z
@@ -179,8 +193,9 @@ Klucz Fernet generujesz: `python -c "from cryptography.fernet import Fernet; pri
 ## Role
 
 `superadmin` (konfiguracja, break‑glass) · `admin` (konfiguracja systemu) ·
-`hr` (składanie wniosków dla jednostek) · `manager` (kierownik komórki/jednostki)
-· `it_staff` (realizacja wniosków) · `viewer` (podgląd własnych uprawnień).
+`manager` (kierownik komórki/jednostki) · `it_staff` (realizacja wniosków) ·
+`viewer` (podgląd własnych uprawnień). Kadry to nie rola, tylko przynależność
+do komórki kadrowej (`is_hr`) — składanie wniosków dla wszystkich jednostek.
 
 Wariant A — czysty rozdział obowiązków: administrator konfiguruje, IT realizuje;
 panele operacyjne nie są dostępne dla samego admina.
@@ -192,7 +207,9 @@ panele operacyjne nie są dostępne dla samego admina.
 - **Audyt append‑only** (`auditlog`, triggery `BEFORE UPDATE/DELETE`), retencja ≥ 24 mies.
 - **Logowanie**: rate‑limit (10/60 s/IP), lockout (5 prób → 15 min), polityka haseł,
   sesja JWT wskazująca konto po ID, rewokacja JWT (jti + `tokens_valid_from`),
-  wymuszona zmiana hasła; AD/LDAP tylko przez LDAPS/STARTTLS z weryfikacją certyfikatu.
+  wymuszona zmiana hasła; AD/LDAP zalecane przez LDAPS/STARTTLS z weryfikacją certyfikatu
+  (zwykły LDAP działa, lista kontrolna rekomenduje szyfrowanie).
+- **Eksport CSV** z neutralizacją formuł (`services/csv_utils.py: csv_safe`).
 - **Sekrety** szyfrowane Fernet (rotacja MultiFernet); nigdy nie zwracane przez API.
 - **Nagłówki** CSP, HSTS, X‑Frame‑Options; `X‑Request‑ID` w odpowiedziach.
 - Kopie zapasowe bazy **razem z kluczami** (obieg, Fernet, JWT; archiwum kluczy przechowywane osobno i zaszyfrowane) — patrz `docs/security/backup_and_dr.md`.

@@ -96,7 +96,7 @@ def test_admin_cannot_grant_or_revoke_admin_roles(api):
     assert _roles(other_admin) == {"admin"}
 
     # Role operacyjne zwykłego konta — dozwolone.
-    r = api.patch(f"/users/{viewer}", token=adm, json={"roles": ["viewer", "hr"]})
+    r = api.patch(f"/users/{viewer}", token=adm, json={"roles": ["viewer", "it_staff"]})
     assert r.status_code == 200, r.text
 
 

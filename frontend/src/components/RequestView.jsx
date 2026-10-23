@@ -284,11 +284,16 @@ function HistoryBox({ items = [], requestId, createdBy }) {
     if (s.action === 'auto_advance' && s.node_type === 'end') {
       return { text: 'Obieg zakończony', sub }
     }
-    if (s.action === 'auto_skip') {
+    // Krok pominięty/zaliczony automatycznie — np. akceptacja wyższa, gdy wybór
+    // wysłał sam przełożony (wniosek idzie wprost do IT) albo komórka jej nie
+    // wymaga. Powód (gdy backend go podaje) pokazujemy jako komentarz.
+    if (s.action === 'auto_skip' || s.action === 'auto_approve') {
       const text = s.node_type === 'higher_manager_approve'
-        ? 'Akceptacja wyższa pominięta — nie wymaga jej szablon obiegu'
+        ? (s.action === 'auto_approve'
+            ? 'Akceptacja wyższa zaliczona automatycznie — wybór wysłał przełożony'
+            : 'Akceptacja wyższa pominięta automatycznie — nie była wymagana na tej ścieżce')
         : `${NODE_WHO[s.node_type] ? NODE_WHO[s.node_type] + ' — krok' : 'Krok'} pominięty (warunek obiegu)`
-      return { text, sub, skipped: true }
+      return { text, sub, skipped: true, comment: s.comment || null }
     }
     const who = s.actor_name || NODE_WHO[s.node_type] || ''
     const verb = ACTION_VERB[s.action] || s.action

@@ -1,5 +1,6 @@
 """
 Router: Audit log viewer + CSV export — superadmin/admin only.
+Czyszczenie dziennika (POST /purge) — wyłącznie superadmin, z hasłem i powodem.
 """
 from __future__ import annotations
 
@@ -8,13 +9,15 @@ import io
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlmodel import Session, select, col
 
 from database import get_session
 from models import AuditLog, User
-from services.permissions import require_admin
+from services.csv_utils import csv_safe_row
+from services.permissions import require_admin, require_superadmin
 
 router = APIRouter()
 
@@ -95,11 +98,13 @@ def export_audit_csv(
     writer.writerow(["timestamp","username","user_id","action",
                      "method","path","status_code","ip","details"])
     for r in rows:
-        writer.writerow([
+        # Login, ścieżka i szczegóły mogą pochodzić od atakującego (np. nieudane
+        # logowanie z loginem „=HYPERLINK(...)”) — neutralizujemy formuły.
+        writer.writerow(csv_safe_row([
             r.timestamp.isoformat(), r.username or "", r.user_id or "",
             r.action, r.method or "", r.path or "", r.status_code or "",
             r.ip or "", r.details or "",
-        ])
+        ]))
     buf.seek(0)
     fname = f"szup-audit-{since.date()}_{(until or datetime.utcnow()).date()}.csv"
     return StreamingResponse(
@@ -123,3 +128,30 @@ def audit_stats(
         "oldest": oldest.isoformat() if oldest else None,
         "newest": newest.isoformat() if newest else None,
     }
+
+
+class PurgeRequest(BaseModel):
+    password: str                    # potwierdzenie hasłem wykonującego
+    reason: str                      # wymagany, co najmniej 10 znaków
+    mode: str                        # "before" | "all"
+    before: Optional[str] = None     # data ISO (RRRR-MM-DD) — dla mode="before"
+
+
+@router.post("/purge")
+def purge_audit(
+    data: PurgeRequest,
+    request: Request,
+    current_user: User = Depends(require_superadmin),
+    session: Session = Depends(get_session),
+):
+    """Czyszczenie dziennika zdarzeń — WYŁĄCZNIE superadmin (konto awaryjne).
+
+    Wymaga hasła i powodu. Usuwa wszystkie wpisy (`mode="all"`) albo starsze
+    niż `before`, z wyjątkiem śladów wcześniejszych czyszczeń. Operacja jest
+    atomowa (triggery append-only zdejmowane i zakładane w tej samej
+    transakcji) i zostawia ślad: wpis `audit.purged` + zdarzenie krytyczne.
+    """
+    from services.audit import run_log_purge
+    return run_log_purge(session, request, current_user, log="audit",
+                         password=data.password, reason=data.reason,
+                         mode=data.mode, before=data.before)

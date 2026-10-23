@@ -11,10 +11,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from database import get_session
-from models import (Unit, Department, DepartmentDeputy, SecuritySeverity, User, UserUnit,
+from models import (Unit, Department, DepartmentDeputy, SecuritySeverity, User,
                     has_role)
 from services.auth_service import get_current_user
-from services.permissions import require_admin, is_admin
+from services.permissions import require_admin, require_superadmin
 
 router = APIRouter()
 
@@ -82,6 +82,22 @@ def _all_dept_ids(session: Session) -> set[int]:
     return {int(x) for x in session.exec(select(Department.id)).all()}
 
 
+# Komórki zarchiwizowane przez superadmina (force-delete) — znikają ze
+# wszystkich list, wyborów, dopasowań importu AD i edycji; zostają w bazie
+# wyłącznie dla historii wniosków.
+_NOT_ARCHIVED = Department.archived_at == None  # noqa: E711
+
+
+def _live_dept(session: Session, dept_id: Optional[int]) -> Optional[Department]:
+    """Komórka o danym id, o ile istnieje i NIE jest zarchiwizowana."""
+    if dept_id is None:
+        return None
+    dept = session.get(Department, dept_id)
+    if not dept or getattr(dept, "archived_at", None):
+        return None
+    return dept
+
+
 def _guard_self_hr(session: Session, current_user: User, dept: "Department") -> None:
     """Admin (nie superadmin) nie oznacza własnej komórki jako kadrowej (is_hr) —
     pracownik takiej komórki dostaje uprawnienia kadr."""
@@ -93,21 +109,17 @@ def _guard_self_hr(session: Session, current_user: User, dept: "Department") -> 
         )
 
 
-def _hr_scoped_unit_ids(session: Session, user: User) -> Optional[list[int]]:
-    """Zakres jednostek dla pracownika kadr.
+SUPERADMIN_POST_MSG = "Superadmin to konto awaryjne — nie pełni funkcji w strukturze"
 
-    Zwraca listę id jednostek przypisanych do tego użytkownika, albo None gdy
-    zakres jest nieograniczony (admin/superadmin lub użytkownik bez roli HR —
-    np. IT w rejestrze oprogramowania).
-    """
-    if is_admin(user):
-        return None
-    if not has_role(user, "hr"):
-        return None
-    rows = session.exec(
-        select(UserUnit.unit_id).where(UserUnit.user_id == user.id)
-    ).all()
-    return [int(x) for x in rows]
+
+def _guard_superadmin_post(session: Session, user_id: Optional[int]) -> None:
+    """Superadmin (konto awaryjne / konfiguracyjne) nie obejmuje stanowisk
+    w strukturze: kierownika komórki, dyrektora jednostki ani zastępcy."""
+    if not user_id:
+        return
+    u = session.get(User, user_id)
+    if u and has_role(u, "superadmin"):
+        raise HTTPException(400, SUPERADMIN_POST_MSG)
 
 
 # ---------------------------------------------------------------------------
@@ -163,15 +175,10 @@ def list_active_units(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
-    """Aktywne jednostki. Pracownik kadr widzi WYŁĄCZNIE jednostki mu przypisane
-    (UserUnit); admin/superadmin i pozostałe role — wszystkie."""
-    from sqlmodel import col as _col
+    """Aktywne jednostki — dla każdego zalogowanego wszystkie (komórka kadrowa
+    obsługuje całą organizację; dawne przypisania kadr do jednostek nie
+    ograniczają już widoku)."""
     stmt = select(Unit).where(Unit.is_active == True)  # noqa: E712
-    scoped = _hr_scoped_unit_ids(session, current_user)
-    if scoped is not None:
-        if not scoped:
-            return []
-        stmt = stmt.where(_col(Unit.id).in_(scoped))
     return session.exec(stmt.order_by(Unit.name)).all()
 
 
@@ -203,6 +210,7 @@ def update_unit(
     payload = data.model_dump(exclude_unset=True)
     if "manager_user_id" in payload and payload["manager_user_id"] != prev_manager_id:
         _guard_self_post(current_user, payload["manager_user_id"])
+        _guard_superadmin_post(session, payload["manager_user_id"])
     if "manager_user_id" in payload and payload["manager_user_id"]:
         mgr = session.get(User, payload["manager_user_id"])
         if not mgr:
@@ -242,8 +250,15 @@ def delete_unit(
     if not unit:
         raise HTTPException(404, "Jednostka nie istnieje")
     # sprawdź czy ma wydziały
-    if session.exec(select(Department).where(Department.unit_id == unit_id)).first():
+    if session.exec(select(Department).where(Department.unit_id == unit_id)
+                    .where(_NOT_ARCHIVED)).first():
         raise HTTPException(400, "Nie można usunąć jednostki — posiada wydziały")
+    # Komórki zarchiwizowane zostają dla historii wniosków — jednostki z nimi
+    # nie da się usunąć (wnioski wskazują na jednostkę); można ją wyłączyć.
+    if session.exec(select(Department).where(Department.unit_id == unit_id)).first():
+        raise HTTPException(400,
+            "Nie można usunąć jednostki — zawiera zarchiwizowane komórki z historią "
+            "wniosków. Wyłącz jednostkę zamiast ją usuwać.")
     session.delete(unit)
     try:
         session.commit()
@@ -365,7 +380,8 @@ def list_all_departments(
     session: Session = Depends(get_session),
     _: User = Depends(require_admin),
 ):
-    depts = session.exec(select(Department).order_by(Department.name)).all()
+    depts = session.exec(
+        select(Department).where(_NOT_ARCHIVED).order_by(Department.name)).all()
     return [_enrich_dept(d, session) for d in depts]
 
 
@@ -375,16 +391,11 @@ def list_active_departments(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
-    """Aktywne komórki. Dla kadr — tylko z jednostek im przypisanych."""
-    from sqlmodel import col as _col
-    stmt = select(Department).where(Department.is_active == True)  # noqa: E712
+    """Aktywne (niezarchiwizowane) komórki — wszystkie, opcjonalnie z jednostki."""
+    stmt = (select(Department).where(Department.is_active == True)  # noqa: E712
+            .where(_NOT_ARCHIVED))
     if unit_id:
         stmt = stmt.where(Department.unit_id == unit_id)
-    scoped = _hr_scoped_unit_ids(session, current_user)
-    if scoped is not None:
-        if not scoped:
-            return []
-        stmt = stmt.where(_col(Department.unit_id).in_(scoped))
     depts = session.exec(stmt.order_by(Department.name)).all()
     return [_enrich_dept(d, session) for d in depts]
 
@@ -398,11 +409,12 @@ def create_department(
 ):
     if data.kind != "standalone":
         _guard_self_post(current_user, data.manager_user_id)
+        _guard_superadmin_post(session, data.manager_user_id)
     if not session.get(Unit, data.unit_id):
         raise HTTPException(400, "Jednostka nie istnieje")
     _validate_kind(data.kind)
     if data.parent_dept_id is not None:
-        parent = session.get(Department, data.parent_dept_id)
+        parent = _live_dept(session, data.parent_dept_id)
         if not parent:
             raise HTTPException(400, "Wydział nadrzędny nie istnieje")
         if parent.unit_id != data.unit_id:
@@ -438,7 +450,7 @@ def update_department(
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin),
 ):
-    dept = session.get(Department, dept_id)
+    dept = _live_dept(session, dept_id)
     if not dept:
         raise HTTPException(404, "Wydział nie istnieje")
     prev_manager_id = dept.manager_user_id   # do synchronizacji roli po zmianie
@@ -446,6 +458,7 @@ def update_department(
     payload = data.model_dump(exclude_unset=True)
     if "manager_user_id" in payload and payload["manager_user_id"] != prev_manager_id:
         _guard_self_post(current_user, payload["manager_user_id"])
+        _guard_superadmin_post(session, payload["manager_user_id"])
     if payload.get("is_hr") and not dept.is_hr:
         _guard_self_hr(session, current_user, dept)
 
@@ -457,7 +470,7 @@ def update_department(
     if "parent_dept_id" in payload:
         new_parent = payload["parent_dept_id"]
         if new_parent is not None:
-            parent = session.get(Department, new_parent)
+            parent = _live_dept(session, new_parent)
             if not parent:
                 raise HTTPException(400, "Wydział nadrzędny nie istnieje")
             if parent.unit_id != dept.unit_id:
@@ -538,13 +551,16 @@ def auto_assign_managers(
     # Admin (nie superadmin) nie może w ten sposób przypisać SIEBIE (_guard_self_post).
     if not has_role(current_user, "superadmin"):
         users = [u for u in users if u.id != current_user.id]
+    # Superadmin (konto awaryjne) nigdy nie zostaje kierownikiem komórki.
+    users = [u for u in users if not has_role(u, "superadmin")]
     by_dept: dict[int, list[User]] = {}
     for u in users:
         if u.department_id and title_indicates_manager(getattr(u, "title", None)):
             by_dept.setdefault(u.department_id, []).append(u)
 
     snap = _stage_snapshot(session, _all_dept_ids(session))
-    for dept in session.exec(select(Department).where(Department.is_active == True)).all():  # noqa: E712
+    for dept in session.exec(select(Department).where(Department.is_active == True)  # noqa: E712
+                             .where(_NOT_ARCHIVED)).all():
         if dept.kind == "standalone":
             continue  # samodzielne stanowisko nie ma kierownika
         if dept.manager_user_id and not data.overwrite:
@@ -593,7 +609,7 @@ def delete_department(
     session: Session = Depends(get_session),
     _: User = Depends(require_admin),
 ):
-    dept = session.get(Department, dept_id)
+    dept = _live_dept(session, dept_id)
     if not dept:
         raise HTTPException(404, "Wydział nie istnieje")
     from models import AccessRequest
@@ -613,6 +629,214 @@ def delete_department(
     from services.org_sync import revoke_manager_role_if_unused
     if revoke_manager_role_if_unused(session, ex_manager_id):
         session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Usunięcie komórki przez superadmina (także komórki z historią)
+# ---------------------------------------------------------------------------
+
+from models import RequestStatus as _RS  # noqa: E402
+_ACTIVE_REQUEST_STATUSES = (_RS.pending_selection, _RS.pending_manager, _RS.pending_it)
+
+
+class DepartmentForceDeleteIn(BaseModel):
+    reason: str                      # wymagany — trafia do audytu i odrzucanych wniosków
+    password: str                    # potwierdzenie hasłem wykonującego
+
+
+class DepartmentForceDeleteOut(BaseModel):
+    mode: str                        # "deleted" (usunięta) | "archived" (zarchiwizowana)
+    department_id: int
+    detached_users: int
+    removed_deputies: int
+    reparented_department_ids: list[int]
+    rejected_request_ids: list[int]
+
+
+def _system_reject_request(session: Session, req, actor: User, comment: str,
+                           dept_id: int) -> None:
+    """Odrzucenie wniosku w toku z powodu usunięcia komórki — poza `can_act`
+    (superadmin nie jest uczestnikiem obiegu). Zapisuje podpisany krok
+    `reject` z aktorem-superadminem w łańcuchu kroków, zamyka instancję,
+    zwalnia przejęcie i powiadamia twórcę wniosku (jak zwykłe odrzucenie)."""
+    import json as _json
+    from datetime import datetime as _dt
+    from models import RequestStatus, WorkflowInstanceStatus, WorkflowStepAction
+    from services.workflow import (
+        _notify_request_rejected, _record_step, _sync_request_status,
+        clear_take_over, find_node, instance_of,
+    )
+    inst = instance_of(session, req)
+    if inst and inst.status == WorkflowInstanceStatus.active:
+        node = None
+        try:
+            node = find_node(_json.loads(inst.template_snapshot), inst.current_node_id) \
+                if inst.current_node_id else None
+        except Exception:
+            node = None
+        node = node or {"id": inst.current_node_id or "system", "type": "system"}
+        _record_step(session, inst, node, action=WorkflowStepAction.reject,
+                     actor_user=actor, comment=comment,
+                     payload={"system": "department_deleted", "department_id": dept_id})
+        inst.status = WorkflowInstanceStatus.rejected
+        inst.completed_at = _dt.utcnow()
+        session.add(inst)
+        _sync_request_status(req, inst)
+    else:
+        # Starszy wniosek bez obiegu — sam status.
+        req.status = RequestStatus.rejected
+        req.rejected_at = req.rejected_at or _dt.utcnow()
+        req.current_node_type = None
+    clear_take_over(req)
+    session.add(req)
+    _notify_request_rejected(session, req, actor, comment)
+
+
+@router.post("/departments/{dept_id}/force-delete", response_model=DepartmentForceDeleteOut)
+def force_delete_department(
+    dept_id: int,
+    data: DepartmentForceDeleteIn,
+    request: Request,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_superadmin),
+):
+    """Usunięcie komórki przez superadmina — także takiej, do której odwołują
+    się wnioski, pracownicy lub zastępcy.
+
+    Komórki podrzędne trafiają pod rodzica usuwanej komórki (nie są usuwane).
+    Bez powiązań → usunięcie z bazy. Z powiązaniami → ARCHIWIZACJA: komórka
+    zostaje dla historii (is_active=False, archived_at/archived_reason), znika
+    ze wszystkich list; pracownicy są odpinani, zastępcy i kierownik zdejmowani,
+    a wnioski w toku tej komórki odrzucane z podanym powodem.
+    """
+    from datetime import datetime as _dt
+    from models import AccessRequest, PermissionDeclaration
+    from services.audit import confirm_password, record_event, request_meta
+    from services.org_sync import revoke_manager_role_if_unused
+    from services.security_events import emit as emit_security_event
+    from services.workflow import subtree_dept_ids
+
+    reason = (data.reason or "").strip()
+    if not reason:
+        raise HTTPException(400, "Podaj powód usunięcia komórki")
+    dept = _live_dept(session, dept_id)
+    if not dept:
+        raise HTTPException(404, "Wydział nie istnieje")
+    meta = request_meta(request)
+    confirm_password(session, current_user, data.password,
+                     operation=f"usunięcie komórki „{dept.name}”", ip=meta["ip"])
+
+    children = session.exec(
+        select(Department).where(Department.parent_dept_id == dept_id)).all()
+    users = session.exec(select(User).where(User.department_id == dept_id)).all()
+    deputies = session.exec(
+        select(DepartmentDeputy).where(DepartmentDeputy.department_id == dept_id)).all()
+    has_requests = session.exec(
+        select(AccessRequest.id).where(AccessRequest.department_id == dept_id)).first() is not None
+    has_declarations = session.exec(
+        select(PermissionDeclaration.id)
+        .where(PermissionDeclaration.department_id == dept_id)).first() is not None
+    referenced = bool(users or deputies or has_requests or has_declarations)
+
+    # Zmiana podległości dzieci i zdjęcie kierownika/zastępców zmienia osoby
+    # odpowiedzialne za wnioski w toku w poddrzewie — stan sprzed zmiany.
+    affected = subtree_dept_ids(session, {dept_id})
+    snap = _stage_snapshot(session, affected)
+
+    dept_name = dept.name
+    ex_manager_id = dept.manager_user_id
+    ex_deputy_ids = [d.user_id for d in deputies]
+    new_parent_id = dept.parent_dept_id
+    reparented = [c.id for c in children]
+    for c in children:
+        c.parent_dept_id = new_parent_id
+        session.add(c)
+    for d in deputies:
+        session.delete(d)
+
+    rejected_ids: list[int] = []
+    ex_dn = dept.ldap_dn
+    if not referenced:
+        session.flush()
+        session.delete(dept)
+        mode = "deleted"
+    else:
+        mode = "archived"
+        for u in users:
+            u.department_id = None
+            session.add(u)
+        comment = f"Komórka usunięta: {reason}"
+        active = session.exec(
+            select(AccessRequest)
+            .where(AccessRequest.department_id == dept_id)
+            .where(AccessRequest.status.in_(_ACTIVE_REQUEST_STATUSES))  # type: ignore[attr-defined]
+            .order_by(AccessRequest.id)
+        ).all()
+        for req in active:
+            _system_reject_request(session, req, current_user, comment, dept_id)
+            rejected_ids.append(req.id)
+        dept.manager_user_id = None
+        dept.is_active = False
+        dept.requires_higher_approval = False
+        dept.is_hr = False
+        dept.archived_at = _dt.utcnow()
+        dept.archived_reason = reason[:1000]
+        # Bez DN synchronizacja z AD nie dopasuje (i nie ożywi) archiwum —
+        # ewentualny nowy import utworzy świeżą komórkę.
+        dept.ldap_dn = None
+        session.add(dept)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT,
+            "Nie udało się usunąć komórki — powiązania zmieniły się w trakcie. "
+            "Spróbuj ponownie.")
+
+    # Porządki po zmianie struktury (przejęcia, adresaci kroków) w poddrzewie
+    # — bez samej komórki, jeśli zniknęła.
+    remaining = (affected - {dept_id}) if mode == "deleted" else affected
+    if remaining:
+        _resync_stage(session, snap, f"Usunięcie komórki „{dept_name}”",
+                      dept_ids=remaining)
+    changed_roles = False
+    for uid in {ex_manager_id, *ex_deputy_ids} - {None}:
+        changed_roles = revoke_manager_role_if_unused(session, uid) or changed_roles
+    if changed_roles:
+        session.commit()
+
+    details = {
+        "name": dept_name, "mode": mode, "reason": reason,
+        "detached_users": len(users) if mode == "archived" else 0,
+        "detached_user_ids": [u.id for u in users] if mode == "archived" else [],
+        "removed_deputies": ex_deputy_ids,
+        "ex_manager_user_id": ex_manager_id,
+        "reparented_department_ids": reparented,
+        "new_parent_dept_id": new_parent_id,
+        "rejected_request_ids": rejected_ids,
+    }
+    if mode == "archived":
+        details["ldap_dn"] = ex_dn
+    record_event(session, action=f"department.force_{mode}", user_id=current_user.id,
+                 username=current_user.username, target_type="department",
+                 target_id=dept_id, ip=meta["ip"], user_agent=meta["user_agent"],
+                 details=details)
+    emit_security_event(
+        session, event_type="department.force_deleted", source="units",
+        severity=SecuritySeverity.high,
+        summary=(f"Superadmin {current_user.username} "
+                 + ("usunął" if mode == "deleted" else "zarchiwizował")
+                 + f" komórkę „{dept_name}”: {reason}"),
+        details={"department_id": dept_id, **details},
+        user_id=current_user.id, ip=meta["ip"],
+    )
+    return DepartmentForceDeleteOut(
+        mode=mode, department_id=dept_id,
+        detached_users=details["detached_users"],
+        removed_deputies=len(ex_deputy_ids),
+        reparented_department_ids=reparented,
+        rejected_request_ids=rejected_ids,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -712,7 +936,7 @@ def ldap_preview(
     by_parentname: dict[int, dict] = {}
     by_dn: dict[int, dict] = {}
     by_name: dict[int, dict] = {}
-    for d in session.exec(select(Department)).all():
+    for d in session.exec(select(Department).where(_NOT_ARCHIVED)).all():
         by_parentname.setdefault(d.unit_id, {})[(d.parent_dept_id, d.name)] = d
         if d.ldap_dn:
             by_dn.setdefault(d.unit_id, {})[d.ldap_dn] = d
@@ -833,7 +1057,7 @@ def ldap_import(
             # 1) Mapowanie ręczne do wskazanego istniejącego wydziału.
             mapped = None
             if child.map_to_dept_id is not None:
-                mapped = session.get(Department, child.map_to_dept_id)
+                mapped = _live_dept(session, child.map_to_dept_id)
                 if not mapped:
                     details.append(f"{indent}⚠ Wydział \"{child.name}\" — wskazany do mapowania "
                                    f"wydział (id={child.map_to_dept_id}) nie istnieje, "
@@ -848,6 +1072,7 @@ def ldap_import(
                     select(Department)
                     .where(Department.unit_id == unit_id)
                     .where(Department.ldap_dn == ndn)
+                    .where(_NOT_ARCHIVED)
                 ).first()
             if not existing:
                 existing = session.exec(
@@ -855,6 +1080,7 @@ def ldap_import(
                     .where(Department.unit_id == unit_id)
                     .where(Department.parent_dept_id == parent_dept_id)
                     .where(Department.name == child.name)
+                    .where(_NOT_ARCHIVED)
                 ).first()
             # 3) Po UNIKALNEJ nazwie w jednostce (dowolny rodzic) — pozwala
             #    PRZENIEŚĆ istniejącą „płaską" komórkę pod właściwego rodzica
@@ -864,6 +1090,7 @@ def ldap_import(
                     select(Department)
                     .where(Department.unit_id == unit_id)
                     .where(Department.name == child.name)
+                    .where(_NOT_ARCHIVED)
                 ).all()
                 if len(same) == 1:
                     existing = same[0]
@@ -1006,7 +1233,7 @@ def dedupe_departments(
     from collections import defaultdict
     from models import AccessRequest
 
-    depts = session.exec(select(Department)).all()
+    depts = session.exec(select(Department).where(_NOT_ARCHIVED)).all()
 
     def _value(d: Department) -> int:
         v = 1 if d.manager_user_id else 0
@@ -1107,7 +1334,7 @@ def list_deputies(
     # Zastępcy komórki to konfiguracja struktury organizacyjnej — dostęp
     # wyłącznie administracyjny (jak tworzenie/usuwanie zastępcy). Wcześniej
     # ten GET był otwarty dla każdego zalogowanego (IDOR: ujawnienie struktury).
-    if not session.get(Department, department_id):
+    if not _live_dept(session, department_id):
         raise HTTPException(404, "Wydział nie istnieje")
     rows = session.exec(
         select(DepartmentDeputy).where(DepartmentDeputy.department_id == department_id)
@@ -1126,7 +1353,8 @@ def add_deputy(
     current_user: User = Depends(require_admin),
 ):
     _guard_self_post(current_user, data.user_id)
-    dept = session.get(Department, department_id)
+    _guard_superadmin_post(session, data.user_id)
+    dept = _live_dept(session, department_id)
     if not dept:
         raise HTTPException(404, "Wydział nie istnieje")
     user = session.get(User, data.user_id)

@@ -5,7 +5,7 @@ import {
   listSystems, denyRequestItem, fulfillRequestItem, getRequest, getMe, errorMessage,
 } from '../api'
 import { fmtDate, serverTs } from '../serverTime'
-import { getUserRoles } from '../roles'
+import { getUserRoles, workRoles } from '../roles'
 import Segmented from '../components/ui/Segmented'
 import RequestViewShell, {
   buildWorkflowSteps, Section, WorkerCard, deptFull, KindPill, perspectiveLabel, waitingText,
@@ -257,7 +257,9 @@ function _guessAdUsername(r) {
 function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   const isRevoke   = r.kind === 'revoke'
   const canRealize = r.status === 'pending_it'
+  // Dowiązanie konta to czynność operacyjna IT — nie admina/superadmina.
   const canLink    = r.status === 'completed' && !r.worker_user_id
+    && workRoles().includes('it_staff')
   // Login AD potrzebny tylko wtedy, gdy wniosek nie jest jeszcze dowiązany do
   // konta pracownika (nowy pracownik). Przy zmianie/ustaniu konto już istnieje.
   const needsAd = !r.worker_user_id

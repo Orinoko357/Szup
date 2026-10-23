@@ -14,6 +14,16 @@ export function getCurrentUser() {
 
 export const hasAnyRole = (roles, wanted) => wanted.some(r => roles.includes(r))
 
+// Role operacyjne (obieg wniosków). Superadmin to konto awaryjne — wyłącznie
+// konfiguracja: nie obsługuje wniosków, kartoteki ani pracowników, nawet gdy
+// sesja niesie rolę operacyjną (np. efektywne „hr” z komórki kadrowej).
+export const OPERATIONAL_ROLES = ['manager', 'it_staff', 'hr']
+
+/** Role do nawigacji i strażników tras: superadminowi odcinamy role operacyjne. */
+export function workRoles(roles = getUserRoles()) {
+  return roles.includes('superadmin') ? roles.filter(r => !OPERATIONAL_ROLES.includes(r)) : roles
+}
+
 /** Zaktualizuj dane sesji (scalenie z zapisanymi) i powiadom App o zmianie
  *  (zdarzenie „szup:user” — przerysowanie tras, belki i strażników ról). */
 export function updateCurrentUser(patch) {

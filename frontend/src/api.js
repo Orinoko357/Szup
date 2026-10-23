@@ -89,7 +89,10 @@ export const listItStaff       = ()             => api.get('/users/it-staff')
 export const assignRequest     = (id, userId)   => api.post(`/requests/${id}/assign`, { user_id: userId })
 
 // --- Dziennik zdarzeń (audit log) ---
-// Dziennik jest tylko do odczytu (usuwanie wpisów wycofano w 3.3).
+// Dziennik jest tylko do odczytu dla admina. Wyjątek: superadmin może go
+// wyczyścić (hasło + powód); samo czyszczenie zostaje zapisane i nie da się go usunąć.
+// data: { password, reason, mode: 'before'|'all', before?: 'YYYY-MM-DD' }
+export const purgeAudit         = (data)   => api.post('/audit/purge', data, { timeout: 120000 })
 export const listAudit          = (params) => api.get('/audit/', { params })
 export const auditStats         = ()       => api.get('/audit/stats')
 // Eksport CSV przez instancję `api` (token, obsługa 401) — odpowiedź jako Blob.
@@ -102,6 +105,8 @@ export const exportAuditCsv     = (since, until) => api.get('/audit/export.csv',
 export const listSecurityEvents    = (params) => api.get('/security/', { params })
 export const securityEventsSummary = ()       => api.get('/security/summary')
 export const resolveSecurityEvent  = (id, note) => api.post(`/security/${id}/resolve`, { note })
+// Superadmin: czyszczenie zdarzeń bezpieczeństwa (jak purgeAudit).
+export const purgeSecurity         = (data)   => api.post('/security/purge', data, { timeout: 120000 })
 
 // --- Settings ---
 export const getEmailSettings  = ()       => api.get('/settings/email')
@@ -135,6 +140,9 @@ export const autoAssignManagers = (data = {})    => api.post('/units/departments
 // Usuń zduplikowane komórki (np. po ponownym imporcie struktury).
 export const dedupeDepartments  = ()             => api.post('/units/departments/dedupe', {})
 export const deleteDepartment  = (id)            => api.delete(`/units/departments/${id}`)
+// Superadmin: usunięcie komórki mimo powiązań ({ reason, password }). Komórka
+// z historią jest archiwizowana (backend ukrywa zarchiwizowane).
+export const forceDeleteDepartment = (id, data)  => api.post(`/units/departments/${id}/force-delete`, data)
 export const listDeputies      = (deptId)        => api.get(`/units/departments/${deptId}/deputies`)
 export const addDeputy         = (deptId, data)  => api.post(`/units/departments/${deptId}/deputies`, data)
 export const updateDeputy      = (deputyId, data) => api.patch(`/units/departments/deputies/${deputyId}`, data)
@@ -171,8 +179,13 @@ export const setPermissionGroupState = (systemId, groupName, isActive) =>
 export const renamePermissionGroup = (systemId, groupName, newName) =>
   api.post(`/systems/${systemId}/permissions/group-rename`,
            { group_name: groupName, new_name: newName })
-export const deletePermissionGroup = (systemId, groupName) =>
-  api.post(`/systems/${systemId}/permissions/group-delete`, { group_name: groupName })
+// reason — wymagany przez backend, gdy grupa jest komuś przyznana (tylko superadmin).
+export const deletePermissionGroup = (systemId, groupName, reason) =>
+  api.post(`/systems/${systemId}/permissions/group-delete`,
+           { group_name: groupName, ...(reason ? { reason } : {}) })
+// Kto ma przyznane uprawnienia z grupy + wnioski w toku, które jej dotyczą.
+export const getPermissionGroupUsage = (systemId, groupName) =>
+  api.get(`/systems/${systemId}/permissions/group-usage`, { params: { group_name: groupName } })
 // Ustaw kolejność grup (pełna lista nazw w żądanej kolejności).
 export const setPermissionGroupOrder = (systemId, groups) =>
   api.post(`/systems/${systemId}/permissions/group-order`, { groups })

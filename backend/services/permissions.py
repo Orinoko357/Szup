@@ -11,18 +11,21 @@ from services.auth_service import get_current_user
 
 
 def user_is_hr(session: Session, user: User) -> bool:
-    """Zdolność HR: rola 'hr'/'superadmin' ALBO przynależność do komórki
-    oznaczonej jako KADROWA (Department.is_hr). Dzięki temu nie trzeba nadawać
-    roli HR per osoba — wystarczy oznaczyć komórkę."""
-    if has_role(user, "superadmin", "hr"):
-        return True
+    """Zdolność HR = przynależność do komórki oznaczonej jako KADROWA
+    (Department.is_hr, „komórka kadrowa”). Roli „hr” już nie ma — nie nadaje się
+    jej per osoba; wystarczy oznaczyć komórkę. Pracownik komórki kadrowej
+    obsługuje WSZYSTKIE jednostki (patrz `hr_scoped_unit_ids`)."""
     dept_id = getattr(user, "department_id", None)
-    if dept_id:
-        from models import Department
-        d = session.get(Department, dept_id)
-        if d and getattr(d, "is_hr", False):
-            return True
-    return False
+    if not dept_id:
+        return False
+    from models import Department
+    d = session.get(Department, dept_id)
+    return bool(d and getattr(d, "is_hr", False))
+
+
+# Role operacyjne, których nie łączy się z rolą superadmin — superadmin to konto
+# awaryjne (break-glass) do konfiguracji, a nie do pracy w obiegu wniosków.
+SUPERADMIN_FORBIDDEN_ROLES = frozenset({"manager", "it_staff"})
 
 
 def require_superadmin(current_user: User = Depends(get_current_user)) -> User:
@@ -40,10 +43,22 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
 # Rozdział obowiązków (Wariant A): bramki OPERACYJNE nie wpuszczają zwykłego
 # administratora — administrator KONFIGURUJE system, a nie działa operacyjnie.
 # Superadmin pozostaje break-glass (może wszystko). Kto ma działać operacyjnie,
-# dostaje właściwą rolę operacyjną (hr / manager / it_staff).
+# dostaje właściwą rolę operacyjną (manager / it_staff) albo — dla kadr —
+# trafia do komórki kadrowej (Department.is_hr).
 def require_manager(current_user: User = Depends(get_current_user)) -> User:
     if not has_role(current_user, "superadmin", "manager"):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Wymagana rola kierownika")
+    return current_user
+
+
+# Operacje wyłącznie dla pracownika IT (rozwiązywanie zgłoszeń zmiany nazwiska,
+# dowiązanie wniosku do konta pracownika). Rola admin/superadmin SAMA nie
+# wystarcza — administrator konfiguruje system, nie działa operacyjnie. Admin,
+# który ma też rolę it_staff, działa jako pracownik IT.
+def require_it_operator(current_user: User = Depends(get_current_user)) -> User:
+    if not has_role(current_user, "it_staff"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Operację wykonuje wyłącznie pracownik IT (rola it_staff)")
     return current_user
 
 
@@ -312,22 +327,12 @@ def users_with_role(session, role: str, *, active_only: bool = True) -> list["Us
 
 
 def hr_scoped_unit_ids(session, user: "User"):
-    """Zakres jednostek dla pracownika kadr.
+    """Zakres jednostek dla pracownika kadr — zawsze None (wszystkie jednostki).
 
-    Zwraca listę id jednostek przypisanych do tego użytkownika (HR), albo None
-    gdy zakres jest nieograniczony (superadmin lub użytkownik bez roli HR).
-    Administrator NIE jest tu uprzywilejowany — Wariant A: nie działa operacyjnie.
-    """
-    from sqlmodel import select
-    from models import UserUnit
-    if has_role(user, "superadmin"):
-        return None
-    if not has_role(user, "hr"):
-        return None
-    rows = session.exec(
-        select(UserUnit.unit_id).where(UserUnit.user_id == user.id)
-    ).all()
-    return [int(x) for x in rows]
+    Pracownik komórki kadrowej obsługuje całą organizację; dawne przypisania
+    do jednostek (UserUnit) zostają w bazie, ale niczego już nie ograniczają.
+    Funkcja zostaje dla zgodności wywołań (None = bez ograniczenia)."""
+    return None
 
 
 def is_department_manager_or_deputy(session, user: "User", dept) -> bool:

@@ -18,7 +18,7 @@ def _count(table):
 
 def _populate(api):
     """Wniosek: wersja robocza kierownika, przejęcie przez przełożonego,
-    wysyłka, akceptacja i realizacja — powstają kroki, zdarzenia i deklaracje."""
+    wysyłka (z automatyczną akceptacją wyższą) i realizacja — powstają kroki, zdarzenia i deklaracje."""
     w = _world(api, two_stage=True)
     rid = _new_request(api, w)
     kier, kierP, it = api.login("kier"), api.login("kierP"), api.login("it")
@@ -26,10 +26,9 @@ def _populate(api):
     assert api.post(f"/requests/{rid}/draft", token=kier,
                     json={"items": [item], "comment": "roboczo"}).status_code == 200
     assert api.post(f"/requests/{rid}/take-over", token=kierP).status_code == 200
+    # Przełożony po przejęciu — akceptacja wyższa zaliczona automatycznie.
     assert api.post(f"/requests/{rid}/workflow/action", token=kierP,
                     json={"action": "select", "items": [item]}).status_code == 200
-    assert api.post(f"/requests/{rid}/workflow/action", token=kierP,
-                    json={"action": "approve"}).status_code == 200
     r = api.post(f"/requests/{rid}/workflow/action", token=it,
                  json={"action": "execute", "ad_username": "olanowa"})
     assert r.status_code == 200, r.text
