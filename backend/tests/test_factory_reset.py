@@ -52,7 +52,10 @@ def test_full_reset_wipes_everything(api):
               "permissionsystemunit"):
         assert _count(t) == 0, t
     assert _count("user") == 1          # tylko wykonujący
-    assert not any(d.startswith("⚠") for d in r.json()["details"] if "append-only" not in d)
+    # Żadnych ostrzeżeń — także o ochronie append-only dziennika (bez maskowania).
+    assert not any(d.startswith("⚠") for d in r.json()["details"]), r.json()["details"]
+    # Retencja 24 mies. (3.11): świeże wpisy dziennika zostają.
+    assert _count("auditlog") > 1
 
 
 def test_requests_only_reset_keeps_structure_and_users(api):

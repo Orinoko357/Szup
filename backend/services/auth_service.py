@@ -10,12 +10,14 @@ import secrets
 import time
 import uuid
 from datetime import datetime, timedelta
+from threading import Lock
 from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError as JWTError
 from passlib.context import CryptContext
 
 _DATA_DIR   = Path(os.getenv("SZUP_DATA_DIR", "/opt/szup/data"))
@@ -26,6 +28,12 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 8
 
 MAX_FAILED_LOGINS        = 5
 LOCKOUT_MINUTES          = 15
+# Wylogowanie po bezczynności — ta sama wartość co w kliencie
+# (frontend/src/hooks/useIdleLogout.js: IDLE_TIMEOUT_MS = 30 minut). Serwer
+# odrzuca token (401), gdy ostatnia aktywność sesji jest starsza (3.11).
+IDLE_TIMEOUT_MINUTES     = 30
+# Zapis ostatniej aktywności sesji do bazy najwyżej raz na tyle sekund.
+ACTIVITY_WRITE_INTERVAL_S = 60
 PASSWORD_MIN_LEN         = 12
 PASSWORD_MAX_AGE_DAYS_ADMIN = 90
 PASSWORD_MAX_AGE_DAYS_USER  = 180
@@ -81,16 +89,42 @@ def invalidate_tokens_now(user) -> None:
 # CONFIRM_WINDOW_MINUTES minut każda kolejna próba dostaje 429.
 # ---------------------------------------------------------------------------
 
-CONFIRM_MAX_FAILURES = 5
-CONFIRM_WINDOW_MINUTES = 15
+# Jeden budżet (3.11) — te same wartości co limit logowań.
+CONFIRM_MAX_FAILURES = MAX_FAILED_LOGINS
+CONFIRM_WINDOW_MINUTES = LOCKOUT_MINUTES
+
+# 3.11 — JEDEN budżet prób hasła (N-7): nieudane potwierdzenia hasłem z sesji
+# (`ATTEMPT_CONFIRM`, liczone dla konta niezależnie od adresu) i nieudane
+# logowania hasłem (`ATTEMPT_LOGIN`, liczone dla pary konto + adres IP — N8:
+# obcy z innego adresu nie zablokuje logowania właściciela konta). Każda próba
+# z danego adresu widzi: potwierdzenia konta + logowania z tego adresu. Próba
+# jest zapisywana PRZED weryfikacją hasła, atomowo z kontrolą limitu
+# (BEGIN IMMEDIATE) — równoległe żądania nie przekroczą limitu (N7).
+ATTEMPT_CONFIRM = "confirm"
+ATTEMPT_LOGIN = "login"
 
 
 def _confirm_window_start() -> datetime:
     return datetime.utcnow() - timedelta(minutes=CONFIRM_WINDOW_MINUTES)
 
 
-def password_confirm_failures(session, user_id: int) -> int:
-    """Liczba nieudanych potwierdzeń hasłem konta w bieżącym oknie."""
+def _db_time(value: datetime) -> str:
+    """Format daty, w jakim SQLAlchemy zapisuje DateTime w SQLite."""
+    return value.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
+def _budget_clause(ip: Optional[str]):
+    """Warunek SQLAlchemy: wpisy liczące się do budżetu prób z adresu `ip`."""
+    from sqlalchemy import func, or_
+    from models import PasswordConfirmFailure as F
+    kind = func.coalesce(F.kind, ATTEMPT_CONFIRM)
+    login_here = (kind == ATTEMPT_LOGIN) & (F.ip == ip if ip is not None else F.ip.is_(None))
+    return or_(kind == ATTEMPT_CONFIRM, login_here)
+
+
+def password_confirm_failures(session, user_id: int, ip: Optional[str] = None) -> int:
+    """Liczba nieudanych prób hasła konta w bieżącym oknie, które liczą się
+    dla adresu `ip` (potwierdzenia konta + logowania z tego adresu)."""
     from sqlalchemy import func
     from sqlmodel import select
     from models import PasswordConfirmFailure
@@ -98,39 +132,96 @@ def password_confirm_failures(session, user_id: int) -> int:
         select(func.count()).select_from(PasswordConfirmFailure)
         .where(PasswordConfirmFailure.user_id == user_id)
         .where(PasswordConfirmFailure.created_at > _confirm_window_start())
+        .where(_budget_clause(ip))
     ).one() or 0)
 
 
-def ensure_password_confirm_allowed(session, user) -> None:
-    """429, gdy konto wyczerpało limit prób potwierdzenia hasłem."""
-    if password_confirm_failures(session, user.id) >= CONFIRM_MAX_FAILURES:
-        raise HTTPException(
-            status.HTTP_429_TOO_MANY_REQUESTS,
-            "Zbyt wiele nieudanych prób potwierdzenia hasłem. "
-            f"Spróbuj ponownie za {CONFIRM_WINDOW_MINUTES} minut.")
+def _too_many_confirm_attempts() -> HTTPException:
+    return HTTPException(
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        "Zbyt wiele nieudanych prób potwierdzenia hasłem. "
+        f"Spróbuj ponownie za {CONFIRM_WINDOW_MINUTES} minut.")
 
 
-def register_password_confirm_failure(session, user, *, operation: str, event_type: str,
-                                      source: str, ip: Optional[str] = None,
-                                      severity=None) -> bool:
-    """Zapisuje nieudane potwierdzenie hasłem i zdarzenie bezpieczeństwa.
+def begin_password_attempt(user_id: int, *, kind: str, ip: Optional[str],
+                           operation: str) -> tuple[Optional[int], int]:
+    """Atomowo (BEGIN IMMEDIATE, osobne połączenie): sprząta wpisy spoza okna,
+    liczy próby z budżetu (`_budget_clause`) i — jeśli limit nie jest
+    wyczerpany — zapisuje TĘ próbę jako nieudaną, zanim hasło zostanie
+    sprawdzone. Udana weryfikacja usuwa wpis (`end_password_attempt`).
 
-    `severity` — waga pojedynczej nieudanej próby (domyślnie high); próba,
-    która wyczerpuje limit, dostaje wagę o stopień wyższą (high → critical,
-    medium → high). Zwraca True, gdy konto zostało właśnie zablokowane.
-    Zapis jest zatwierdzany od razu (wywołujący zwykle rzuca potem błąd)."""
-    from sqlalchemy import delete
-    from models import PasswordConfirmFailure, SecuritySeverity
+    Zwraca (id wpisu albo None, gdy limit wyczerpany; liczba prób przed tą)."""
+    from database import engine as db_engine
+    window = _db_time(_confirm_window_start())
+    raw = db_engine.raw_connection()
+    dbapi = raw.driver_connection
+    prev_isolation = dbapi.isolation_level
+    try:
+        dbapi.isolation_level = None
+        cur = dbapi.cursor()
+        cur.execute("BEGIN IMMEDIATE")
+        try:
+            cur.execute('DELETE FROM "passwordconfirmfailure" WHERE user_id = ? '
+                        'AND created_at <= ?', (user_id, window))
+            n = cur.execute(
+                'SELECT COUNT(*) FROM "passwordconfirmfailure" WHERE user_id = ? '
+                'AND created_at > ? AND (COALESCE(kind, ?) = ? '
+                'OR (COALESCE(kind, ?) = ? AND ip IS ?))',
+                (user_id, window, ATTEMPT_CONFIRM, ATTEMPT_CONFIRM,
+                 ATTEMPT_CONFIRM, ATTEMPT_LOGIN, ip)).fetchone()[0]
+            if n >= CONFIRM_MAX_FAILURES:
+                cur.execute("COMMIT")
+                return None, int(n)
+            cur.execute(
+                'INSERT INTO "passwordconfirmfailure" (user_id, created_at, operation, '
+                'kind, ip) VALUES (?, ?, ?, ?, ?)',
+                (user_id, _db_time(datetime.utcnow()), (operation or "")[:200], kind,
+                 (ip or None) and str(ip)[:64]))
+            attempt_id = cur.lastrowid
+            cur.execute("COMMIT")
+            return int(attempt_id), int(n)
+        except Exception:
+            try:
+                cur.execute("ROLLBACK")
+            except Exception:  # noqa: BLE001
+                _log.warning("ROLLBACK zapisu próby hasła nieudany", exc_info=True)
+            raise
+    finally:
+        dbapi.isolation_level = prev_isolation
+        raw.close()
+
+
+def end_password_attempt(session, attempt_id: Optional[int], *, user_id: int,
+                         kind: str, ip: Optional[str] = None) -> None:
+    """Hasło poprawne: usuń wpis tej próby i wcześniejsze porażki — przy
+    potwierdzeniu wszystkie porażki potwierdzeń konta, przy logowaniu porażki
+    logowania z tego adresu. Zatwierdza od razu."""
+    from sqlalchemy import delete, func
+    from models import PasswordConfirmFailure as F
+    if attempt_id is not None:
+        session.execute(delete(F).where(F.id == attempt_id))
+    stmt = delete(F).where(F.user_id == user_id)
+    if kind == ATTEMPT_LOGIN:
+        stmt = stmt.where(F.kind == ATTEMPT_LOGIN).where(
+            F.ip == ip if ip is not None else F.ip.is_(None))
+    else:
+        stmt = stmt.where(func.coalesce(F.kind, ATTEMPT_CONFIRM) == ATTEMPT_CONFIRM)
+    session.execute(stmt)
+    session.commit()
+
+
+def report_password_confirm_failure(session, user, *, operation: str, event_type: str,
+                                    source: str, ip: Optional[str] = None,
+                                    severity=None) -> bool:
+    """Zdarzenie bezpieczeństwa po nieudanym potwierdzeniu (wpis próby zapisał
+    już `begin_password_attempt`). `severity` — waga pojedynczej próby
+    (domyślnie high); próba, która wyczerpuje limit, dostaje wagę o stopień
+    wyższą (high → critical, medium → high). Zwraca True, gdy limit wyczerpany."""
+    from models import SecuritySeverity
     from services.security_events import emit as emit_security_event
 
     severity = severity or SecuritySeverity.high
-    # Sprzątanie wpisów spoza okna — tabela nie rośnie bez końca.
-    session.execute(delete(PasswordConfirmFailure)
-                    .where(PasswordConfirmFailure.user_id == user.id)
-                    .where(PasswordConfirmFailure.created_at <= _confirm_window_start()))
-    session.add(PasswordConfirmFailure(user_id=user.id, operation=operation[:200]))
-    session.commit()
-    failures = password_confirm_failures(session, user.id)
+    failures = password_confirm_failures(session, user.id, ip)
     blocked = failures >= CONFIRM_MAX_FAILURES
     if blocked:
         severity = (SecuritySeverity.critical if severity == SecuritySeverity.high
@@ -147,14 +238,23 @@ def register_password_confirm_failure(session, user, *, operation: str, event_ty
     return blocked
 
 
-def clear_password_confirm_failures(session, user) -> int:
-    """Udane potwierdzenie zeruje licznik konta. Zwraca liczbę usuniętych
-    wpisów (commit robi wywołujący)."""
-    from sqlalchemy import delete
-    from models import PasswordConfirmFailure
-    res = session.execute(delete(PasswordConfirmFailure)
-                          .where(PasswordConfirmFailure.user_id == user.id))
-    return int(res.rowcount or 0)
+def verify_password_with_limit(session, user, password: str, *, verify, operation: str,
+                               ip: Optional[str], event_type: str, source: str,
+                               severity=None) -> bool:
+    """Potwierdzenie hasłem z sesji w ramach wspólnego budżetu prób: rezerwacja
+    próby (429, gdy limit wyczerpany) → `verify()` → przy sukcesie wyczyszczenie
+    licznika, przy porażce zdarzenie bezpieczeństwa. Zwraca wynik weryfikacji."""
+    attempt_id, _before = begin_password_attempt(user.id, kind=ATTEMPT_CONFIRM, ip=ip,
+                                                 operation=operation)
+    if attempt_id is None:
+        raise _too_many_confirm_attempts()
+    if verify():
+        end_password_attempt(session, attempt_id, user_id=user.id, kind=ATTEMPT_CONFIRM)
+        return True
+    report_password_confirm_failure(session, user, operation=operation,
+                                    event_type=event_type, source=source, ip=ip,
+                                    severity=severity)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -163,27 +263,54 @@ def clear_password_confirm_failures(session, user) -> int:
 
 IDENTITY_FIELD_MAX = 200
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+# Znaki sterujące kierunkiem tekstu (LRE/RLE/PDF/LRO/RLO, LRI/RLI/FSI/PDI) —
+# pozwalają „odwrócić” wyświetlane nazwisko czy nazwę (podszycie). Usuwamy je.
+BIDI_CONTROL_RE = re.compile("[\u202a-\u202e\u2066-\u2069]")
+# Znaki niewidoczne (zero-width, znaczniki kierunku, BOM, miękki dywiz) —
+# nazwa złożona WYŁĄCZNIE z nich wygląda na pustą.
+_INVISIBLE_RE = re.compile("[\u00ad\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]")
+
+
+def strip_bidi_controls(value: Optional[str]) -> Optional[str]:
+    """Usuwa znaki sterujące kierunkiem tekstu (U+202A–U+202E, U+2066–U+2069)."""
+    if value is None:
+        return None
+    return BIDI_CONTROL_RE.sub("", str(value))
+
+
+def is_blank_text(value: Optional[str]) -> bool:
+    """Pusty tekst albo złożony wyłącznie z białych i niewidocznych znaków."""
+    return not _INVISIBLE_RE.sub("", value or "").strip()
 
 
 def clean_text_field(value: Optional[str], label: str, *,
                      max_len: int = IDENTITY_FIELD_MAX,
-                     required: bool = False) -> Optional[str]:
+                     required: bool = False,
+                     multiline: bool = False) -> Optional[str]:
     """Przycina spacje i sprawdza pole tekstowe: długość ≤ `max_len`, bez znaków
-    sterujących (NUL, CR/LF, tabulator…). Puste → None (albo 400, gdy
-    `required`). Błąd = HTTPException 400 z polskim komunikatem."""
+    sterujących (NUL, CR/LF, tabulator… — w polu `multiline` dozwolone są nowa
+    linia i tabulator). Znaki sterujące kierunkiem tekstu są usuwane, a tekst
+    złożony wyłącznie ze znaków niewidocznych traktowany jak pusty (3.11).
+    Puste → None (albo 400, gdy `required`). Błąd = HTTPException 400
+    z polskim komunikatem."""
     if value is None:
         if required:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Pole „{label}” jest wymagane")
         return None
-    text = str(value).strip()
-    if not text:
+    text = strip_bidi_controls(str(value)).strip()
+    if is_blank_text(text):
+        if text:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                f"Pole „{label}” nie może składać się wyłącznie "
+                                "ze znaków niewidocznych")
         if required:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Pole „{label}” jest wymagane")
         return None
     if len(text) > max_len:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"Pole „{label}” może mieć najwyżej {max_len} znaków")
-    if _CONTROL_CHARS_RE.search(text):
+    check = text.replace("\n", "").replace("\r", "").replace("\t", "") if multiline else text
+    if _CONTROL_CHARS_RE.search(check):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"Pole „{label}” zawiera niedozwolone znaki sterujące "
                             "(np. znak nowej linii)")
@@ -324,6 +451,69 @@ def password_change_required(user) -> bool:
     return bool(user.must_change_password) or is_password_expired(user)
 
 
+# Ostatnia aktywność sesji zapisana w bazie (jti → epoch) — pamięć procesu
+# ogranicza zapisy do jednego na ACTIVITY_WRITE_INTERVAL_S; źródłem prawdy
+# (także dla kilku procesów) jest tabela SessionActivity.
+_activity_seen: dict[str, float] = {}
+_activity_lock = Lock()
+_ACTIVITY_CACHE_MAX = 20000
+_activity_new_rows = 0
+
+
+def _session_idle_expired(session, jti: Optional[str], uid: int, iat: Optional[int]) -> bool:
+    """Wylogowanie po bezczynności po stronie serwera (3.11). Ostatnia
+    aktywność = max(zapis w bazie, pamięć procesu, wydanie tokenu). Starsza niż
+    IDLE_TIMEOUT_MINUTES → True (token odrzucany). Inaczej odnotowuje bieżącą
+    aktywność — w bazie najwyżej raz na ACTIVITY_WRITE_INTERVAL_S sekund."""
+    if not jti:
+        return False
+    from models import SessionActivity
+    now = time.time()
+    with _activity_lock:
+        last = _activity_seen.get(jti)
+    if last is None or now - last >= ACTIVITY_WRITE_INTERVAL_S:
+        row = session.get(SessionActivity, jti)
+        known = [x for x in (last, float(iat) if iat else None,
+                             (row.last_seen_at - datetime(1970, 1, 1)).total_seconds()
+                             if row else None) if x is not None]
+        last = max(known) if known else now
+        if now - last > IDLE_TIMEOUT_MINUTES * 60:
+            return True
+        try:
+            if row is None:
+                row = SessionActivity(jti=jti, user_id=uid)
+                global _activity_new_rows
+                _activity_new_rows += 1
+                if _activity_new_rows % 200 == 0:
+                    purge_session_activity(session)
+            row.last_seen_at = datetime.utcfromtimestamp(now)
+            session.add(row)
+            session.commit()
+        except Exception:  # noqa: BLE001 — np. równoległy INSERT tego samego jti
+            session.rollback()
+            _log.debug("Nie zapisano aktywności sesji %s", jti, exc_info=True)
+        with _activity_lock:
+            if len(_activity_seen) >= _ACTIVITY_CACHE_MAX:
+                cutoff = now - IDLE_TIMEOUT_MINUTES * 60
+                for k in [k for k, v in _activity_seen.items() if v < cutoff]:
+                    _activity_seen.pop(k, None)
+                if len(_activity_seen) >= _ACTIVITY_CACHE_MAX:
+                    _activity_seen.clear()
+            _activity_seen[jti] = now
+        return False
+    return now - last > IDLE_TIMEOUT_MINUTES * 60
+
+
+def purge_session_activity(session) -> int:
+    """Usuwa wpisy aktywności sesji starszych niż ważność tokenu (sprzątanie)."""
+    from sqlalchemy import delete
+    from models import SessionActivity
+    cutoff = datetime.utcnow() - timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    res = session.execute(delete(SessionActivity).where(SessionActivity.last_seen_at < cutoff))
+    session.commit()
+    return int(res.rowcount or 0)
+
+
 def get_current_user(request: Request, token: str = Depends(oauth2_scheme)):
     from database import engine as db_engine
     from sqlmodel import Session
@@ -359,6 +549,11 @@ def get_current_user(request: Request, token: str = Depends(oauth2_scheme)):
         if user.tokens_valid_from and iat is not None:
             if datetime.utcfromtimestamp(iat) < user.tokens_valid_from:
                 raise exc
+        if _session_idle_expired(session, jti, user.id, iat):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Sesja wygasła z powodu bezczynności — zaloguj się ponownie",
+                headers={"WWW-Authenticate": "Bearer"})
         # Blokada konta (locked_until) po błędnych hasłach blokuje WYŁĄCZNIE nowe
         # logowania hasłem — nie unieważnia ważnych sesji. Inaczej każdy mógłby
         # wylogować np. superadmina, wpisując kilka razy złe hasło (DoS).

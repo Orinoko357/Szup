@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
         from services import scheduler
         scheduler.stop()
     except Exception:
-        pass
+        logger.warning("Zatrzymanie harmonogramu migawek nie powiodło się", exc_info=True)
     logger.info("SZUP API stopped")
 
 
@@ -59,7 +59,7 @@ _PROD = os.getenv("SZUP_PROD", "").lower() in ("1", "true", "yes")
 
 app = FastAPI(
     title="SZUP",
-    version="3.10.0",
+    version="3.11.0",
     description="System Zarządzania Uprawnieniami IT",
     lifespan=lifespan,
     docs_url=None if _PROD else "/docs",
@@ -95,6 +95,18 @@ async def _integrity_error_handler(request: Request, exc: IntegrityError):
         status_code=409,
         content={"detail": "Operacja narusza integralność danych — element jest "
                            "powiązany z innymi rekordami (np. wnioskami)."},
+    )
+
+
+@app.exception_handler(OverflowError)
+async def _overflow_error_handler(request: Request, exc: OverflowError):
+    # N10 / N-1 — identyfikator spoza zakresu INTEGER bazy (np. 2^63) w ścieżce,
+    # zapytaniu albo treści żądania: sqlite3 rzuca OverflowError. To błąd danych
+    # wejściowych (400), nie błąd serwera (500).
+    logger.info("OverflowError na %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(
+        status_code=400,
+        content={"detail": "Nieprawidłowy identyfikator — liczba poza dopuszczalnym zakresem."},
     )
 
 

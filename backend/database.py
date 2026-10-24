@@ -471,6 +471,9 @@ def _run_migrations():
         ("user",             "ldap_guid",           "VARCHAR DEFAULT NULL"),
         # Odebranie pozycji przy usunięciu grupy uprawnień (3.10)
         ("requestitem",      "revoked_by_request_id", "INTEGER DEFAULT NULL"),
+        # Wspólny budżet prób hasła: logowania per (konto, IP) i potwierdzenia (3.11)
+        ("passwordconfirmfailure", "kind", "VARCHAR DEFAULT 'confirm'"),
+        ("passwordconfirmfailure", "ip",   "VARCHAR DEFAULT NULL"),
     ]
     from sqlalchemy import text
     with engine.connect() as conn:

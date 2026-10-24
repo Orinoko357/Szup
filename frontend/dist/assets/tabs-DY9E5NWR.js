@@ -1,0 +1,1 @@
+function l(t){const e=Array.from(t.currentTarget.querySelectorAll('[role="tab"]')),n=e.indexOf(t.target);if(n<0)return;const r=t.key==="ArrowRight"?(n+1)%e.length:t.key==="ArrowLeft"?(n-1+e.length)%e.length:t.key==="Home"?0:t.key==="End"?e.length-1:null;r!=null&&(t.preventDefault(),e[r].focus(),e[r].click())}export{l as o};

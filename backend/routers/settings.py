@@ -674,8 +674,9 @@ class FactoryResetRequest(BaseModel):
     wipe_structure: bool = True      # jednostki, wydziały, zastępcy
     wipe_users: bool = True          # wszyscy użytkownicy PRÓCZ wykonującego
     wipe_software: bool = False      # rejestr oprogramowania (systemy + uprawnienia)
-    wipe_audit: bool = False         # audit log + zdarzenia bezpieczeństwa
-                                     # (bez śladów czyszczeń i resetów)
+    wipe_audit: bool = False         # audit log + zdarzenia bezpieczeństwa STARSZE
+                                     # niż retencja (24 mies.); bez śladów czyszczeń
+                                     # i resetów
 
 
 class FactoryResetResult(BaseModel):
@@ -703,15 +704,18 @@ def factory_reset(
     Operacja NIEODWRACALNA — dostępna wyłącznie dla superadmina i wymagająca
     potwierdzenia hasłem oraz frazą „RESET". Konto wykonującego jest ZAWSZE
     zachowywane (inaczej nikt nie mógłby się zalogować po resecie).
-    `wipe_audit` nie usuwa śladów czyszczeń dzienników ani wcześniejszych
-    resetów (`PURGE_TRACE_ACTIONS`); ślad tego resetu powstaje w tej samej
+    `wipe_audit` usuwa wyłącznie wpisy dzienników starsze niż obowiązkowa
+    retencja (RETENTION_MONTHS = 24 miesiące, jak POST /audit/purge — 3.11)
+    i nie usuwa śladów czyszczeń dzienników ani wcześniejszych resetów
+    (`PURGE_TRACE_ACTIONS`); ślad tego resetu powstaje w tej samej
     transakcji co czyszczenie.
     Domyślne szablony obiegu i typy wniosków odtworzy `init_db()` przy starcie.
     """
     import logging
     from sqlalchemy import text
     from services.audit import (
-        PURGE_TRACE_ACTIONS, confirm_password, record_event, request_meta,
+        PURGE_TRACE_ACTIONS, RETENTION_MONTHS, confirm_password, record_event,
+        request_meta, retention_limit,
     )
     from services.security_events import emit as emit_security_event
 
@@ -828,6 +832,7 @@ def factory_reset(
             _wipe("departmentdeputy", f"user_id <> {int(current_user.id)}")
             _wipe("revokedtoken")
             _wipe("passwordconfirmfailure", f"user_id <> {int(current_user.id)}")
+            _wipe("sessionactivity", f"COALESCE(user_id, 0) <> {int(current_user.id)}")
             _wipe("user", f"id <> {int(current_user.id)}")
 
         # 4) Struktura organizacyjna.
@@ -848,12 +853,19 @@ def factory_reset(
             drop_auditlog_triggers(session)
             audit_triggers_dropped = True
             keep = ", ".join("'" + a.replace("'", "''") + "'" for a in PURGE_TRACE_ACTIONS)
-            _wipe("auditlog", f"COALESCE(action, '') NOT IN ({keep})")
-            _wipe("securityevent", f"COALESCE(event_type, '') NOT IN ({keep})")
+            # Obowiązkowa retencja (NIS2/KSC): tylko wpisy starsze niż 24 mies.
+            cutoff = retention_limit().strftime("%Y-%m-%d %H:%M:%S.%f")
+            _wipe("auditlog", f"COALESCE(action, '') NOT IN ({keep}) "
+                              f"AND \"timestamp\" < '{cutoff}'")
+            _wipe("securityevent", f"COALESCE(event_type, '') NOT IN ({keep}) "
+                                   f"AND created_at < '{cutoff}'")
+            details.append(f"dzienniki: usunięto tylko wpisy starsze niż {RETENTION_MONTHS} "
+                           "miesiące (obowiązkowa retencja)")
 
         # 6) Ślad resetu — w tej samej transakcji co czyszczenie: nie ma resetu
         #    bez śladu. (record_event / emit z commit=False — zatwierdza commit niżej.)
         trace = {"deleted": dict(deleted),
+                 "audit_retention_months": RETENTION_MONTHS if data.wipe_audit else None,
                  "scope": {k: bool(getattr(data, k)) for k in (
                      "wipe_requests", "wipe_structure", "wipe_users",
                      "wipe_software", "wipe_audit")}}
@@ -1106,21 +1118,32 @@ def config_health(
     # Superadmin to konto awaryjne (break-glass) do KONFIGURACJI — nie powinien
     # mieć ról operacyjnych (kierownik, IT). Nowych takich połączeń nie da się
     # już zapisać; ostrzegamy o kontach sprzed tej zmiany.
+    # 3.11 (Ś-2): także superadmin przypisany do komórki (np. kadrowej —
+    # zdolność kadrowa) albo kierujący stanowiskiem w strukturze.
     from services.permissions import SUPERADMIN_FORBIDDEN_ROLES
-    mixed_superadmins = sorted(
-        u.username for u in session.exec(select(User).where(User.is_active == True)).all()  # noqa: E712
-        if "superadmin" in parse_roles(u.roles)
-        and set(parse_roles(u.roles)) & SUPERADMIN_FORBIDDEN_ROLES
-    )
+    mixed: list[str] = []
+    for u in session.exec(select(User).where(User.is_active == True)).all():  # noqa: E712
+        roles = set(parse_roles(u.roles))
+        if "superadmin" not in roles:
+            continue
+        why = []
+        if roles & SUPERADMIN_FORBIDDEN_ROLES:
+            why.append("role operacyjne")
+        if u.department_id is not None:
+            why.append("przypisany do komórki")
+        if why:
+            mixed.append(f"{u.username} ({', '.join(why)})")
+    mixed.sort()
     checks.append({
         "key": "superadmin_operational",
-        "label": ("Superadmin z rolami operacyjnymi" if mixed_superadmins
-                  else "Superadmin bez ról operacyjnych"),
-        "ok": not mixed_superadmins, "level": "warning",
+        "label": ("Superadmin z rolami operacyjnymi lub w komórce" if mixed
+                  else "Superadmin bez ról operacyjnych i poza komórkami"),
+        "ok": not mixed, "level": "warning",
         "detail": ("Konto superadmina służy wyłącznie do konfiguracji — odbierz role "
-                   "kierownika / IT kontom: " + ", ".join(mixed_superadmins)
-                   if mixed_superadmins else
-                   "Żadne konto superadmina nie ma roli kierownika ani IT"),
+                   "kierownika / IT i odepnij od komórki konta: " + ", ".join(mixed)
+                   if mixed else
+                   "Żadne konto superadmina nie ma roli kierownika ani IT i nie jest "
+                   "przypisane do komórki"),
         "link": "/users",
     })
 

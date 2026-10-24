@@ -10,6 +10,7 @@ import {
  errorMessage} from '../api'
 import { fmtDate } from '../serverTime'
 import { toast } from '../components/ui/feedback'
+import { onTablistKeyDown } from '../components/ui/tabs'
 import Modal from '../components/ui/Modal'
 import { LoadError } from '../components/ui/LoadState'
 import { getUserRoles, hasAnyRole } from '../roles'
@@ -35,20 +36,25 @@ export default function PermissionRegistry() {
         </div>
       </div>
 
-      <div className="tabs" role="tablist" aria-label="Widok rejestru" style={{ marginTop: 0 }}>
-        <button role="tab" aria-selected={mode === 'current'}
+      <div className="tabs" role="tablist" aria-label="Widok rejestru" style={{ marginTop: 0 }}
+           onKeyDown={onTablistKeyDown}>
+        <button role="tab" aria-selected={mode === 'current'} id="registry-tab-current" aria-controls="registry-panel"
+                tabIndex={mode === 'current' ? 0 : -1}
                 className={`tab-btn${mode === 'current' ? ' active' : ''}`}
                 onClick={() => setMode('current')}>
           Stan bieżący
         </button>
-        <button role="tab" aria-selected={mode === 'snapshots'}
+        <button role="tab" aria-selected={mode === 'snapshots'} id="registry-tab-snapshots" aria-controls="registry-panel"
+                tabIndex={mode === 'snapshots' ? 0 : -1}
                 className={`tab-btn${mode === 'snapshots' ? ' active' : ''}`}
                 onClick={() => setMode('snapshots')}>
           Migawki 23:50
         </button>
       </div>
 
-      {mode === 'current' ? <CurrentRegistry /> : <SnapshotsRegistry isAdmin={isAdmin} />}
+      <div role="tabpanel" id="registry-panel" aria-labelledby={`registry-tab-${mode}`}>
+        {mode === 'current' ? <CurrentRegistry /> : <SnapshotsRegistry isAdmin={isAdmin} />}
+      </div>
     </div>
   )
 }

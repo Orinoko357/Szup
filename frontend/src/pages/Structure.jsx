@@ -33,6 +33,7 @@ export default function Structure({ renderHeader }) {
   return (
     <div>
       {renderHeader(load, loading)}
+      <div role="tabpanel" id="myteam-panel" aria-labelledby="myteam-tab-structure">
 
       <section aria-label="Struktura" className="card" style={{ padding: err ? 0 : 12, overflow: 'hidden' }}>
         {loading ? (
@@ -53,6 +54,7 @@ export default function Structure({ renderHeader }) {
           </div>
         )}
       </section>
+      </div>
     </div>
   )
 }

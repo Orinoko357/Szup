@@ -156,6 +156,19 @@ i kończy się błędem (ze ścieżką kopii bazy), gdy usługa nie odpowiada (b
   pokazuje to jako rekomendację, a nie błąd. Elementy listy mają pole `level`:
   `required`, `warning` albo `recommendation`.
 
+**Aktualizacja do 3.11 — uwagi dla administratora:**
+- blokada po 5 nieudanych próbach hasła dotyczy pary konto + adres IP
+  (obcy adres nie zablokuje superadmina); nieudane potwierdzenia hasłem
+  i logowania liczą się do jednego limitu. Odblokowanie: administrator,
+  reset hasła albo `tools/reset_password.py`;
+- serwer wylogowuje po 30 minutach bezczynności (tak jak przeglądarka);
+- niewykonane odebrania po likwidacji komórki lub usunięciu grupy trafiają do
+  kolejki IT — zrealizuj je jak zwykłe wnioski;
+- superadmin nie może mieć komórki — lista kontrolna wskaże takie konto;
+  odepnij je w Użytkownikach;
+- python-jose zastąpiono PyJWT; `deploy.sh` doinstaluje pakiet (stary można
+  usunąć: `venv/bin/pip uninstall python-jose ecdsa`).
+
 **Aktualizacja do 3.10 — uwagi dla administratora:**
 - czyszczenie dziennika zdarzeń i zdarzeń bezpieczeństwa obejmuje wyłącznie
   wpisy starsze niż 24 miesiące (retencja); trybu „wszystko” nie ma, data

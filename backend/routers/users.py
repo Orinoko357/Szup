@@ -76,6 +76,19 @@ def _validate_roles(roles: list[str]) -> None:
             )
 
 
+SUPERADMIN_DEPT_MSG = ("Superadmin to konto awaryjne i konfiguracyjne — nie może być "
+                       "przypisany do żadnej komórki (także kadrowej). Do pracy w obiegu "
+                       "wniosków użyj osobnego konta")
+
+
+def _clear_login_failures(session: Session, user_id: int) -> None:
+    """Odblokowanie konta: usuń nieudane logowania z budżetu prób (wszystkie
+    adresy). Nieudane potwierdzenia hasłem z sesji zostają (commit — wołający)."""
+    from sqlalchemy import delete
+    from models import PasswordConfirmFailure as F
+    session.execute(delete(F).where(F.user_id == user_id).where(F.kind == "login"))
+
+
 def _audit_user(session: Session, request: Optional[Request], actor: User, *,
                 action: str, target: User, details: Optional[dict] = None) -> None:
     """Wpis w audit logu o zmianie konta. W `details` nigdy nie ma haseł."""
@@ -97,10 +110,15 @@ def _roles_granted_event(session: Session, request: Optional[Request], actor: Us
     from services.audit import request_meta
     from services.security_events import emit as emit_security_event
     severity = SecuritySeverity.high if sensitive & ADMIN_ROLES else SecuritySeverity.medium
+    if "superadmin" in sensitive:
+        # Nowe konto awaryjne — pełna kontrola nad systemem (3.11, N-5).
+        severity = SecuritySeverity.critical
+    from services.security_events import role_labels
+    labels = role_labels(sorted(sensitive))
     emit_security_event(
         session, event_type="user.roles_granted", source="users", severity=severity,
-        summary=(f"Nadano role {', '.join(sorted(sensitive))} kontu {target.username} "
-                 f"przez {actor.username}"),
+        summary=(f"Nadano {'rolę' if len(labels) == 1 else 'role'} {', '.join(labels)} "
+                 f"kontu {target.username} przez {actor.username}"),
         details={"target_user_id": target.id, "target_username": target.username,
                  "granted": sorted(sensitive)},
         user_id=actor.id, ip=request_meta(request)["ip"],
@@ -349,6 +367,14 @@ def _effective_permissions(session: Session, user_id: int) -> dict:
     items_by_req: dict[int, list] = {}
     for it in items:
         items_by_req.setdefault(it.request_id, []).append(it)
+    # Oznaczenie systemowe (`revoked_by_request_id`) działa dopiero, gdy wniosek
+    # odbierający zrealizowało IT (3.11: odebrania trafiają do kolejki IT).
+    marked = {it.revoked_by_request_id for it in items
+              if getattr(it, "revoked_by_request_id", None)}
+    revoked_done = set(session.exec(
+        select(AccessRequest.id).where(_col(AccessRequest.id).in_(list(marked)))
+        .where(AccessRequest.status == RequestStatus.completed)
+    ).all()) if marked else set()
 
     def _ts(r):
         return r.completed_at or r.approved_at or r.created_at
@@ -376,7 +402,7 @@ def _effective_permissions(session: Session, user_id: int) -> dict:
                 continue
             # Nadanie odebrane systemowo (np. usunięcie posiadanej grupy przez
             # superadmina) — wskazuje wniosek odebrania; już nie jest posiadane.
-            if getattr(it, "revoked_by_request_id", None):
+            if getattr(it, "revoked_by_request_id", None) in revoked_done:
                 current.pop(key, None)
                 continue
             s = sys_map.get(it.system_id); p = perm_map.get(it.permission_id)
@@ -469,21 +495,34 @@ def user_permissions(
     session: Session = Depends(get_session),
 ):
     """Bieżące uprawnienia wskazanego pracownika — dla kierownika przy wniosku
-    o odebranie (ustanie stosunku pracy). Dostęp: sam pracownik, admin lub
-    kierownik jego komórki."""
-    target = session.get(User, user_id)
+    o odebranie (ustanie stosunku pracy) i kopiowaniu uprawnień.
+
+    Dostęp (B6, 3.11) wymaga uprawnionej relacji albo roli:
+      - sam pracownik,
+      - administrator / superadmin (konfiguracja, przegląd),
+      - pracownik IT (realizacja wniosków), kadry (komórka kadrowa — ustanie),
+      - kierownik / przełożony z zakresem obejmującym komórkę pracownika,
+      - osoba, która może działać na bieżącym kroku wniosku tego pracownika.
+    Pozostali (np. zwykły pracownik) — 403."""
+    from services.structure import db_int_ok
+    from services.permissions import user_is_hr
+    target = session.get(User, user_id) if db_int_ok(user_id) else None
     if not target:
         raise HTTPException(404, "Pracownik nie istnieje")
-    if current_user.id != user_id and not has_role(current_user, "superadmin", "admin"):
+    allowed = (current_user.id == user_id
+               or has_role(current_user, "superadmin", "admin", "it_staff")
+               or user_is_hr(session, current_user))
+    if not allowed and has_role(current_user, "manager") and target.department_id is not None:
         # Zakres kierownika i przełożonego (poddrzewo, cała jednostka dyrektora),
         # spójny z zakresem wniosków. Podgląd uprawnień nie oznacza prawa do
         # działania w obiegu — przełożony działa tylko po przejęciu wniosku albo
         # w komórce bez kierownika (services.workflow.can_act).
-        scope = manager_scope_ids(session, current_user)
-        if target.department_id not in scope and not _can_act_on_worker_request(
-                session, current_user, user_id):
-            raise HTTPException(status.HTTP_403_FORBIDDEN,
-                "Brak dostępu do uprawnień tego pracownika")
+        allowed = target.department_id in manager_scope_ids(session, current_user)
+    if not allowed:
+        allowed = _can_act_on_worker_request(session, current_user, user_id)
+    if not allowed:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+            "Brak dostępu do uprawnień tego pracownika")
     return _effective_permissions(session, user_id)
 
 
@@ -540,8 +579,8 @@ def users_by_department(
 ):
     """Aktywni pracownicy danej komórki — dla formularza HR (ustanie stosunku
     pracy: wybór pracownika z listy). Dostęp operacyjny: kadry (komórka
-    kadrowa) i kierownik, superadmin — break-glass. Administrator (Wariant A)
-    nie działa operacyjnie.
+    kadrowa) i kierownik; superadmin widzi wszystkie komórki (podgląd przy
+    konfiguracji). Administrator (Wariant A) nie działa operacyjnie.
 
     IDOR/RODO: sam fakt roli nie wystarcza — zakres musi obejmować tę komórkę:
       - kierownik: tylko wydziały, którymi kieruje (bezpośrednio/zastępczo/2-st.),
@@ -613,13 +652,19 @@ def users_by_department(
 def users_search(
     q: str = "",
     limit: int = 30,
+    include_inactive: bool = False,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     """Wyszukiwanie aktywnych pracowników po nazwisku/loginie — dla formularza
     HR (ustanie): znajdź osobę bez przeklikiwania drzewa komórek. Zakres jak w
     innych operacjach HR/kierownika; zwraca też komórkę i jednostkę, żeby front
-    mógł od razu ustawić miejsce pracy."""
+    mógł od razu ustawić miejsce pracy.
+
+    `include_inactive=true` (tylko kadry) — dodatkowo konta nieaktywne, które
+    nadal mają uprawnienia efektywne (ustanie). Każdy wynik ma `is_active`
+    i `department_live` (False, gdy osoba nie ma komórki albo komórka jest
+    nieaktywna / zlikwidowana — kadry wskazują wtedy komórkę docelową)."""
     from services.permissions import user_is_hr
     hr_cap = user_is_hr(session, current_user)
     if not (has_role(current_user, "superadmin", "manager") or hr_cap):
@@ -637,7 +682,11 @@ def users_search(
     if len(ql) < 2:
         return []
 
-    rows = session.exec(select(User).where(User.is_active == True)).all()  # noqa: E712
+    with_inactive = bool(include_inactive and hr_cap)
+    stmt = select(User)
+    if not with_inactive:
+        stmt = stmt.where(User.is_active == True)  # noqa: E712
+    rows = session.exec(stmt).all()
 
     # Kierownik — tylko swój zakres komórek; kadry i superadmin — wszyscy.
     allowed_dept_ids = None     # None = bez ograniczenia
@@ -656,16 +705,43 @@ def users_search(
         d = dept_map.get(u.department_id)
         if allowed_dept_ids is not None and u.department_id not in allowed_dept_ids:
             continue
+        # Konto nieaktywne — tylko gdy nadal ma uprawnienia (do odebrania).
+        if not u.is_active and not _effective_permissions(session, u.id)["permissions"]:
+            continue
         out.append({
             "id": u.id, "full_name": u.full_name, "username": u.username, "email": u.email,
             "title": u.title or "",
+            "is_active": bool(u.is_active),
             "department_id": u.department_id,
             "department_name": d.name if d else None,
+            "department_live": bool(d and d.is_active and not getattr(d, "archived_at", None)),
             "unit_id": d.unit_id if d else None,
             "unit_name": unit_map.get(d.unit_id) if d else None,
         })
     out.sort(key=lambda x: (x["full_name"] or x["username"] or "").lower())
     return out[:max(1, min(limit, 100))]
+
+
+_log_users = logging.getLogger("szup.users")
+
+
+def _preview_graph(session: Session) -> Optional[dict]:
+    """Graf obiegu, którym MyTeam składa wnioski (typ „Zmiana uprawnień” —
+    MODIFY; awaryjnie pierwszy aktywny typ). None — brak poprawnego szablonu."""
+    import json as _json
+    from models import RequestType, WorkflowTemplate
+    rt = session.exec(select(RequestType).where(RequestType.code == "MODIFY")
+                      .where(RequestType.is_active == True)).first()  # noqa: E712
+    if rt is None:
+        rt = session.exec(select(RequestType).where(RequestType.is_active == True)  # noqa: E712
+                          .order_by(RequestType.id)).first()
+    tpl = session.get(WorkflowTemplate, rt.workflow_template_id) if rt else None
+    if tpl is None:
+        return None
+    try:
+        return _json.loads(tpl.graph_json)
+    except (ValueError, TypeError):
+        return None
 
 
 @router.get("/my-workers")
@@ -710,25 +786,29 @@ def my_workers(
             ).all()
         }
 
-    # Wniosek przełożonego dla pracownika komórki, która ma WŁASNEGO aktywnego
-    # kierownika, jest przy składaniu automatycznie przejmowany (zatrzymany
-    # u przełożonego) — front uprzedza o tym przy wyborze pracownika.
-    from services.permissions import has_active_manager, is_department_manager_or_deputy
-    take_over_cache: dict[int, bool] = {}
+    # Podgląd złożenia wniosku przez bieżącego użytkownika (te same reguły co
+    # POST /requests/): `will_take_over` — przełożony od razu przejmuje wniosek
+    # dla komórki z własnym kierownikiem; `landing_node_type` — węzeł, na którym
+    # stanie obieg po złożeniu wniosku z pozycjami (np. „it_execute”,
+    # „higher_manager_approve”, „select_permissions” — wniosek zostaje u
+    # kierownika / czeka na przełożonego).
+    preview_graph = _preview_graph(session)
 
-    def _will_take_over(d: Optional[Department]) -> bool:
-        if d is None:
-            return False
-        if d.id not in take_over_cache:
-            take_over_cache[d.id] = bool(
-                not is_department_manager_or_deputy(session, current_user, d)
-                and has_active_manager(session, d))
-        return take_over_cache[d.id]
+    def _preview(worker: User, d: Optional[Department]) -> dict:
+        from services.workflow import preview_new_request
+        if d is None or preview_graph is None:
+            return {"landing_node_type": None, "will_take_over": False}
+        try:
+            return preview_new_request(session, current_user, worker, d, preview_graph)
+        except Exception:   # podpowiedź dla etykiety — nie może wywrócić listy
+            _log_users.exception("Podgląd obiegu dla pracownika %s nie powiódł się", worker.id)
+            return {"landing_node_type": None, "will_take_over": False}
 
     result = []
     for u in workers:
         d = depts_map.get(u.department_id)
         un = units_map.get(d.unit_id) if d else None
+        pv = _preview(u, d)
         result.append({
             "id": u.id,
             "username": u.username,
@@ -745,7 +825,8 @@ def my_workers(
             # dopiero kierownik II stopnia, więc nie pokazuje go przy tworzeniu.
             "requires_higher_approval": bool(d.requires_higher_approval) if d else False,
             "is_self": False,
-            "will_take_over": _will_take_over(d),
+            "will_take_over": pv["will_take_over"],
+            "landing_node_type": pv["landing_node_type"],
             # Aktualnie posiadane uprawnienia (nadane − odebrane). Kierownik
             # widzi je na liście, a formularz nowego wniosku ma je wstępnie
             # zaznaczone (wniosek o zmianę = modyfikacja obecnego stanu).
@@ -759,6 +840,7 @@ def my_workers(
         session.get(Department, me.department_id) if me.department_id else None)
     mun = (units_map.get(md.unit_id) if (md and md.unit_id) else None) or (
         session.get(Unit, md.unit_id) if (md and md.unit_id) else None)
+    mpv = _preview(me, md)
     result.insert(0, {
         "id": me.id,
         "username": me.username,
@@ -773,7 +855,8 @@ def my_workers(
         "is_escalated": False,
         "requires_higher_approval": bool(md.requires_higher_approval) if md else False,
         "is_self": True,
-        "will_take_over": False,
+        "will_take_over": mpv["will_take_over"],
+        "landing_node_type": mpv["landing_node_type"],
         "permissions": _effective_permissions(session, me.id)["permissions"],
     })
 
@@ -948,6 +1031,8 @@ def create_user(
         validate_password_strength(data.password)
 
     if data.department_id is not None:
+        if "superadmin" in (data.roles or []):
+            raise HTTPException(400, SUPERADMIN_DEPT_MSG)
         # Komórka zlikwidowana (archiwum) albo nieaktywna nie przyjmuje kont (F8).
         from services.structure import live_department
         live_department(session, data.department_id)
@@ -1041,6 +1126,15 @@ def update_user(
                 and (data.department_id or None) != user.department_id):
             raise HTTPException(status.HTTP_403_FORBIDDEN,
                 "Administrator nie może zmieniać własnej komórki — poproś o to superadmina")
+    # Superadmin nie jest przypisany do żadnej komórki (3.11, Ś-2) — także
+    # kadrowej (zdolność kadrowa). Odpięcie (null) zawsze dozwolone.
+    final_roles = data.roles if data.roles is not None else parse_roles(user.roles)
+    final_dept = (data.department_id or None) if "department_id" in data.model_fields_set \
+        else user.department_id
+    if "superadmin" in final_roles and final_dept is not None and (
+            "department_id" in data.model_fields_set
+            or not has_role(user, "superadmin")):
+        raise HTTPException(400, SUPERADMIN_DEPT_MSG)
     deactivated = data.is_active is False and user.is_active
     # Stan „kto odpowiada za krok” wniosków w toku — PRZED zmianą is_active
     # (po niej nieaktywny kierownik już się nie liczy i nowy odpowiedzialny
@@ -1139,6 +1233,7 @@ def reset_password(
     user.must_change_password = True
     user.failed_login_count = 0
     user.locked_until = None
+    _clear_login_failures(session, user.id)
     # Wszystkie dotychczasowe sesje konta tracą ważność.
     invalidate_tokens_now(user)
     session.add(user); session.commit()
@@ -1152,12 +1247,12 @@ def reset_password(
         sensitive.add("hr")
     if sensitive:
         from services.audit import request_meta
-        from services.security_events import emit as emit_security_event
+        from services.security_events import emit as emit_security_event, role_labels
         emit_security_event(
             session, event_type="user.password_reset", source="users",
             severity=SecuritySeverity.high,
             summary=(f"Zresetowano hasło konta {user.username} "
-                     f"({', '.join(sorted(sensitive))}) przez {current_user.username}"),
+                     f"({', '.join(role_labels(sorted(sensitive)))}) przez {current_user.username}"),
             details={"target_user_id": user.id, "target_username": user.username,
                      "roles": sorted(sensitive)},
             user_id=current_user.id, ip=request_meta(request)["ip"],
@@ -1177,6 +1272,7 @@ def unlock_account(
     _guard_admin_account(current_user, user)
     user.failed_login_count = 0
     user.locked_until = None
+    _clear_login_failures(session, user.id)
     session.add(user); session.commit()
     return {"ok": True}
 
@@ -1254,8 +1350,10 @@ class LdapUserImportResult(BaseModel):
 
 
 def _build_dn_to_dept_map(session: Session) -> tuple[dict[str, int], set[str]]:
-    """Mapa znormalizowany DN OU → Department.id (tylko komórki niezarchiwizowane)
-    oraz zbiór DN przypisanych KILKU komórkom naraz.
+    """Mapa znormalizowany DN OU → Department.id (tylko komórki niezarchiwizowane
+    i aktywne) oraz zbiór DN, których nie wolno użyć do przypisania: przypisanych
+    KILKU komórkom naraz albo komórce NIEAKTYWNEJ (3.11 — ta sama reguła co
+    `live_department` w formularzu i API).
 
     DN niejednoznacznego nie rozstrzygamy (dawniej wygrywała komórka o wyższym
     id — dopisanie DN do nowej komórki, np. kadrowej, przenosiło importem całą
@@ -1267,6 +1365,11 @@ def _build_dn_to_dept_map(session: Session) -> tuple[dict[str, int], set[str]]:
         if not d.ldap_dn or getattr(d, "archived_at", None) is not None:
             continue
         key = normalize_dn(d.ldap_dn)
+        if not d.is_active:
+            # Nieaktywna komórka nie przyjmuje kont — ale jej OU nie może też
+            # „przeciec” do komórki nadrzędnej (wspinaczka po DN).
+            ambiguous.add(key)
+            continue
         if key in out and out[key] != d.id:
             ambiguous.add(key)
         out.setdefault(key, d.id)
@@ -1534,7 +1637,8 @@ def ldap_users_import(
         dept_id, unit_id, ambiguous = _resolve_dept_unit(u["parent_dn"])
         if ambiguous:
             details.append(f"⚠ {u['username']} — OU „{ambiguous}” jest przypisana kilku "
-                           "komórkom; komórki nie zmieniono (popraw powiązania w strukturze)")
+                           "komórkom albo komórce nieaktywnej; komórki nie zmieniono "
+                           "(popraw powiązania w strukturze)")
         # Importujemy WYŁĄCZNIE osoby z powiązanych jednostek organizacyjnych —
         # jeśli OU użytkownika nie mieści się w zaimportowanej strukturze, pomijamy.
         if dept_id is None and unit_id is None:
@@ -1559,7 +1663,14 @@ def ldap_users_import(
             old = {"full_name": existing.full_name, "email": existing.email,
                    "department_id": existing.department_id, "title": existing.title or ""}
             new_dept_id = dept_id or existing.department_id
-            if existing.id == current_user.id and new_dept_id != existing.department_id:
+            if has_role(existing, "superadmin") and new_dept_id is not None:
+                # Superadmin nie należy do żadnej komórki (3.11).
+                if new_dept_id != existing.department_id:
+                    details.append(f"⚠ {u['username']} — konto superadmina: komórki nie "
+                                   "przypisano (superadmin nie należy do struktury)")
+                new_dept_id = None
+            if existing.id == current_user.id and new_dept_id != existing.department_id \
+                    and not has_role(existing, "superadmin"):
                 # Własnej komórki nie zmienia się importem — tak jak w edycji konta
                 # (komórka kadrowa dałaby sobie samemu zdolność kadrową).
                 new_dept_id = existing.department_id

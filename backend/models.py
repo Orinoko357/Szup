@@ -665,6 +665,20 @@ class PasswordConfirmFailure(SQLModel, table=True):
     user_id: int = Field(index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     operation: Optional[str] = Field(default=None)
+    # 3.11 — jeden budżet prób dla potwierdzeń hasłem i logowań:
+    # kind = "confirm" (sesja potwierdza hasło; liczy się dla konta) albo
+    # "login" (logowanie hasłem; liczy się dla pary konto + adres IP).
+    # NULL (wiersze sprzed 3.11) = "confirm".
+    kind: Optional[str] = Field(default="confirm")
+    ip: Optional[str] = Field(default=None)
+
+
+class SessionActivity(SQLModel, table=True):
+    """Ostatnia aktywność sesji (tokenu) — wylogowanie po bezczynności po
+    stronie serwera (3.11). Zapis najwyżej raz na minutę na sesję."""
+    jti: str = Field(primary_key=True)
+    user_id: Optional[int] = Field(default=None, index=True)
+    last_seen_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
 
 # ---------------------------------------------------------------------------

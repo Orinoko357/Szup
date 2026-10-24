@@ -111,3 +111,47 @@ def is_system_request(req: Optional[AccessRequest]) -> bool:
         return False
     return (req.manager_comment or "").startswith(SYSTEM_REQUEST_PREFIX) \
         or (getattr(req, "it_comment", None) or "").startswith(SYSTEM_REQUEST_PREFIX)
+
+
+# ---------------------------------------------------------------------------
+# Limity pól tekstowych struktury i rejestru (3.11, N-2)
+# ---------------------------------------------------------------------------
+
+# Nazwy (komórka, jednostka, oprogramowanie, uprawnienie, dostawca, etykieta
+# zastępcy) — jak nazwisko i login konta; opisy i notatki — wielowierszowe.
+NAME_MAX = 200
+DESCRIPTION_MAX = 2000
+
+# (etykieta, limit, wielowierszowe, wymagane gdy podane)
+FieldSpec = tuple[str, int, bool, bool]
+
+
+def name_spec(label: str, *, required: bool = True) -> FieldSpec:
+    return (label, NAME_MAX, False, required)
+
+
+def text_spec(label: str) -> FieldSpec:
+    return (label, NAME_MAX, False, False)
+
+
+def description_spec(label: str = "opis") -> FieldSpec:
+    return (label, DESCRIPTION_MAX, True, False)
+
+
+def clean_model_fields(data: Any, spec: dict[str, FieldSpec]) -> None:
+    """Sprawdza i czyści (w miejscu) pola modelu wejściowego wg `spec`:
+    długość, znaki sterujące, znaki kierunku tekstu, nazwy złożone wyłącznie ze
+    znaków niewidocznych (`services.auth_service.clean_text_field`). Pole
+    nieobecne w żądaniu (PATCH) jest pomijane; pole wymagane podane jako
+    puste → 400. Błąd = HTTPException 400 z polskim komunikatem."""
+    from services.auth_service import clean_text_field
+    present = getattr(data, "model_fields_set", None)
+    for field, (label, max_len, multiline, required) in spec.items():
+        if present is not None and field not in present and getattr(data, field, None) is None:
+            continue
+        value = getattr(data, field, None)
+        if value is not None and not isinstance(value, str):
+            raise HTTPException(400, f"Pole „{label}” musi być tekstem")
+        cleaned = clean_text_field(value, label, max_len=max_len, required=required,
+                                   multiline=multiline)
+        setattr(data, field, cleaned)

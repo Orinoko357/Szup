@@ -1,6 +1,13 @@
 import { useEffect, useRef } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
-import { focusIfLost, PAGE_HEADING } from './focus'
+import { focusIfLost, focusTarget, PAGE_HEADING } from './focus'
+
+// v3.11 (N2): karta często odmontowuje się na czas „Ładowanie…” i montuje od nowa,
+// gdy ponowienie też się nie uda. Zapamiętujemy chwilę odmontowania po „Spróbuj
+// ponownie” — nowa karta zamontowana zaraz potem przejmuje fokus na swój przycisk
+// (zamiast zostawić go na h1, gdzie odłożyła go poprzednia).
+let retryUnmountedAt = 0
+const RETRY_WINDOW_MS = 15000
 
 /**
  * Wspólne komunikaty błędów (v3.8).
@@ -31,14 +38,26 @@ export function ErrorAlert({ children, className = '', style, id }) {
 export function LoadError({ message, onRetry, busy = false, title = 'Nie udało się wczytać danych',
                             card = false, style, focusAfter = PAGE_HEADING }) {
   const retried = useRef(false)
+  const btn = useRef(null)
   const target = useRef(focusAfter)
   target.current = focusAfter
   useEffect(() => () => {
-    if (retried.current) focusIfLost(target.current)
+    if (retried.current) {
+      retryUnmountedAt = Date.now()
+      focusIfLost(target.current)
+    }
+  }, [])
+  useEffect(() => {
+    if (!retryUnmountedAt || Date.now() - retryUnmountedAt > RETRY_WINDOW_MS) return
+    retryUnmountedAt = 0
+    const prev = document.activeElement
+    // Fokus przeniesiony przez poprzednią kartę (h1 / body) — wraca na „Spróbuj ponownie”.
+    const movedByUs = !prev || prev === document.body || !prev.isConnected
+      || (prev.matches?.('h1, h2, main') ?? false)
+    if (movedByUs) window.requestAnimationFrame(() => window.requestAnimationFrame(() => focusTarget(btn)))
   }, [])
   // Ponowienie nieudane (karta została, przycisk był chwilowo wyłączony) —
   // fokus wraca na „Spróbuj ponownie”.
-  const btn = useRef(null)
   useEffect(() => {
     if (!busy && retried.current) focusIfLost(btn, null)
   }, [busy])

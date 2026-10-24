@@ -54,10 +54,10 @@
   --color-table-head:  #F5F6F8;
 
   --color-text:        #1D2433;   /* Tekst podstawowy (14,9:1 na białym) */
-  --color-text-muted:  #6B7280;   /* Tekst pomocniczy */
+  --color-text-muted:  #626A78;   /* Tekst pomocniczy (v3.11: ≥4,7:1 także na bg-secondary i warning-bg) */
   --color-border:      #E2E5EA;
   --color-border-strong: #D5D9E0; /* obramowania makiet / modali */
-  --color-input-border:  #C7CDD6; /* obramowanie pól formularzy */
+  --color-input-border:  #878F9C; /* obramowanie pól formularzy (v3.11: ≥3:1 — WCAG 1.4.11) */
 
   --color-success:     #2E7D32;
   --color-success-bg:  #E7F2E8;
@@ -78,7 +78,7 @@
   --bg-primary:    #FFFFFF;
   --bg-secondary:  #F5F6F8;
   --text-primary:  #1D2433;
-  --text-muted:    #6B7280;
+  --text-muted:    #626A78;
   --border-color:  #E2E5EA;
 
   /* Aliasy semantyczne — używane w inline-stylach komponentów.
@@ -104,9 +104,13 @@
   /* Mono: stack systemowy — pełny IBM Plex Mono dodamy po dostarczeniu plików
      woff2 (osobny zip). Bez zewnętrznych CDN. */
   --font-mono: 'Cascadia Mono', Consolas, 'SFMono-Regular', Menlo, 'DejaVu Sans Mono', monospace;
+
+  /* Natywne kontrolki (kalendarz w polu daty, listy select, paski przewijania) w kolorach motywu */
+  color-scheme: light;
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --color-navy:        #16223C;
   --color-navy-dark:   #0E1728;
   --color-navy-light:  #243B5E;
@@ -123,10 +127,10 @@
   --color-table-head:  #1E293F;
 
   --color-text:        #E5E9F0;
-  --color-text-muted:  #8A94A6;
+  --color-text-muted:  #959FB0;
   --color-border:      #2A3650;
   --color-border-strong: #33415F;
-  --color-input-border:  #33415F;
+  --color-input-border:  #64748F;   /* v3.11: ≥3:1 na karcie i tle */
 
   --color-success-bg:  rgba(46, 125, 50,  0.18);
   --color-success-text:#7DD187;
@@ -142,7 +146,7 @@
   --bg-primary:    #1A2438;
   --bg-secondary:  #121A2B;
   --text-primary:  #E5E9F0;
-  --text-muted:    #8A94A6;
+  --text-muted:    #959FB0;
   --border-color:  #2A3650;
 
   --shadow-card:  0 2px 8px rgba(0,0,0,0.35);
@@ -251,7 +255,12 @@ button, input, select, textarea, optgroup {
 .szup-hdr-btn:focus-visible { box-shadow: 0 0 0 2px var(--color-focus-ring); }
 .app-header__menu { display: none; min-width: 44px; justify-content: center; }
 /* Przełącznik motywu w belce — tylko na wąskich ekranach (patrz @media 900px) */
-.app-header__theme { display: none; }
+.app-header__theme { display: inline-flex; min-width: 44px; justify-content: center; }
+/* v3.11: w aplikacji motyw przełącza przycisk w belce (pływający zasłaniał treść, np. „Przejdź”
+   na pulpicie przy 1440 px); pływający zostaje tylko na ekranach logowania / pierwszego uruchomienia,
+   w prawym GÓRNYM rogu (na dole zasłaniał „Utwórz konto” przy 390 px). */
+.app-shell ~ .dark-toggle { display: none; }
+.dark-toggle { top: 16px; bottom: auto; }
 
 /* Sidebar — pełna wysokość, granat, lockup u góry + stopka na dole */
 .app-sidebar {
@@ -523,6 +532,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-selected
    Celowo wąski selektor: elementy z roving tabindex (drzewo działów, zakładki) MUSZĄ mieć ramkę. */
 h1[tabindex="-1"]:focus, h2[tabindex="-1"]:focus, h3[tabindex="-1"]:focus,
 [role="dialog"][tabindex="-1"]:focus { outline: none; }
+/* v3.11: …ale gdy fokus trafił tam po akcji z klawiatury (:focus-visible), cel musi być widoczny. */
+h1[tabindex="-1"]:focus-visible, h2[tabindex="-1"]:focus-visible, h3[tabindex="-1"]:focus-visible,
+[tabindex="-1"]:not([role="dialog"]):not(#main-content):focus-visible {
+  outline: 2px solid var(--color-focus-ring); outline-offset: 3px; border-radius: 4px;
+}
 /* Drzewo działów (HR) — widoczny fokus klawiatury na pozycji drzewa */
 [role="treeitem"]:focus { outline: none; }
 [role="treeitem"]:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; border-radius: 6px; }
@@ -592,9 +606,7 @@ h1.page-header__title { margin: 0; }
   .app-sidebar.is-open { transform: translateX(0); visibility: visible; transition: transform .2s ease, visibility 0s; }
   /* Pływający przycisk motywu zasłaniał treść przy przewijaniu — w aplikacji
      (po zalogowaniu) zastępuje go przycisk w belce; na ekranie logowania zostaje. */
-  .app-shell ~ .dark-toggle { display: none; }
-  .app-header__theme { display: inline-flex; min-width: 44px; justify-content: center; }
-  .dark-toggle { bottom: 16px; right: 16px; }
+  .dark-toggle { top: 12px; right: 12px; }
   .app-header .szup-search-btn { min-width: 140px; }
   .sidebar-overlay.is-open {
     display: block; position: fixed; inset: 0; z-index: 1100; background: rgba(13,20,36,.5);
@@ -674,3 +686,13 @@ body.is-scroll-locked { overflow: hidden; }
 .load-error__msg { font-size: 13px; margin-top: 2px; word-break: break-word; }
 /* Kolor tekstu błędu (nie „muted”) — kontrast ≥ 4,5:1 na --color-error-bg w obu motywach. */
 .load-error__hint { font-size: 12px; margin-top: 4px; color: inherit; }
+
+/* ── v3.11 ───────────────────────────────────────────────────────────── */
+/* Segmenty filtrów nie łamią etykiet („Wszystkie 12”) — całe przyciski zawijają się. */
+.segmented__btn { white-space: nowrap; }
+/* Kartoteka: tabela zgłoszeń — na szerokim ekranie min. 760 px, na wąskim bez kolumn pomocniczych. */
+.hr-table { min-width: 760px; }
+@media (max-width: 600px) {
+  .hr-table { min-width: 0; }
+  .hr-table .hr-col-opt { display: none; }
+}

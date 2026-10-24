@@ -165,16 +165,29 @@ wtedy, gdy w strukturze nie ma nikogo, kto mógłby go wykonać
 nad którym nie ma przełożonego (dyrektor jednostki kierujący komórką), albo
 krok bez żadnej osoby uprawnionej (ta sama osoba kieruje komórką i komórką
 nadrzędną, a jednostka nie ma dyrektora). Superadmin nie działa we własnym
-wniosku. Taki stan to sygnał do uporządkowania struktury — lista kontrolna
-(`/settings/health`) go zgłasza.
+wniosku. Przed rezerwą łańcuch przełożonych jest przeszukiwany w górę
+(komórka nadrzędna, wyższe komórki, dyrektor jednostki). Kroki superadmina
+i jego oświadczenie są oznaczone jako działanie awaryjne
+(`superadmin_emergency`). Taki stan to sygnał do uporządkowania struktury —
+lista kontrolna (`/settings/health`) go zgłasza.
+
+Akceptację wyższą wykonuje wyłącznie osoba stojąca wyżej niż pracownik
+wniosku. Pracownik kierujący lub zastępujący dowolną komórkę (nie tylko
+komórkę wniosku) albo dyrektor jednostki jest traktowany jak kierownik —
+wniosek dla niego zawsze wymaga akceptacji jego przełożonego.
+
+Osoba, która wykonała krok etapu kierownika albo akceptację wyższą, nie
+realizuje tego wniosku w IT (409 `EXECUTOR_DID_MANAGER_STEP`), chyba że
+w systemie jest tylko jedna aktywna osoba z rolą `it_staff`.
 
 Rozdział obowiązków przy wniosku „dla siebie” (pracownik wniosku = osoba
 działająca na kroku): nikt nie zatwierdza akceptacji wyższej własnego wniosku
 (także dyrektor jednostki), a gdy kierownik wybiera uprawnienia dla siebie
 w komórce jednostopniowej, akceptacja wyższa **nie jest pomijana** — wniosek
 zatwierdza przełożony.
-Każdy wykonany krok jest podpisany (łańcuch skrótów SHA-256 z sekretem
-`SZUP_WORKFLOW_SECRET`);
+Każdy wykonany krok jest podpisany (łańcuch HMAC-SHA256 z sekretem
+`SZUP_WORKFLOW_SECRET`, przedrostek `hmac1:`; kroki sprzed 3.11 — SHA-256
+z sekretem, nadal weryfikowane);
 `/requests/{id}/workflow/verify` sprawdza integralność łańcucha.
 Nadanie uprawnień kierowane do IT wymaga oświadczenia wnioskującego.
 
@@ -371,15 +384,20 @@ sam nie zamyka.
     dowolnym etapie wycofuje całość, nie ma czyszczenia bez śladu.
 - **Usunięcie komórki** (`force-delete`, z powodem): komórka bez historii jest
   usuwana, z historią — archiwizowana (pracownicy odpięci, podkomórki
-  przepięte wyżej, wnioski w toku odrzucone z podanym powodem). Zlikwidowana
+  przepięte wyżej; wnioski w toku odrzucone z podanym powodem, wnioski
+  częściowo zrealizowane domknięte — niewykonane odebrania zostają w kolejce
+  IT, nie są oznaczane jako zrealizowane). Zlikwidowana
   komórka nie przyjmuje kont ani wniosków. Zdarzenie
   `department.force_deleted` (*high*).
 - **Usunięcie posiadanej grupy uprawnień** (z powodem i hasłem): posiadaczom
-  uprawnienia są odbierane (systemowe wnioski odebrania w historii).
+  uprawnienia są odbierane systemowymi wnioskami odebrania w kolejce IT —
+  uprawnienie znika po realizacji przez IT; wnioski w toku z samymi odmowami
+  są odrzucane systemowo.
   Zdarzenie `permission_group.deleted_held` (*high*).
 - **Reset fabryczny** (fraza `RESET` i hasło): konto wykonującego zostaje;
-  `wipe_audit` czyści dziennik i zdarzenia bezpieczeństwa **z wyjątkiem**
-  śladów czyszczeń i wcześniejszych resetów. Ślad resetu
+  `wipe_audit` czyści z dziennika i zdarzeń bezpieczeństwa tylko wpisy
+  starsze niż 24 miesiące (retencja), **z wyjątkiem** śladów czyszczeń
+  i wcześniejszych resetów (te zostają zawsze). Ślad resetu
   (`settings.factory_reset`, *critical*, z zakresem i liczbą usuniętych
   wierszy) powstaje w tej samej transakcji co czyszczenie.
 

@@ -97,14 +97,25 @@ export default function Dashboard() {
   }, [contracts, security])
 
   // Kafelki kolejek — tylko te, które dotyczą roli (flagi show_* z backendu).
-  const tiles = useMemo(() => data ? [
-    data.show_prepare && { id: 'prepare', label: 'Uprawnienia do przypisania', count: data.pending_prepare_count },
-    data.show_approve && { id: 'approve', label: 'Wnioski do akceptacji',     count: data.pending_approve_count },
+  // Superadmin (rezerwa): kafelki liczone także z samej listy — backend sprzed 3.11
+  // nie ustawiał show_prepare, a lista zawierała już wnioski z etapu kierownika (W1/N3).
+  const tiles = useMemo(() => {
+    if (!data) return []
+    const lst = data.pending_approvals_list || []
+    const countOf = (nodes) => lst.filter(p => nodes.includes(p.node_type)).length
+    const saPrepare = isSuperadmin ? Math.max(data.pending_prepare_count || 0, countOf(['select_permissions'])) : 0
+    const saApprove = isSuperadmin ? Math.max(data.pending_approve_count || 0, countOf(['manager_approve', 'higher_manager_approve'])) : 0
+    return [
+    (data.show_prepare || saPrepare > 0) && { id: 'prepare', label: 'Uprawnienia do przypisania',
+      count: isSuperadmin ? saPrepare : data.pending_prepare_count },
+    (data.show_approve || saApprove > 0) && { id: 'approve', label: 'Wnioski do akceptacji',
+      count: isSuperadmin ? saApprove : data.pending_approve_count },
     data.show_execute && { id: 'execute', label: 'Wnioski do realizacji',     count: data.pending_execute_count },
     // Zmiany nazwiska realizuje wyłącznie IT (nie admin/superadmin).
     data.show_execute && roles.includes('it_staff')
       && { id: 'names',   label: 'Zmiany nazwiska do realizacji', count: data.pending_names_count },
-  ].filter(Boolean) : [], [data])
+    ].filter(Boolean)
+  }, [data])
 
   const FILTER_NODES = {
     prepare: ['select_permissions'],
@@ -130,6 +141,7 @@ export default function Dashboard() {
     : (filter === 'prepare' || filter === 'approve') ? 'handle'
     : (data?.show_execute && !data?.show_prepare ? 'it' : 'handle')
   const hasQueue = tiles.length > 0
+    || (isSuperadmin && (data?.pending_approvals_list?.length || 0) > 0)
 
   return (
     <div>
@@ -308,8 +320,10 @@ export default function Dashboard() {
           {isSuperadmin ? (
             <>
               Superadmin to konto awaryjne — konfiguruje system i nie obsługuje wniosków
-              (robią to kierownicy i IT). Wyjątek: akceptacja wyższa wniosku, którego nie ma
-              kto zatwierdzić — taki wniosek pojawi się powyżej i można go otworzyć.
+              (robią to kierownicy i IT). Wyjątek: wniosek, którego w strukturze nie ma kto
+              obsłużyć — wybór uprawnień w komórce bez kierownika i zastępców albo akceptacja
+              wyższa bez osoby uprawnionej. Taki wniosek pojawi się powyżej i można go otworzyć;
+              oświadczenie zostanie zapisane z adnotacją „działając awaryjnie jako superadmin”.
             </>
           ) : (
             <>

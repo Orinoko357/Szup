@@ -12,15 +12,20 @@ from services.auth_service import get_current_user
 
 def user_is_hr(session: Session, user: User) -> bool:
     """Zdolność HR = przynależność do komórki oznaczonej jako KADROWA
-    (Department.is_hr, „komórka kadrowa”). Roli „hr” już nie ma — nie nadaje się
-    jej per osoba; wystarczy oznaczyć komórkę. Pracownik komórki kadrowej
-    obsługuje WSZYSTKIE jednostki (patrz `hr_scoped_unit_ids`)."""
+    (Department.is_hr, „komórka kadrowa”), która jest AKTYWNA i niezarchiwizowana
+    (3.11 — nieaktywna komórka kadrowa nie daje funkcji kadr). Roli „hr” już
+    nie ma — nie nadaje się jej per osoba; wystarczy oznaczyć komórkę.
+    Pracownik komórki kadrowej obsługuje WSZYSTKIE jednostki. Superadmin nie
+    należy do komórek, więc funkcji kadr nie ma."""
     dept_id = getattr(user, "department_id", None)
     if not dept_id:
         return False
+    if has_role(user, "superadmin"):
+        return False
     from models import Department
     d = session.get(Department, dept_id)
-    return bool(d and getattr(d, "is_hr", False))
+    return bool(d and getattr(d, "is_hr", False) and d.is_active
+                and getattr(d, "archived_at", None) is None)
 
 
 # Role operacyjne, których nie łączy się z rolą superadmin — superadmin to konto
@@ -42,7 +47,9 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
 
 # Rozdział obowiązków (Wariant A): bramki OPERACYJNE nie wpuszczają zwykłego
 # administratora — administrator KONFIGURUJE system, a nie działa operacyjnie.
-# Superadmin pozostaje break-glass (może wszystko). Kto ma działać operacyjnie,
+# Superadmin przechodzi przez bramkę (widzi listy), ale w obiegu wniosków działa
+# wyłącznie jako rezerwa (`services.workflow.superadmin_acts`) i nie składa
+# wniosków. Kto ma działać operacyjnie,
 # dostaje właściwą rolę operacyjną (manager / it_staff) albo — dla kadr —
 # trafia do komórki kadrowej (Department.is_hr).
 def require_manager(current_user: User = Depends(get_current_user)) -> User:
@@ -324,15 +331,6 @@ def users_with_role(session, role: str, *, active_only: bool = True) -> list["Us
     if active_only:
         q = q.where(User.is_active == True)  # noqa: E712
     return [u for u in session.exec(q).all() if has_role(u, role)]
-
-
-def hr_scoped_unit_ids(session, user: "User"):
-    """Zakres jednostek dla pracownika kadr — zawsze None (wszystkie jednostki).
-
-    Pracownik komórki kadrowej obsługuje całą organizację; dawne przypisania
-    do jednostek (UserUnit) zostają w bazie, ale niczego już nie ograniczają.
-    Funkcja zostaje dla zgodności wywołań (None = bez ograniczenia)."""
-    return None
 
 
 def is_department_manager_or_deputy(session, user: "User", dept) -> bool:

@@ -110,6 +110,11 @@ def main() -> None:
         # Unieważnij wszystkie dotychczasowe tokeny JWT konta (pełna sekunda —
         # token z logowania zaraz po resecie pozostaje ważny).
         invalidate_tokens_now(user)
+        # Nieudane próby hasła (logowania i potwierdzenia) — budżet od zera.
+        from sqlalchemy import delete
+        from models import PasswordConfirmFailure
+        session.execute(delete(PasswordConfirmFailure)
+                        .where(PasswordConfirmFailure.user_id == user.id))
 
         session.add(user)
         session.commit()

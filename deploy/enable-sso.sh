@@ -45,7 +45,10 @@ find_keytab() {
     found=$(grep -rhoP 'KRB5_KTNAME=["'\'']?(FILE:)?\K[^"'\''\s]+' /etc/apache2/ /etc/default/ 2>/dev/null | head -1 || true)
     [ -n "$found" ] && { echo "$found"; return; }
     [ -f /etc/krb5.keytab ] && { echo /etc/krb5.keytab; return; }
-    ls /etc/apache2/*.keytab /etc/*.keytab 2>/dev/null | head -1 || true
+    local f
+    for f in /etc/apache2/*.keytab /etc/*.keytab; do
+        [ -f "$f" ] && { echo "$f"; return; }
+    done
 }
 [ -n "$KEYTAB" ] || KEYTAB=$(find_keytab)
 [ -n "$KEYTAB" ] || fail "nie znalazłem keytab — znajdź go: grep -rn -i keytab /etc/apache2/ /var/www/ ; potem: $0 /sciezka/do/pliku.keytab"

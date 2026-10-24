@@ -38,7 +38,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 token = auth.split(None, 1)[1].strip()
                 try:
                     from services.auth_service import _jwt_secret, ALGORITHM
-                    from jose import jwt
+                    import jwt  # PyJWT
                     payload = jwt.decode(token, _jwt_secret(), algorithms=[ALGORITHM],
                                          options={"verify_exp": False})
                     username = payload.get("sub")

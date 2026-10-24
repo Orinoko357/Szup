@@ -9,6 +9,7 @@
  *   posiada    → szary badge „posiada” (bez zmian)
  */
 
+import { useEffect, useRef } from 'react'
 import { Check } from 'lucide-react'
 import { fmtDateTimeShort as fmtDT } from '../serverTime'
 
@@ -79,7 +80,15 @@ function groupBySystemAndGroup(items) {
     }))
 }
 
+// v3.11 (Ś3): po „Zrobione” / „Cofnij” / „Cofnij odmowę” kliknięty przycisk znika
+// (zastępuje go przycisk przeciwny) — fokus przechodzi na przycisk w tym samym wierszu,
+// zamiast spaść na <body>. Przyciski w trakcie zapisu są aria-disabled (nie disabled),
+// więc fokus nie ginie także w trakcie żądania.
+const ROW_ACTIONS = ['undo', 'done', 'undo-deny', 'deny']
+
 function PermRow({ it, isRevoke, deny, fulfill, crumb, focused }) {
+  const rowRef = useRef(null)
+  const pendingFocus = useRef(false)
   const cv = it.custom_values && typeof it.custom_values === 'object'
     ? Object.entries(it.custom_values).filter(([, v]) => v)
     : []
@@ -96,11 +105,30 @@ function PermRow({ it, isRevoke, deny, fulfill, crumb, focused }) {
   // Pozycje DO ODEBRANIA są przekreślone (jak przed v3.0), a ich wartości dodatkowe ukryte.
   const struck = isRevoke || persistedDenied || denyingNow
   const undecided = canFulfill && !persistedFulfilled && !persistedDenied && !denyingNow
+  // Po zmianie stanu wiersza: jeśli fokus był na przycisku tego wiersza (zniknął),
+  // ustaw go na pierwszym dostępnym przycisku akcji tego wiersza.
+  useEffect(() => {
+    if (!pendingFocus.current || busy) return
+    const root = rowRef.current
+    if (!root) return
+    const a = document.activeElement
+    const lost = !a || a === document.body || !a.isConnected
+    if (!lost && root.contains(a)) { pendingFocus.current = false; return }
+    if (!lost) { pendingFocus.current = false; return }
+    for (const name of ROW_ACTIONS) {
+      const b = root.querySelector(`[data-act="${name}"]`)
+      if (b) { b.focus(); break }
+    }
+    pendingFocus.current = false
+  }, [persistedFulfilled, persistedDenied, busy])
+  // Kliknięcie w trakcie zapisu ignorujemy (aria-disabled zamiast disabled).
+  const act = (fn) => () => { if (busy) return; pendingFocus.current = true; fn() }
+  const busyProps = busy ? { 'aria-disabled': 'true' } : {}
   const rowBg = persistedFulfilled ? 'var(--color-success-bg)'
     : (persistedDenied || denyingNow || isRevoke) ? 'var(--color-error-bg)' : 'transparent'
   const btn = { minHeight: 38, fontSize: 13 }
   return (
-    <div data-item-id={it.id ?? undefined}
+    <div data-item-id={it.id ?? undefined} ref={rowRef}
          style={{ padding: '12px 14px', fontSize: 14,
                   borderTop: '1px solid var(--color-border)', background: rowBg,
                   // Fokus skrótów klawiaturowych (IT): wyraźna ramka wewnętrzna.
@@ -145,28 +173,30 @@ function PermRow({ it, isRevoke, deny, fulfill, crumb, focused }) {
         )}
         {/* Przyciski akcji — po prawej. */}
         {persistedFulfilled && canFulfill && (
-          <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
-                  style={btn} onClick={() => fulfill.set(it.id, false)}
+          <button type="button" className="btn btn--ghost btn--sm" data-act="undo" {...busyProps}
+                  style={btn} onClick={act(() => fulfill.set(it.id, false))}
                   aria-label={`Cofnij realizację: ${it.permission_name}`}>
             {busy ? 'Cofam…' : 'Cofnij'}
           </button>
         )}
         {undecided && (
-          <button type="button" className="btn btn--success btn--sm" disabled={busy}
-                  style={btn} onClick={() => fulfill.set(it.id, true)}
+          <button type="button" className="btn btn--success btn--sm" data-act="done" {...busyProps}
+                  style={btn} onClick={act(() => fulfill.set(it.id, true))}
                   aria-label={`Oznacz jako zrobione: ${it.permission_name}`}>
             {busy ? 'Zapisuję…' : <><Check size={14} aria-hidden="true" /> Zrobione</>}
           </button>
         )}
         {persistedDenied && canUndo && (
-          <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
-                  style={btn} onClick={() => deny.remove(it.id)}>
+          <button type="button" className="btn btn--ghost btn--sm" data-act="undo-deny" {...busyProps}
+                  style={btn} onClick={act(() => deny.remove(it.id))}
+                  aria-label={`Cofnij odmowę: ${it.permission_name}`}>
             {busy ? 'Cofam…' : 'Cofnij odmowę'}
           </button>
         )}
         {canDenyNow && !denyingNow && (
-          <button type="button" className="btn btn--ghost btn--sm" disabled={busy}
-                  style={btn} onClick={() => deny.toggle(it.id)}>
+          <button type="button" className="btn btn--ghost btn--sm" data-act="deny" {...busyProps}
+                  style={btn} onClick={act(() => deny.toggle(it.id))}
+                  aria-label={`Odmów: ${it.permission_name}`}>
             Odmów
           </button>
         )}
@@ -188,8 +218,8 @@ function PermRow({ it, isRevoke, deny, fulfill, crumb, focused }) {
                  onKeyDown={e => { if (e.key === 'Enter' && canSave && !busy) deny.save(it.id) }} />
           {canSave ? (
             <>
-              <button type="button" className="btn btn--danger btn--sm" disabled={busy}
-                      style={btn} onClick={() => deny.save(it.id)}>
+              <button type="button" className="btn btn--danger btn--sm" {...busyProps}
+                      style={btn} onClick={act(() => deny.save(it.id))}>
                 {busy ? 'Zapisuję…' : 'Zapisz odmowę'}
               </button>
               <button type="button" className="btn btn--ghost btn--sm" disabled={busy}

@@ -26,8 +26,8 @@ from services.auth_service import (
     validate_password_strength, is_password_expired, revoke_token_jti,
     get_current_token_payload, MAX_FAILED_LOGINS, LOCKOUT_MINUTES,
     password_change_required, invalidate_tokens_now, clean_text_field,
-    ensure_password_confirm_allowed, register_password_confirm_failure,
-    clear_password_confirm_failures,
+    verify_password_with_limit, begin_password_attempt, end_password_attempt,
+    ATTEMPT_LOGIN, CONFIRM_WINDOW_MINUTES,
 )
 
 router = APIRouter()
@@ -176,35 +176,54 @@ def _days_until_expiry(user: User) -> Optional[int]:
     return max(0, delta.days)
 
 
+def _login_lockout(session: Session, user: User, meta: dict, reason: str) -> None:
+    """Limit prób z tego adresu właśnie wyczerpany — ślad i zdarzenie.
+
+    Blokada dotyczy pary konto + adres IP (3.11, N8): obcy z innego adresu nie
+    zablokuje logowania właściciela. `locked_until` zostaje jako informacja
+    dla administratora (lista kont), ale nie blokuje logowań z innych adresów.
+    Atak na konto superadmina → zdarzenie krytyczne."""
+    from models import has_role
+    user.locked_until = datetime.utcnow() + timedelta(minutes=LOCKOUT_MINUTES)
+    user.failed_login_count = 0
+    session.add(user); session.commit()
+    record_event(session, action="login.lockout", user_id=user.id, username=user.username,
+                 ip=meta["ip"], user_agent=meta["user_agent"],
+                 details={"reason": reason, "locked_minutes": LOCKOUT_MINUTES,
+                          "scope": "account_ip"})
+    superadmin = has_role(user, "superadmin")
+    emit_security_event(
+        session, event_type="auth.lockout", source="auth",
+        severity=SecuritySeverity.critical if superadmin else SecuritySeverity.high,
+        summary=(f"Konto {user.username} zablokowane dla adresu {meta['ip'] or 'nieznanego'} "
+                 f"na {LOCKOUT_MINUTES} minut po {MAX_FAILED_LOGINS} nieudanych próbach hasła"
+                 + (" — próby odgadnięcia hasła SUPERADMINA. Logowanie z innych adresów "
+                    "działa; w razie potrzeby hasło ustawi tools/reset_password.py"
+                    if superadmin else "")),
+        details={"ip": meta["ip"], "target_user_id": user.id, "scope": "account_ip",
+                 "locked_minutes": LOCKOUT_MINUTES},
+        user_id=user.id, ip=meta["ip"],
+    )
+
+
 def _handle_failed_login(session: Session, user: Optional[User], username: str,
-                         request: Request, reason: str):
+                         request: Request, reason: str, *,
+                         failures_before: Optional[int] = None):
+    """Nieudane logowanie. Dla konta lokalnego wpis próby zapisał już
+    `begin_password_attempt` (wspólny budżet z potwierdzeniami hasłem);
+    `failures_before` — liczba prób z budżetu przed tą."""
     meta = request_meta(request)
     _register_failed_login(meta["ip"])
-    if user and user.auth_type == AuthType.local:
-        user.failed_login_count = (user.failed_login_count or 0) + 1
-        if user.failed_login_count >= MAX_FAILED_LOGINS:
-            user.locked_until = datetime.utcnow() + timedelta(minutes=LOCKOUT_MINUTES)
-            user.failed_login_count = 0
-            session.add(user); session.commit()
-            record_event(session, action="login.lockout", user_id=user.id, username=user.username,
-                         ip=meta["ip"], user_agent=meta["user_agent"],
-                         details={"reason": reason, "locked_minutes": LOCKOUT_MINUTES})
-            emit_security_event(
-                session, event_type="auth.lockout", source="auth",
-                severity=SecuritySeverity.high,
-                summary=f"Konto {user.username} zablokowane po {MAX_FAILED_LOGINS} błędnych logowaniach",
-                details={"ip": meta["ip"]}, user_id=user.id, ip=meta["ip"],
-            )
+    if user and user.auth_type == AuthType.local and failures_before is not None:
+        user.failed_login_count = failures_before + 1
+        if failures_before + 1 >= MAX_FAILED_LOGINS:
+            _login_lockout(session, user, meta, reason)
             return
         session.add(user); session.commit()
     record_event(session, action="login.failed",
                  user_id=user.id if user else None, username=username,
                  ip=meta["ip"], user_agent=meta["user_agent"],
                  details={"reason": reason})
-
-
-def _account_is_locked(user: User) -> bool:
-    return bool(user.locked_until and user.locked_until > datetime.utcnow())
 
 
 @router.get("/server-time")
@@ -283,15 +302,25 @@ def login(data: LoginRequest, request: Request, session: Session = Depends(get_s
     if not user or user.auth_type != AuthType.local or not user.password_hash:
         _handle_failed_login(session, user, data.username, request, "unknown_user_or_wrong_auth")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Nieprawidłowy login lub hasło")
-    if _account_is_locked(user):
+    # Wspólny budżet prób hasła (3.11): próba zapisana atomowo PRZED
+    # weryfikacją; liczą się logowania z tego adresu i nieudane potwierdzenia
+    # hasłem z sesji konta. Wyczerpany → 423 tylko dla tego adresu (N8).
+    attempt_id, failures_before = begin_password_attempt(
+        user.id, kind=ATTEMPT_LOGIN, ip=meta["ip"], operation="logowanie")
+    if attempt_id is None:
         _register_failed_login(meta["ip"])
         record_event(session, action="login.blocked_locked",
                      user_id=user.id, username=user.username,
                      ip=meta["ip"], user_agent=meta["user_agent"])
-        raise HTTPException(status.HTTP_423_LOCKED, "Konto tymczasowo zablokowane — spróbuj później")
+        raise HTTPException(status.HTTP_423_LOCKED,
+                            "Zbyt wiele nieudanych prób hasła — konto jest tymczasowo "
+                            f"zablokowane dla tego adresu. Spróbuj za {CONFIRM_WINDOW_MINUTES} minut.")
     if not verify_password(data.password, user.password_hash):
-        _handle_failed_login(session, user, data.username, request, "bad_password")
+        _handle_failed_login(session, user, data.username, request, "bad_password",
+                             failures_before=failures_before)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Nieprawidłowy login lub hasło")
+    end_password_attempt(session, attempt_id, user_id=user.id, kind=ATTEMPT_LOGIN,
+                         ip=meta["ip"])
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Konto nieaktywne")
 
@@ -615,15 +644,16 @@ def change_password(
         # limit prób z operacjami superadmina (inaczej przejęta sesja mogłaby
         # tędy zgadywać hasło bez ograniczeń, a potem użyć go do czyszczenia
         # dzienników czy resetu fabrycznego).
-        ensure_password_confirm_allowed(session, current_user)
-        if not data.current_password or not verify_password(data.current_password, current_user.password_hash):
-            privileged = bool({"admin", "superadmin"} & set(parse_roles(current_user.roles)))
-            register_password_confirm_failure(
-                session, current_user, operation="zmiana hasła",
-                event_type="auth.password_change_denied", source="auth", ip=meta["ip"],
-                severity=SecuritySeverity.high if privileged else SecuritySeverity.medium)
+        privileged = bool({"admin", "superadmin"} & set(parse_roles(current_user.roles)))
+        ok = verify_password_with_limit(
+            session, current_user, data.current_password or "",
+            operation="zmiana hasła", ip=meta["ip"],
+            event_type="auth.password_change_denied", source="auth",
+            severity=SecuritySeverity.high if privileged else SecuritySeverity.medium,
+            verify=lambda: bool(data.current_password) and verify_password(
+                data.current_password, current_user.password_hash))
+        if not ok:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Obecne hasło jest nieprawidłowe")
-        clear_password_confirm_failures(session, current_user)
 
     validate_password_strength(data.new_password)
     if data.current_password and data.current_password == data.new_password:

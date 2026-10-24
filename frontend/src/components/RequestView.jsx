@@ -66,9 +66,9 @@ export function KindBadge({ kind = 'grant', label }) {
 }
 
 /** Odznaka rodzaju wniosku w listach (nieznany rodzaj → zatrudnienie). */
-export function KindPill({ kind }) {
+export function KindPill({ kind, isSystem = false }) {
   const k = ['revoke', 'change'].includes(kind) ? kind : 'grant'
-  return <KindBadge kind={k} label={kindLabelOf(kind)} />
+  return <KindBadge kind={k} label={kindLabelOf(kind, isSystem)} />
 }
 
 /** Zwrot fokusu po zamknięciu pełnoekranowego widoku wniosku: gdy `openKey`
@@ -161,7 +161,7 @@ function StepItem({ step }) {
   const bd = isCurrent ? 'var(--color-gold)' : isDone ? 'var(--color-border)'
     : isSkipped ? 'var(--color-border-strong, var(--color-border))' : 'var(--color-border)'
   return (
-    <li style={{
+    <li aria-current={isCurrent ? 'step' : undefined} style={{
       display: 'flex', alignItems: 'flex-start', gap: 8,
       padding: '10px 12px', borderRadius: 8, border: `1px solid ${bd}`,
       background: bg, borderStyle: isSkipped ? 'dashed' : 'solid',
@@ -208,15 +208,23 @@ function RequestStepper({ steps = [] }) {
  *   requiresHigher— czy komórka wymaga akceptacji wyższego rzędu; null/undefined —
  *                   jeszcze nie wiadomo (np. komórka niewybrana) → „zależnie od komórki”
  *   kind          — grant / revoke (wpływa na etykietę kroku 2)
+ *   step2Caption  — opis wykonawcy kroku 2 (domyślnie „Kierownik komórki”; np. przejęcie,
+ *                   rezerwa superadmina)
+ *   step3Caption  — opis kroku 3, gdy jest wymagany (domyślnie „Kierownik nadrzędny”)
+ *   step3SkipCaption — opis kroku 3, gdy pominięty (domyślnie „Pominięta”)
  */
-export function buildWorkflowSteps({ sent, nodeType, status, requiresHigher, kind }) {
-  // Indeks bieżącego etapu 1..5
+export function buildWorkflowSteps({ sent, nodeType, status, requiresHigher, kind,
+                                     step2Caption, step3Caption, step3SkipCaption }) {
+  // Indeks bieżącego etapu 1..5. v3.11: najpierw węzeł obiegu — status
+  // „pending_manager” obejmuje też akceptację wyższą (wcześniej podświetlany był krok 2).
   let cur
   if (!sent) cur = 1
   else if (status === 'completed') cur = 5
-  else if (nodeType === 'select_permissions' || nodeType === 'manager_approve' || status === 'pending_selection' || status === 'pending_manager') cur = 2
   else if (nodeType === 'higher_manager_approve') cur = 3
-  else if (nodeType === 'it_execute' || status === 'pending_it') cur = 4
+  else if (nodeType === 'it_execute') cur = 4
+  else if (nodeType === 'select_permissions' || nodeType === 'manager_approve') cur = 2
+  else if (status === 'pending_it') cur = 4
+  else if (status === 'pending_selection' || status === 'pending_manager') cur = 2
   else cur = 2
 
   const rejected = status === 'rejected'
@@ -233,10 +241,10 @@ export function buildWorkflowSteps({ sent, nodeType, status, requiresHigher, kin
 
   return [
     { n: 1, label: 'Zgłoszenie',       caption: 'Kadry',                  state: st(1) },
-    { n: 2, label: step2Label,         caption: 'Kierownik komórki',      state: st(2) },
+    { n: 2, label: step2Label,         caption: step2Caption || 'Kierownik komórki', state: st(2) },
     { n: 3, label: 'Akceptacja wyższa',
       caption: requiresHigher == null && cur < 3 ? 'Zależnie od komórki'
-        : requiresHigher ? 'Kierownik nadrzędny' : 'Pominięta',
+        : (requiresHigher || cur === 3) ? (step3Caption || 'Kierownik nadrzędny') : (step3SkipCaption || 'Pominięta'),
       state: st(3) },
     { n: 4, label: nodeLabel('it_execute'), caption: 'Biuro Informatyki',  state: st(4) },
     { n: 5, label: statusLabel('completed'), caption: 'Powiadomienie kadr', state: st(5) },

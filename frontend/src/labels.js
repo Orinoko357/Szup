@@ -36,7 +36,10 @@ export const NODE_WHO = {
 export const MANAGER_NODES = ['select_permissions', 'manager_approve', 'higher_manager_approve']
 
 const KIND_LABEL = { grant: 'Zatrudnienie', revoke: 'Odejście', change: 'Zmiana' }
-export const kindLabel = (k) => KIND_LABEL[k || 'grant'] || k
+// v3.11: odebranie wygenerowane przez system (usunięcie grupy, likwidacja komórki)
+// to nie „Odejście” — backend oznacza je flagą is_system.
+export const kindLabel = (k, isSystem = false) =>
+  (isSystem && k === 'revoke') ? 'Odebranie systemowe' : (KIND_LABEL[k || 'grant'] || k)
 
 export const NAME_CHANGE_STATUS = {
   pending:  { label: 'Oczekuje na IT', badge: 'badge--warning' },

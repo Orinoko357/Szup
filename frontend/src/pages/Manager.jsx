@@ -11,9 +11,10 @@ import RequestViewShell, {
   useReturnFocus,
 } from '../components/RequestView'
 import { statusLabel, statusBadge, nodeLabel, kindLabel, daysSince, waitText, MANAGER_NODES, plural } from '../labels'
-import { getCurrentUser } from '../roles'
+import { getCurrentUser, getUserRoles } from '../roles'
 import { toast, confirmDialog, promptDialog } from '../components/ui/feedback'
 import { ErrorAlert, LoadError } from '../components/ui/LoadState'
+import { focusIfLost, PAGE_HEADING } from '../components/ui/focus'
 import { ReviewDialog, describeKeys, diffSelection } from '../components/ChangeSummary'
 import CopyFromColleague, { buildCopiedSelection } from '../components/CopyFromColleague'
 import DeclarationModal, { declarationRequired } from '../components/DeclarationModal'
@@ -188,7 +189,7 @@ function HandleTable({ rows, onOpen, hasPrep = false }) {
             <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
             <td>
               <div style={{ fontWeight: 700 }}>{r.worker_name}</div>
-              <KindPill kind={r.kind} />
+              <KindPill kind={r.kind} isSystem={r.is_system === true} />
             </td>
             <td style={{ color: 'var(--color-text-muted)' }}>{r.worker_position || '—'}</td>
             <td>{r.items?.length || 0}</td>
@@ -266,7 +267,7 @@ function MineTable({ rows, onOpen }) {
               <td>
                 <div style={{ fontWeight: 700 }}>{r.worker_name}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
-                  <KindPill kind={r.kind} />
+                  <KindPill kind={r.kind} isSystem={r.is_system === true} />
                   <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
                     {r.items?.length || 0} uprawnień
                   </span>
@@ -383,7 +384,7 @@ function PrepTable({ rows, onOpen }) {
               <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
               <td>
                 <div style={{ fontWeight: 700 }}>{r.worker_name}</div>
-                <KindPill kind={r.kind} />
+                <KindPill kind={r.kind} isSystem={r.is_system === true} />
               </td>
               <td style={{ minWidth: 160 }}>{deptFull(r.department_name, r.department_description) || '—'}</td>
               <td>
@@ -413,8 +414,17 @@ function PrepTable({ rows, onOpen }) {
 //   - pending_selection → wybór uprawnień (nadanie) / do odebrania (ustanie)
 //   - pending_manager   → decyzja (zatwierdź / odrzuć)
 // ---------------------------------------------------------------------------
-export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
+export function RequestModal({ request: r, onClose, onDone, onRefresh, backLabel = '← Wróć do listy' }) {
   const isRevoke   = r.kind === 'revoke'
+  // v3.11: ustanie (odejście) — pozycje ustalone, odbierane są WSZYSTKIE bieżące
+  // uprawnienia (backend odrzuca wybór z odznaczonymi pozycjami).
+  const isTermination = isRevoke && r.is_termination === true
+  // Superadmin działa na tym kroku jako rezerwa (nikt w strukturze nie może).
+  // (Starszy backend bez tej flagi: superadmin może działać WYŁĄCZNIE jako rezerwa.)
+  const emergency = r.superadmin_emergency === true
+    || (r.superadmin_emergency == null && !!r.can_act && getUserRoles().includes('superadmin'))
+  const meId = getCurrentUser().id
+  const takenByMe = r.taken_over_by_id != null && r.taken_over_by_id === meId
   // Akcje tylko, gdy backend potwierdza, że TEN użytkownik może działać na
   // bieżącym kroku (can_act) — inaczej podgląd (bez przycisków kończących się 403).
   const isSelect   = !!r.can_act && r.status === 'pending_selection'
@@ -443,6 +453,18 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   const canTakeOver = !!r.can_take_over && !r.can_act
   // Wniosek z zapisaną wersją roboczą — zaznaczenie odtwarzamy z jego pozycji.
   const fromDraft = !!r.draft_saved_at
+  // Znacznik wersji roboczej, na której pracujemy (kontrola współbieżności zapisu).
+  const draftStamp = Object.prototype.hasOwnProperty.call(r, 'draft_saved_at')
+    ? { expected_draft_saved_at: r.draft_saved_at ?? null } : {}
+
+  const [busy, setBusy]       = useState(false)
+  const [err, setErr]         = useState(null)
+  // v3.1 — wysłanie wyboru idzie przez krok PODSUMOWANIA (ReviewDialog).
+  const [reviewOpen, setReviewOpen] = useState(false)
+  // v3.11 (Ś4): przycisk „Wyślij do …” / „Zatwierdź” — cel powrotu fokusu po zamknięciu
+  // okna oświadczenia albo po błędzie wysyłki (element, który otworzył okno, już nie istnieje).
+  const sendBtnRef = useRef(null)
+  const focusSendBtn = () => focusIfLost(sendBtnRef, PAGE_HEADING)
 
   const [systems, setSystems]       = useState([])
   const [permsBySys, setPermsBySys] = useState({})   // systemId → [permissions] (nadanie/zmiana)
@@ -497,8 +519,6 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       setErr(errorMessage(ex, 'Nie udało się cofnąć odmowy'))
     } finally { setDenyBusy(null) }
   }
-  const [busy, setBusy]       = useState(false)
-  const [err, setErr]         = useState(null)
   const [loading, setLoading] = useState(isSelect)
   // Błąd wczytania uprawnień pracownika — blokuje wysłanie wyboru: `select`
   // z pustą listą usunąłby pozycje wpisane przez kadry (wniosek trafiłby pusty do IT).
@@ -526,7 +546,7 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           setRevokeList(perms)
           // Wersja robocza — przywróć zapisany wybór; inaczej wszystkie.
           const saved = (r.items || []).filter(it => (it.kind || 'grant') === 'revoke')
-          setPicked(new Set((fromDraft ? saved : perms)
+          setPicked(new Set((fromDraft && !isTermination ? saved : perms)
             .map(p => `${p.system_id}:${p.permission_id}`)))
         } else {
           // Nadanie / zmiana — STAN DOCELOWY:
@@ -706,7 +726,7 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   // zanim stan `comment` zdąży się zaktualizować).
   function buildActionBody(action, commentText = comment) {
     if (isSelect) {
-      const items = isRevoke
+      const bodyItems = isRevoke
         ? [...picked].map(k => mkItem(k, 'revoke'))
         : [...toGrant.map(k => mkItem(k, 'grant')),
            ...scopeChanged.map(k => mkItem(k, 'grant')),
@@ -714,11 +734,13 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       const wfAction = action === 'approve' ? 'select' : 'reject'
       // expected_node_id — jeśli przełożony wykonał już ten krok, backend zwróci
       // 409 zamiast zastosować ten wybór do kolejnego etapu obiegu.
-      return { action: wfAction, comment: commentText, items,
-               ...(r.current_node_id ? { expected_node_id: r.current_node_id } : {}) }
+      return { action: wfAction, comment: commentText, items: bodyItems,
+               ...(r.current_node_id ? { expected_node_id: r.current_node_id } : {}),
+               ...(wfAction === 'select' ? draftStamp : {}) }
     }
     const body = { action, comment: commentText }
     if (r.current_node_id) body.expected_node_id = r.current_node_id
+    if (isMgrApprove && action === 'approve') Object.assign(body, draftStamp)
     // Odmowy pozycji dołączamy tylko przy zatwierdzaniu przez kierownika nadrzędnego.
     if (action === 'approve' && isHigherApprove) {
       const ds = Object.entries(denials).map(([item_id, c]) => ({
@@ -737,9 +759,12 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     // (bez zbędnej rundy 428). Obsługa 428 niżej zostaje jako zabezpieczenie.
     if (!declaration && action !== 'reject' && r.declaration_required === true) {
       setDeclText('')            // DeclarationModal pobierze aktualną treść
-      setDeclPending(action)     // okno podsumowania chowa się na czas oświadczenia (open niżej)
+      setDeclPending(action)
+      // v3.11 (Ś4): podsumowanie zamykamy na stałe (jak w ścieżce 428) — wcześniej
+      // wracało w stanie „Wysyłanie…” po „Oświadczam i wysyłam”.
+      setReviewOpen(false)
       setBusy(false)
-      return
+      return 'decl'
     }
     const body = buildActionBody(action, commentText)
     if (declaration) body.declaration = declaration
@@ -775,20 +800,39 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
         setDeclPending(action)
         setReviewOpen(false)
         setBusy(false)
-        return
+        return 'decl'
       }
       setErr(errorMessage(ex, 'Nie udało się wykonać operacji'))
       setReviewOpen(false)
       setBusy(false)
+      focusSendBtn()
       // 409 = krok wykonała już inna osoba (np. przełożony), 403 = wniosek
       // przejął przełożony — odśwież dane wniosku, żeby widok pokazał stan bieżący.
       if (st === 409 || st === 403) refreshAfterConflict(ex)
     }
   }
 
+  // v3.11: wersja robocza zmieniona w międzyczasie przez inną osobę (409 DRAFT_CHANGED)
+  // — nie odświeżamy sami (straciłoby to zaznaczenia), tylko mówimy, co zrobić.
+  const [draftConflict, setDraftConflict] = useState(false)
+  function isDraftChanged(ex) {
+    const det = ex?.response?.data?.detail
+    return ex?.response?.status === 409 && det && typeof det === 'object' && det.code === 'DRAFT_CHANGED'
+  }
+  const DRAFT_CHANGED_MSG = 'Wersja robocza została w międzyczasie zmieniona przez inną osobę — odśwież wniosek.'
+  function reloadRequest() {
+    setDraftConflict(false); setErr(null)
+    getRequest(r.id).then(res => onRefresh?.(res.data)).catch(() => onRefresh?.())
+  }
+
   // Po 403/409 widok może zamontować się od nowa (zmiana can_act) — komunikat
   // pokazujemy też w toaście, żeby nie zniknął razem z polem błędu.
   function refreshAfterConflict(ex) {
+    if (isDraftChanged(ex)) {
+      setDraftConflict(true)
+      setErr(DRAFT_CHANGED_MSG)
+      return
+    }
     toast(errorMessage(ex, 'Wniosek zmienił stan — odświeżono widok.'), { tone: 'error' })
     getRequest(r.id).then(res => onRefresh?.(res.data)).catch(() => onRefresh?.())
   }
@@ -800,7 +844,7 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       // Krok akceptacji kierownika komórki: pozycje są ustalone — zapisujemy tylko uwagi.
       setBusy(true); setErr(null)
       try {
-        const data = { comment }
+        const data = { comment, ...draftStamp }
         if (r.current_node_id) data.expected_node_id = r.current_node_id
         await saveRequestDraft(r.id, data)
         toast(`Zapisano wersję roboczą wniosku #${r.id}.`)
@@ -816,7 +860,7 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     if (loading || loadErr) { setErr(loadErr || 'Poczekaj na wczytanie uprawnień pracownika.'); return }
     setBusy(true); setErr(null)
     try {
-      const data = { items: buildActionBody('approve').items }
+      const data = { items: buildActionBody('approve').items, ...draftStamp }
       if (comment.trim()) data.comment = comment
       // Jak przy wysłaniu: 409, jeśli w międzyczasie ktoś wykonał ten krok.
       if (r.current_node_id) data.expected_node_id = r.current_node_id
@@ -889,8 +933,6 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     }
   }
 
-  // v3.1 — wysłanie wyboru idzie przez krok PODSUMOWANIA (ReviewDialog).
-  const [reviewOpen, setReviewOpen] = useState(false)
 
   // „Anuluj” / „Wróć” — pytamy tylko, gdy coś zmieniono (wybór, pola, odmowy, komentarz).
   async function guardedClose() {
@@ -993,9 +1035,23 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     : isMgrApprove
       ? `Zatwierdź albo odrzuć wniosek — po zatwierdzeniu trafi ${destText}.`
       : isDecision ? 'Zatwierdź albo odrzuć wniosek.' : 'Podgląd wniosku i jego obiegu.'
+  // Czy akceptacja wyższa jest na ścieżce TEGO wniosku: bieżący/następny węzeł z backendu
+  // ma pierwszeństwo nad flagą komórki (np. wniosek dla kierownika wymaga akceptacji
+  // przełożonego także w komórce jednostopniowej; wybór przełożonego ją pomija).
+  const onManagerStage = ['select_permissions', 'manager_approve'].includes(r.current_node_type)
+  const higherOnPath = r.current_node_type === 'higher_manager_approve' ? true
+    : (onManagerStage && nextNode) ? nextNode === 'higher_manager_approve' || (nextNode === 'manager_approve' && twoStage)
+    : r.requires_higher_approval
+  const takenOver = !!r.taken_over_by_name
   const _steps = buildWorkflowSteps({
     sent: true, nodeType: r.current_node_type, status: r.status,
-    requiresHigher: r.requires_higher_approval, kind: r.kind,
+    requiresHigher: higherOnPath, kind: r.kind,
+    step2Caption: emergency && onManagerStage ? 'Superadmin (rezerwa)'
+      : takenOver ? `Przejęte: ${takenByMe ? 'Ty' : r.taken_over_by_name}` : undefined,
+    step3Caption: emergency && r.current_node_type === 'higher_manager_approve' ? 'Superadmin (rezerwa)'
+      : (higherOnPath && !twoStage) ? 'Przełożony pracownika' : undefined,
+    step3SkipCaption: takenOver && twoStage && onManagerStage
+      ? 'Zaliczona — wybór wysyła przełożony' : undefined,
   })
   const _summary = [
     { label: 'Pracownik', value: r.worker_name },
@@ -1010,12 +1066,12 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   return (
     <>
     <RequestViewShell
-      icon={ListChecks} kind={['revoke', 'change'].includes(r.kind) ? r.kind : 'grant'} kindLabel={kindLabel(r.kind)}
+      icon={ListChecks} kind={['revoke', 'change'].includes(r.kind) ? r.kind : 'grant'} kindLabel={kindLabel(r.kind, r.is_system === true)}
       statusText={`Wniosek #${r.id}${r.is_draft ? ' · roboczy' : ''}${(isSelect || isDecision) ? ' · czeka na Ciebie' : ''}`}
       perspective={(isSelect || isDecision) ? perspectiveLabel(r.current_node_type) : null}
       waiting={!(isSelect || isDecision) ? waitingText(r) : null}
       title={title} subtitle={_subtitle}
-      backLabel="← Wróć do listy" onBack={guardedClose}
+      backLabel={backLabel} onBack={guardedClose}
       steps={_steps} summary={_summary} historyRequestId={r.id}
       historyCreatedBy={r.created_by_name}
       footerLeft={isSelect && !loading
@@ -1048,7 +1104,7 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           </button>
         )}
         {isSelect && (
-          <button className="btn btn--success" onClick={() => submit('approve')}
+          <button ref={sendBtnRef} className="btn btn--success" onClick={() => submit('approve')}
                   disabled={busy || loading || !!loadErr || (isRevoke
                     ? picked.size === 0
                     : (toGrant.length === 0 && toRevoke.length === 0 && scopeChanged.length === 0))}>
@@ -1056,7 +1112,7 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           </button>
         )}
         {isDecision && (
-          <button className="btn btn--success" onClick={() => submit('approve')} disabled={busy}>
+          <button ref={sendBtnRef} className="btn btn--success" onClick={() => submit('approve')} disabled={busy}>
             <Check size={14} /> {isMgrApprove ? sendLabel : 'Zatwierdź'}
           </button>
         )}
@@ -1080,12 +1136,21 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
               </button>
             </div>
           )}
+          {/* v3.11: superadmin jako rezerwa — dlaczego działa i z jaką adnotacją. */}
+          {emergency && r.can_act && (
+            <div role="note" className="alert alert--warning" style={{ fontSize: 13, marginBottom: 16 }}>
+              <strong>Działasz awaryjnie jako superadmin.</strong>{' '}
+              {r.waiting_for ? <>Powód: {r.waiting_for}. </> : 'W strukturze nie ma osoby uprawnionej do tego kroku. '}
+              Oświadczenie i decyzja zostaną zapisane z adnotacją „działając awaryjnie jako superadmin”.
+              Trwałe rozwiązanie: uzupełnij strukturę w „Jednostkach” (kierownik, zastępca lub dyrektor).
+            </div>
+          )}
           {r.taken_over_by_name && !canTakeOver && (
             <div role="note" className="alert alert--info"
                  style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', fontSize: 13,
                           marginBottom: 16 }}>
               <span style={{ flex: '1 1 280px' }}>
-                Wniosek przejęty przez <strong>{r.taken_over_by_name}</strong>
+                Wniosek przejęty przez <strong>{takenByMe ? 'Ciebie' : r.taken_over_by_name}</strong>
                 {r.taken_over_at ? ` (${fmtDate(r.taken_over_at)})` : ''}.
                 {!r.can_act && ' Możesz go tylko podejrzeć.'}
               </span>
@@ -1139,8 +1204,11 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           {/* --- Akcja: wybór uprawnień --- */}
           {isSelect && (
             <Section n={sec()} title={isRevoke ? 'Uprawnienia do odebrania' : 'Uprawnienia — stan docelowy'}>
-              <p style={{ color: 'var(--color-text-muted)', fontSize: 13, margin: '0 0 10px' }}>
-                {isRevoke
+              <p id="mgr-revoke-hint" style={{ color: 'var(--color-text-muted)', fontSize: 13, margin: '0 0 10px' }}>
+                {isTermination
+                  ? 'Przy ustaniu odbierane są wszystkie uprawnienia — pozycji nie można odznaczyć. '
+                    + 'Jeśli coś się nie zgadza, odrzuć wniosek z uzasadnieniem.'
+                  : isRevoke
                   ? 'Zaznacz uprawnienia do odebrania (domyślnie wszystkie).'
                   : <>Zaznacz nowe, aby je <strong>nadać</strong>; odznacz posiadane, aby je <strong>odebrać</strong>.</>}
               </p>
@@ -1197,7 +1265,9 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                         <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', padding: '4px 0' }}>
                           <input type="checkbox" checked={picked.has(key)}
                                  style={{ width: 16, height: 16, flexShrink: 0 }}
-                                 onChange={() => togglePerm(p.system_id, p.permission_id)} />
+                                 disabled={isTermination}
+                                 aria-describedby={isTermination ? 'mgr-revoke-hint' : undefined}
+                                 onChange={() => { if (!isTermination) togglePerm(p.system_id, p.permission_id) }} />
                           <span style={{ fontWeight: 600, color: 'var(--color-heading)' }}>{p.system_name}</span>
                           <span style={{ color: 'var(--color-text-muted)' }}>›</span>
                           <span>{p.permission_name}</span>
@@ -1292,21 +1362,21 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
                           <div style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>Brak uprawnień</div>
                         ) : (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                            {groupPerms(main).map(({ group, items }) => {
+                            {groupPerms(main).map(({ group, items: groupItems }) => {
                               const gkey = `${s.id}|${group}`
                               const q = (groupQuery[gkey] || '').toLowerCase()
                               const sysHit = _sq && (s.name || '').toLowerCase().includes(_sq)
-                              const visible = items
+                              const visible = groupItems
                                 .filter(p => isPermVisible(p, `${s.id}:${p.id}`, held, picked))
                                 .filter(p => passPermFilter(`${s.id}:${p.id}`))
                                 .filter(p => !q || p.permission_name.toLowerCase().includes(q))
                                 .filter(p => !_sq || sysHit
                                              || p.permission_name.toLowerCase().includes(_sq))
-                              const selCount = items.filter(
+                              const selCount = groupItems.filter(
                                 p => picked.has(`${s.id}:${p.id}`)).length
                               return (
                                 <PermGroupSection
-                                  key={gkey} group={group} count={items.length}
+                                  key={gkey} group={group} count={groupItems.length}
                                   selectedCount={selCount}
                                   query={groupQuery[gkey] || ''}
                                   onQuery={v => setGroupQuery(x => ({ ...x, [gkey]: v }))}
@@ -1398,6 +1468,12 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           )}
 
           <ErrorAlert>{err}</ErrorAlert>
+          {draftConflict && (
+            <button type="button" className="btn btn--ghost btn--sm" style={{ marginTop: 8 }}
+                    onClick={reloadRequest}>
+              <RefreshCw size={14} aria-hidden="true" /> Odśwież wniosek
+            </button>
+          )}
     </RequestViewShell>
 
       <ReviewDialog
@@ -1412,7 +1488,7 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
             : 'Po wysłaniu wniosek trafi bezpośrednio do realizacji przez IT.'}
         confirmLabel={sendLabel}
         busy={busy}
-        onBack={() => setReviewOpen(false)}
+        onBack={() => { setReviewOpen(false); focusSendBtn() }}
         onConfirm={confirmFromReview}
       />
 
@@ -1420,12 +1496,14 @@ export function RequestModal({ request: r, onClose, onDone, onRefresh }) {
         <DeclarationModal
           text={declText}
           busy={busy}
-          onClose={() => { setDeclPending(null); setBusy(false) }}
+          emergency={emergency}
+          onClose={() => { setDeclPending(null); setBusy(false); focusSendBtn() }}
           onConfirm={(declaration) => {
+            // Okno oświadczenia zostaje otwarte („Wysyłanie…”) do końca żądania —
+            // bez migania podsumowania; po błędzie fokus wraca na przycisk wysyłki.
             setBusy(true)
             const action = declPending
-            setDeclPending(null)
-            sendAction(action, declaration)
+            sendAction(action, declaration).then(res => { if (res !== 'decl') setDeclPending(null) })
           }}
         />
       )}

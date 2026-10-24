@@ -22,6 +22,8 @@ api.interceptors.response.use(
     const onLoginPage = window.location.pathname.startsWith('/login')
     if (err.response?.status === 401 && !isAuthAttempt && !onLoginPage) {
       clearSession()
+      // Powód dla ekranu logowania (sesja wygasła — także po bezczynności po stronie serwera).
+      try { sessionStorage.setItem('szup_logout_reason', 'expired') } catch { /* brak dostępu */ }
       window.location.href = '/login'
     }
     // 403 PASSWORD_CHANGE_REQUIRED — hasło trzeba zmienić (np. wygasło w trakcie
@@ -83,7 +85,7 @@ export const listMyWorkers    = ()              => api.get('/users/my-workers')
 export const getMySubtree     = ()              => api.get('/users/my-subtree')
 export const getMyPermissions = ()              => api.get('/users/me/permissions')
 export const usersByDepartment = (deptId)       => api.get(`/users/by-department/${deptId}`)
-export const searchUsers        = (q)            => api.get('/users/search', { params: { q } })
+export const searchUsers        = (q, extra = {}) => api.get('/users/search', { params: { q, ...extra } })
 export const userPermissions   = (userId)       => api.get(`/users/${userId}/permissions`)
 export const listItStaff       = ()             => api.get('/users/it-staff')
 export const assignRequest     = (id, userId)   => api.post(`/requests/${id}/assign`, { user_id: userId })

@@ -13,6 +13,29 @@ import { MANAGER_NODES, statusLabel } from '../labels'
  *  - osoby: kierownik/kadry — /users/search (zakres jak w formularzach),
  *    administrator — lista użytkowników; IT — skrót do rejestru uprawnień.
  */
+const SEARCH_CSS = `
+.szup-search-btn {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 10px 0 12px;
+  border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-card);
+  color: var(--color-text-muted); font: 500 13px var(--font-base); cursor: pointer; min-width: 200px;
+  transition: border-color .15s, color .15s;
+}
+.szup-search-btn:hover, .szup-search-btn:focus-visible { border-color: var(--color-heading); color: var(--color-heading); outline: none; }
+.szup-search-btn:focus-visible { box-shadow: 0 0 0 2px var(--color-focus-ring); }
+.szup-search-btn__label { flex: 1; text-align: left; }
+.szup-search-btn__kbd {
+  font: 600 11px var(--font-mono); padding: 2px 6px; border-radius: 4px;
+  border: 1px solid var(--color-border); background: var(--bg-secondary); color: var(--color-text-muted);
+}
+@media (max-width: 1200px) {
+  .szup-search-btn { min-width: 150px; }
+}
+@media (max-width: 720px) {
+  .szup-search-btn { min-width: 0; }
+  .szup-search-btn__label, .szup-search-btn__kbd { display: none; }
+}
+`
+
 export default function GlobalSearch() {
   const navigate = useNavigate()
   const roles = workRoles()   // superadmin — bez wniosków (tylko konfiguracja)
@@ -282,25 +305,3 @@ function fold(s) {
   return (s || '').toLowerCase().replace(/ł/g, 'l').normalize('NFKD').replace(/[̀-ͯ]/g, '')
 }
 
-const SEARCH_CSS = `
-.szup-search-btn {
-  display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 10px 0 12px;
-  border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-card);
-  color: var(--color-text-muted); font: 500 13px var(--font-base); cursor: pointer; min-width: 200px;
-  transition: border-color .15s, color .15s;
-}
-.szup-search-btn:hover, .szup-search-btn:focus-visible { border-color: var(--color-heading); color: var(--color-heading); outline: none; }
-.szup-search-btn:focus-visible { box-shadow: 0 0 0 2px var(--color-focus-ring); }
-.szup-search-btn__label { flex: 1; text-align: left; }
-.szup-search-btn__kbd {
-  font: 600 11px var(--font-mono); padding: 2px 6px; border-radius: 4px;
-  border: 1px solid var(--color-border); background: var(--bg-secondary); color: var(--color-text-muted);
-}
-@media (max-width: 1200px) {
-  .szup-search-btn { min-width: 150px; }
-}
-@media (max-width: 720px) {
-  .szup-search-btn { min-width: 0; }
-  .szup-search-btn__label, .szup-search-btn__kbd { display: none; }
-}
-`

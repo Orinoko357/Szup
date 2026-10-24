@@ -33,7 +33,8 @@ export default function NameChangeQueue({ onChanged } = {}) {
     await load()
     focusIfLost(listRef)
   }
-  useEffect(() => { load() }, [filter])  // eslint-disable-line react-hooks/exhaustive-deps
+  // load zależy wyłącznie od `filter` — efekt celowo bez `load` w zależnościach.
+  useEffect(() => { load() }, [filter])
 
   return (
     <>

@@ -292,7 +292,9 @@ def test_force_delete_referenced_department_archives(api):
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["mode"] == "archived"
-    assert out["detached_users"] == 1
+    # 3.11: lista odpiętych osób [{id, full_name, login}] (wcześniej liczba).
+    assert len(out["detached_users"]) == 1
+    assert set(out["detached_users"][0]) == {"id", "full_name", "login"}
     assert out["removed_deputies"] == 1
     assert out["reparented_department_ids"] == [child]
     assert out["rejected_request_ids"] == [active]
@@ -408,7 +410,22 @@ def test_held_group_delete_revokes_from_holders(api):
     assert len(out["revoke_request_ids"]) == 1
     assert out["updated_request_ids"] == [g["in_progress"]]
 
-    # Uprawnienia efektywne: odebrane.
+    # 3.11: odebranie trafia do kolejki IT — do realizacji uprawnienie jest.
+    eff = api.get(f"/users/{g['worker']}/permissions", token=g["sup"]).json()
+    assert [p["permission_name"] for p in eff["permissions"]] == ["Odczyt"]
+    with Session(engine) as s:
+        rev = s.get(AccessRequest, out["revoke_request_ids"][0])
+        assert rev.status == RequestStatus.pending_it and rev.completed_at is None
+        rev_item = s.exec(select(RequestItem).where(RequestItem.request_id == rev.id)).one()
+        assert not rev_item.fulfilled
+        rev_item_id = rev_item.id
+    # IT odhacza odebranie i zamyka wniosek (pozycja usuniętego uprawnienia).
+    assert api.post(f"/requests/{out['revoke_request_ids'][0]}/items/{rev_item_id}/fulfill",
+                    token=g["it"], json={"fulfilled": True}).status_code == 200
+    r = api.post(f"/requests/{out['revoke_request_ids'][0]}/workflow/action",
+                 token=g["it"], json={"action": "execute"})
+    assert r.status_code == 200, r.text
+    # Uprawnienia efektywne: odebrane po realizacji przez IT.
     eff = api.get(f"/users/{g['worker']}/permissions", token=g["sup"]).json()
     assert eff["permissions"] == []
     assert any(r_["kind"] == "revoke" for r_ in eff["requests"])

@@ -95,6 +95,16 @@ DECLARED_NAME_MAX = 200
 DECLARED_DATE_MAX_AGE_DAYS = 3650
 
 
+# Adnotacja oświadczenia złożonego przez superadmina w trybie rezerwy.
+EMERGENCY_NOTE = ("[Działając awaryjnie jako superadmin — w strukturze nie ma osoby "
+                  "uprawnionej do wykonania tego kroku]")
+
+
+def is_emergency_text(text: Optional[str]) -> bool:
+    """Czy zamrożona treść oświadczenia ma adnotację trybu awaryjnego."""
+    return bool(text) and text.startswith(EMERGENCY_NOTE)
+
+
 def validate_declaration(declared_by_name: Optional[str],
                          declared_date: Optional[str]) -> tuple[str, str]:
     """Sprawdź dane oświadczenia wnioskującego. Zwraca (imię i nazwisko,
@@ -137,10 +147,17 @@ def create_declaration(
     declared_date: str,
     declaration_text: str,
     approved_at: Optional[datetime] = None,
+    emergency: bool = False,
 ) -> PermissionDeclaration:
     """Utwórz i zapisz oświadczenie dla wniosku. Zwraca rekord (z kodem).
-    Dane oświadczenia są walidowane (`validate_declaration` — ValueError)."""
+    Dane oświadczenia są walidowane (`validate_declaration` — ValueError).
+
+    `emergency=True` — oświadczenie składa superadmin działający jako rezerwa
+    (brak osoby uprawnionej w strukturze): zamrożona treść dostaje adnotację
+    `EMERGENCY_NOTE` (decyzja właściciela 3.11)."""
     declared_by_name, declared_date = validate_declaration(declared_by_name, declared_date)
+    if emergency:
+        declaration_text = f"{EMERGENCY_NOTE}\n\n{declaration_text or ''}".rstrip()
     when = approved_at or datetime.utcnow()
     code = unique_reference_code(session, declared_by.username, when)
     dec = PermissionDeclaration(

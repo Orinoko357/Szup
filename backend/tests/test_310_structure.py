@@ -250,6 +250,14 @@ def _group_world(api):
     return dict(w, gsid=gsid, gp=perms)
 
 
+def _it_execute(api, rid):
+    """IT realizuje (systemowy) wniosek o odebranie z kolejki IT."""
+    r = api.post(f"/requests/{rid}/workflow/action", token=api.login("it"),
+                 json={"action": "execute"})
+    assert r.status_code == 200, r.text
+    return r
+
+
 def _group_delete(api, g, token=None, **body):
     payload = {"group_name": "G", "reason": "Moduł wycofany", "password": PW, **body}
     return api.post(f"/systems/{g['gsid']}/permissions/group-delete",
@@ -266,6 +274,13 @@ def test_held_group_delete_requires_superadmin_password(api):
     assert [p["permission_name"] for p in eff] == ["Listy płac"]
     r = _group_delete(api, g)
     assert r.status_code == 200, r.text
+    # 3.11: odebranie czeka w kolejce IT — do realizacji uprawnienie jest.
+    rev = r.json()["revoke_request_ids"]
+    assert len(rev) == 1
+    assert [p["permission_name"] for p in api.get(
+        f"/users/{g['worker']}/permissions", token=g["sup"]).json()["permissions"]] \
+        == ["Listy płac"]
+    _it_execute(api, rev[0])
     assert api.get(f"/users/{g['worker']}/permissions",
                    token=g["sup"]).json()["permissions"] == []
 
@@ -292,12 +307,20 @@ def test_held_group_delete_covers_holders_without_account(api, monkeypatch):
     from services.structure import is_system_request
     with Session(engine) as s:
         rev = s.get(AccessRequest, rev_id)
-        assert rev.kind == "revoke" and rev.status == RequestStatus.completed
+        assert rev.kind == "revoke" and rev.status == RequestStatus.pending_it
         assert rev.worker_user_id is None and rev.worker_name == "Zleceniobiorca Bez Konta"
         assert is_system_request(rev)
         assert not is_system_request(s.get(AccessRequest, src))
         granted = s.exec(select(RequestItem).where(RequestItem.request_id == src)).one()
         assert granted.revoked_by_request_id == rev_id
+    # Do realizacji przez IT rejestr pokazuje uprawnienie jako posiadane.
+    row = next(x for x in api.get("/registry/granted", token=api.login("it")).json()["items"]
+               if x["request_id"] == src)
+    assert row["revoked"] is False
+    # IT i helpdesk dostają zadanie.
+    assert any(name == "notify_helpdesk_new_request" and kw["request_id"] == rev_id
+               for name, kw in jobs)
+    _it_execute(api, rev_id)
     reg = api.get("/registry/granted", token=api.login("it")).json()["items"]
     row = next(x for x in reg if x["request_id"] == src)
     assert row["revoked"] is True and row["revoked_by_request_id"] == rev_id
@@ -349,10 +372,24 @@ def test_held_group_delete_moves_fulfilled_in_progress_items_to_revoke(api, monk
         rev_items = s.exec(select(RequestItem).where(RequestItem.request_id == rev.id)).all()
         assert [(i.permission_id, i.kind) for i in rev_items] == \
             [(g["gp"]["Listy płac"], "revoke")]
-    # Dokończenie realizacji nie przywraca uprawnienia.
-    r = api.post(f"/requests/{rid}/workflow/action", token=it, json={
-        "action": "execute", "ad_username": "prac"})
-    assert r.status_code in (200, 400, 409), r.text
+    # Dokończenie realizacji nie przywraca uprawnienia z usuniętej grupy —
+    # nadaje tylko pozostałą pozycję (Odczyt), Kartoteki prac traci dopiero
+    # po realizacji przez IT systemowego wniosku o odebranie.
+    with Session(engine) as s:
+        hold_rev = s.exec(select(AccessRequest).where(AccessRequest.worker_user_id == g["worker"])
+                          .where(AccessRequest.kind == "revoke")).one()
+        assert hold_rev.status == RequestStatus.pending_it
+        hold_rev_id = hold_rev.id
+        req = s.get(AccessRequest, rid); req.worker_user_id = g["worker"]; s.add(req); s.commit()
+    r = api.post(f"/requests/{rid}/workflow/action", token=it, json={"action": "execute"})
+    assert r.status_code == 200, r.text
+
+    def _eff():
+        return sorted(p["permission_name"] for p in api.get(
+            f"/users/{g['worker']}/permissions", token=g["sup"]).json()["permissions"])
+    assert _eff() == ["Kartoteki", "Odczyt"]
+    _it_execute(api, hold_rev_id)
+    assert _eff() == ["Odczyt"]
     mails = {kw["to_address"] for name, kw in jobs if name == "_send_group_revoked_mail"}
     assert {"prac@t.local", "kier@t.local"} <= mails
     entry = json.loads(_audit("permission_group.deleted")[0].details)

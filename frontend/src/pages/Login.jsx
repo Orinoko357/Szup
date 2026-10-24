@@ -41,6 +41,19 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
     return null
   })
 
+  // Powód wylogowania (bezczynność / wygasła sesja) — jednorazowo, z sessionStorage
+  // (AuthGate przekierowuje na /login bez parametrów, więc ?reason= bywa gubiony).
+  const [sessionInfo] = useState(() => {
+    let reason = new URLSearchParams(window.location.search).get('reason')
+    try {
+      reason = sessionStorage.getItem('szup_logout_reason') || reason
+      sessionStorage.removeItem('szup_logout_reason')
+    } catch { /* brak dostępu */ }
+    if (reason === 'idle') return 'Wylogowano automatycznie po 30 minutach bezczynności. Zaloguj się ponownie.'
+    if (reason === 'expired') return 'Sesja wygasła (np. po dłuższej bezczynności) — zaloguj się ponownie.'
+    return null
+  })
+
   const [mode, setMode] = useState(ldapEnabled ? 'ldap' : 'local')
   const [form, setForm] = useState({ username: '', password: '' })
   const [showPw, setShowPw] = useState(false)
@@ -228,6 +241,7 @@ export default function Login({ ldapEnabled, testMode, ssoEnabled, ssoAuto, onLo
                 </div>
               )}
 
+              {sessionInfo && !error && <div className="wl-msg" role="status">{sessionInfo}</div>}
               {error && <div className="wl-msg wl-msg--error" role="alert">{error}</div>}
 
               <button type="submit" className="wl-submit"

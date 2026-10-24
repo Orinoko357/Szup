@@ -12,7 +12,7 @@
   --wl-gold-hover: #B8901F;
   --wl-bg: #F5F6F8;
   --wl-border: #E2E5EA;
-  --wl-input-border: #D5D9E0;
+  --wl-input-border: #878F9C;
   --wl-text: #1D2433;
   --wl-muted: #4B5563;
   --wl-card: #FFFFFF;
@@ -38,7 +38,7 @@
 [data-theme="dark"] .wl-page {
   --wl-bg: #121A2B;
   --wl-border: #2A3650;
-  --wl-input-border: #35425E;
+  --wl-input-border: #64748F;
   --wl-text: #E5E9F0;
   --wl-muted: #A3ADBF;
   --wl-card: #1A2438;

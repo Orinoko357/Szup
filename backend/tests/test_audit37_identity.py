@@ -18,7 +18,7 @@ import ssl
 import time
 
 import pytest
-from jose import jwt
+import jwt  # PyJWT (3.11: zamiast python-jose)
 from sqlmodel import Session, select
 
 from database import engine

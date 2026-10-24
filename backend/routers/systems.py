@@ -430,6 +430,9 @@ def create_system(
     session: Session = Depends(get_session),
     _: User = Depends(require_it_staff),
 ):
+    from services.structure import clean_model_fields, description_spec, name_spec
+    clean_model_fields(data, {"name": name_spec("nazwa oprogramowania"),
+                              "description": description_spec()})
     _validate_display_order(session, data.display_order)
     _validate_vendor(session, data.vendor_id)
     s = PermissionSystem(
@@ -467,6 +470,9 @@ def update_system(
     s = session.get(PermissionSystem, system_id)
     if not s:
         raise HTTPException(404, "System nie istnieje")
+    from services.structure import clean_model_fields, description_spec, name_spec
+    clean_model_fields(data, {"name": name_spec("nazwa oprogramowania"),
+                              "description": description_spec()})
 
     payload = data.model_dump(exclude_unset=True)
     unit_ids = payload.pop("unit_ids", None)
@@ -653,6 +659,14 @@ def create_permission(
     s = session.get(PermissionSystem, system_id)
     if not s:
         raise HTTPException(404, "System nie istnieje")
+    from services.structure import (
+        clean_model_fields, description_spec, name_spec, text_spec,
+    )
+    clean_model_fields(data, {"permission_name": name_spec("nazwa uprawnienia"),
+                              "description": description_spec("opis uprawnienia"),
+                              "group_name": text_spec("grupa"),
+                              "subgroup_name": text_spec("podgrupa"),
+                              "input_prompt": description_spec("podpowiedź pola")})
     if s.access_only:
         raise HTTPException(
             400,
@@ -887,6 +901,21 @@ def update_permission(
     p = session.get(SystemPermission, perm_id)
     if not p or getattr(p, "deleted_at", None):
         raise HTTPException(404, "Uprawnienie nie istnieje")
+    from services.auth_service import clean_text_field
+    from services.structure import DESCRIPTION_MAX, NAME_MAX
+    # Limity (N-2); None = bez zmian, a pusty tekst czyści pole (jak dotąd).
+    for field, label, max_len, multiline, required in (
+            ("permission_name", "nazwa uprawnienia", NAME_MAX, False, True),
+            ("description", "opis uprawnienia", DESCRIPTION_MAX, True, False),
+            ("group_name", "grupa", NAME_MAX, False, False),
+            ("subgroup_name", "podgrupa", NAME_MAX, False, False),
+            ("input_prompt", "podpowiedź pola", DESCRIPTION_MAX, True, False)):
+        raw = getattr(data, field)
+        if raw is None:
+            continue
+        cleaned = clean_text_field(raw, label, max_len=max_len, required=required,
+                                   multiline=multiline)
+        setattr(data, field, cleaned if cleaned is not None else "")
     if p.permission_name == ADMIN_PERM_NAME or (
         data.permission_name or ""
     ).strip() == ADMIN_PERM_NAME:
@@ -1280,7 +1309,9 @@ GROUP_DELETE_REASON_MAX = 1000
 class GroupDeleteOut(ImportCommitOut):
     # Tylko przy usunięciu grupy, którą ktoś posiadał (superadmin):
     affected_user_ids: list[int] = []
-    revoke_request_ids: list[int] = []          # systemowe wnioski o odebranie (completed)
+    # Systemowe wnioski o odebranie — w kolejce IT (status pending_it, 3.11);
+    # uprawnienia znikają po realizacji przez IT.
+    revoke_request_ids: list[int] = []
     updated_request_ids: list[int] = []         # wnioski w toku z odmówionymi pozycjami
     # Wnioski zrealizowane dla osób bez dowiązanego konta, których pozycje
     # odebrano (systemowy wniosek o odebranie bez konta + oznaczenie w rejestrze).
@@ -1288,6 +1319,9 @@ class GroupDeleteOut(ImportCommitOut):
     # Pozycje odhaczone już przez IT we wnioskach w toku (nadane w systemie) —
     # odmówione i dopisane do systemowego wniosku o odebranie.
     revoked_in_progress_item_ids: list[int] = []
+    # Wnioski w toku, w których po usunięciu grupy wszystkie pozycje są
+    # odmówione — odrzucone systemowo.
+    rejected_request_ids: list[int] = []
 
 
 class GroupHolderOut(BaseModel):
@@ -1416,10 +1450,13 @@ def _new_system_revoke(session: Session, actor: User, *, worker_name: str,
                        worker_email: Optional[str], worker_position: Optional[str],
                        worker_user_id: Optional[int], unit_id, dept_id,
                        comment: str, now) -> int:
-    """Systemowy, od razu ZREALIZOWANY wniosek o odebranie (bez pozycji —
-    dodaje je `_add_revoke_items`). Oznaczenie wniosku systemowego:
-    `request_type_id = None` i komentarze z prefiksem `[SYSTEM] `
-    (services.structure.is_system_request) — to nie jest ustanie stosunku pracy."""
+    """Systemowy wniosek o odebranie (bez pozycji — dodaje je
+    `_add_revoke_items`), przekazany do REALIZACJI PRZEZ IT (3.11): status
+    `pending_it`, obieg zakłada `start_system_revoke` po dodaniu pozycji.
+    Uprawnienia efektywne znikają dopiero, gdy IT zrealizuje wniosek.
+    Oznaczenie wniosku systemowego: `request_type_id = None` i komentarze
+    z prefiksem `[SYSTEM] ` (services.structure.is_system_request) — to nie
+    jest ustanie stosunku pracy."""
     from models import AccessRequest, RequestStatus
     actor_name = actor.full_name or actor.username
     req = AccessRequest(
@@ -1427,11 +1464,11 @@ def _new_system_revoke(session: Session, actor: User, *, worker_name: str,
         worker_position=worker_position, worker_user_id=worker_user_id,
         unit_id=unit_id, department_id=dept_id,
         kind="revoke",
-        status=RequestStatus.completed,
+        status=RequestStatus.pending_it,
         created_by_id=actor.id, created_by_name=actor_name,
-        approved_by_id=actor.id, completed_by_id=actor.id,
+        approved_by_id=actor.id,
         manager_comment=comment, it_comment=comment,
-        created_at=now, approved_at=now, completed_at=now,
+        created_at=now, approved_at=now,
     )
     session.add(req)
     session.flush()
@@ -1440,7 +1477,8 @@ def _new_system_revoke(session: Session, actor: User, *, worker_name: str,
 
 def _add_revoke_items(session: Session, actor: User, revoke_id: int,
                       entries: list[tuple[int, int]], now) -> None:
-    """Pozycje odebrania (system_id, permission_id) — zrealizowane od razu."""
+    """Pozycje odebrania (system_id, permission_id) — do realizacji przez IT
+    (nieodhaczone; IT odhacza je i zamyka wniosek jak każdy inny)."""
     from models import RequestItem
     session.flush()
     seen: set[tuple[int, int]] = {
@@ -1453,8 +1491,62 @@ def _add_revoke_items(session: Session, actor: User, revoke_id: int,
         session.add(RequestItem(
             request_id=revoke_id, system_id=sys_id, permission_id=perm_id,
             kind="revoke", added_by_user_id=actor.id,
-            fulfilled=True, fulfilled_by_user_id=actor.id, fulfilled_at=now,
         ))
+
+
+# Obieg systemowych wniosków o odebranie: od razu realizacja przez IT.
+SYSTEM_REVOKE_TEMPLATE_NAME = "[SYSTEM] Odebranie uprawnień — realizacja przez IT"
+_SYSTEM_REVOKE_GRAPH = {
+    "nodes": [
+        {"id": "s1", "type": "start", "label": "Operacja superadmina", "x": 50, "y": 100,
+         "props": {}},
+        {"id": "s2", "type": "it_execute", "label": "Realizacja odebrania przez IT",
+         "x": 250, "y": 100, "props": {}},
+        {"id": "s3", "type": "end", "label": "Zakończenie", "x": 450, "y": 100,
+         "props": {}},
+    ],
+    "edges": [{"from": "s1", "to": "s2"}, {"from": "s2", "to": "s3"}],
+}
+
+
+def _system_revoke_template(session: Session):
+    """Ukryty (nieaktywny) szablon obiegu wniosków systemowych — tworzony przy
+    pierwszym użyciu. Silnik czyta zamrożoną kopię grafu z instancji, więc
+    późniejsza edycja szablonu nie zmienia trwających wniosków."""
+    from models import WorkflowTemplate
+    t = session.exec(select(WorkflowTemplate)
+                     .where(WorkflowTemplate.name == SYSTEM_REVOKE_TEMPLATE_NAME)).first()
+    if t is None:
+        t = WorkflowTemplate(
+            name=SYSTEM_REVOKE_TEMPLATE_NAME,
+            description=("Obieg wniosków zakładanych przez operacje superadmina "
+                         "(np. usunięcie posiadanej grupy uprawnień): od razu realizacja "
+                         "przez IT. Nie przypinaj go do typów wniosków."),
+            version=1, is_active=False,
+            graph_json=json.dumps(_SYSTEM_REVOKE_GRAPH, ensure_ascii=False))
+        session.add(t)
+        session.flush()
+    return t
+
+
+def start_system_revoke(session: Session, req) -> None:
+    """Zakłada obieg wniosku systemowego i przesuwa go do realizacji IT —
+    silnik powiadamia IT i helpdesk (jak przy każdym wejściu w realizację)."""
+    from models import WorkflowInstance, WorkflowInstanceStatus, WorkflowStepAction
+    from services.workflow import _record_step, advance
+    t = _system_revoke_template(session)
+    graph = _SYSTEM_REVOKE_GRAPH
+    inst = WorkflowInstance(
+        request_id=req.id, template_id=t.id, template_version=t.version,
+        template_snapshot=json.dumps(graph, ensure_ascii=False),
+        current_node_id=graph["nodes"][0]["id"], status=WorkflowInstanceStatus.active)
+    session.add(inst)
+    session.flush()
+    _record_step(session, inst, graph["nodes"][0], action=WorkflowStepAction.auto_advance,
+                 actor_user=None, comment="Utworzono instancję obiegu (wniosek systemowy)")
+    session.flush()
+    advance(session, inst, req, actor_user=None)
+    session.add(req)
 
 
 def _mark_items_revoked(session: Session, revoke_id: int, *, perm_ids: list[int],
@@ -1544,12 +1636,12 @@ def _notify_group_revoked(session: Session, actor: User, *, group: str, sys_name
                 _add(m.email, line)
     if not by_email:
         return
-    subject = f"[SZUP] Odebrano uprawnienia — usunięto grupę „{group}” ({sys_name})"
+    subject = f"[SZUP] Odebranie uprawnień — usunięto grupę „{group}” ({sys_name})"
     for email, lines in by_email.items():
         body = (f"Superadmin {actor.full_name or actor.username} usunął z rejestru grupę "
                 f"uprawnień „{group}” w programie {sys_name}.\n"
                 f"Powód: {reason}\n\n"
-                "Odebrano uprawnienia:\n"
+                "Uprawnienia do odebrania (zadanie przekazano do realizacji IT):\n"
                 + "\n".join(f"  • {line}" for line in lines)
                 + "\n\nJeśli dostęp jest nadal potrzebny, kierownik składa nowy wniosek "
                   f"o inne uprawnienia.\n\n{APP_URL.rstrip('/')}\n")
@@ -1563,12 +1655,14 @@ def _delete_held_group(session: Session, request: Request, actor: User,
                        reason: str) -> GroupDeleteOut:
     """Usunięcie grupy, którą ktoś posiada (superadmin):
 
-    - posiadacze z kontem i bez konta tracą uprawnienia — systemowe,
-      zrealizowane wnioski o odebranie (dla osoby bez konta: z nazwiskiem
-      z wniosku źródłowego), a pozycje nadania są oznaczane jako odebrane
-      w rejestrze (`revoked_by_request_id`),
+    - posiadacze z kontem i bez konta dostają systemowe wnioski o odebranie
+      (dla osoby bez konta: z nazwiskiem z wniosku źródłowego) w KOLEJCE IT
+      (`pending_it`, mail do IT i helpdesku); pozycje nadania wskazują wniosek
+      odbierający (`revoked_by_request_id`), ale uprawnienie efektywne i rejestr
+      uznają je za odebrane dopiero po realizacji tego wniosku przez IT,
     - we wnioskach w toku pozycje są odmawiane; pozycje już odhaczone przez IT
-      (nadane w systemie) trafiają dodatkowo do wniosku o odebranie tej osoby,
+      (nadane w systemie) trafiają dodatkowo do wniosku o odebranie tej osoby;
+      wniosek bez żadnej nieodmówionej pozycji jest odrzucany systemowo,
     - pozycje są usuwane miękko, audyt + zdarzenie bezpieczeństwa,
     - e-mail do posiadaczy i ich kierowników.
     """
@@ -1612,7 +1706,7 @@ def _delete_held_group(session: Session, request: Request, actor: User,
                          "full_name": user.full_name, "permissions": perm_names})
         people[("u", user.id)] = {"name": user.full_name or user.username, "user_id": user.id,
                                   "dept_id": dept_id, "permissions": list(perm_names)}
-        details.append(f"odebrano {len(perm_names)} uprawn. — {user.full_name or user.username}")
+        details.append(f"do odebrania przez IT {len(perm_names)} uprawn. — {user.full_name or user.username}")
 
     for src, items in unlinked:
         rid = _new_system_revoke(
@@ -1631,10 +1725,11 @@ def _delete_held_group(session: Session, request: Request, actor: User,
                                  "user_id": None, "email": src.worker_email,
                                  "dept_id": src.department_id,
                                  "permissions": list(perm_names)}
-        details.append(f"odebrano {len(perm_names)} uprawn. — {src.worker_name} "
+        details.append(f"do odebrania przez IT {len(perm_names)} uprawn. — {src.worker_name} "
                        f"(bez konta, wniosek #{src.id})")
 
-    in_progress = _group_in_progress(session, ids)
+    # Bez świeżo założonych wniosków systemowych (też są „w toku”).
+    in_progress = [x for x in _group_in_progress(session, ids) if x not in revoke_ids]
     revoked_in_progress: list[int] = []
     if in_progress:
         items = session.exec(
@@ -1698,6 +1793,41 @@ def _delete_held_group(session: Session, request: Request, actor: User,
             details.append(f"pozycje już nadane przez IT ({len(revoked_in_progress)}) "
                            "dopisano do wniosków o odebranie")
 
+    # Wnioski w toku, w których po usunięciu grupy nie została żadna
+    # nieodmówiona pozycja — odrzucenie systemowe (nie ma czego nadać/odebrać).
+    rejected: list[int] = []
+    if in_progress:
+        from routers.units import _system_reject_request
+        session.flush()
+        for rq_id in in_progress:
+            left = session.exec(
+                select(RequestItem.id).where(RequestItem.request_id == rq_id)
+                .where(RequestItem.denied == False)  # noqa: E712
+            ).first()
+            if left is not None:
+                continue
+            req = session.get(AccessRequest, rq_id)
+            _system_reject_request(
+                session, req, actor,
+                f"Wszystkie pozycje wniosku odmówione — usunięto grupę uprawnień "
+                f"„{group}” ({sys_name}): {reason}",
+                req.department_id,
+                payload={"system": "permission_group_deleted", "system_id": system_id,
+                         "group_name": group})
+            rejected.append(rq_id)
+        if rejected:
+            details.append("odrzucono wnioski bez pozostałych pozycji: "
+                           + ", ".join(f"#{r}" for r in rejected))
+
+    # Odebrania trafiają do kolejki IT (3.11) — uprawnienia efektywne znikną
+    # dopiero po realizacji. Obieg powiadamia IT i helpdesk.
+    session.flush()
+    for rid in revoke_ids:
+        start_system_revoke(session, session.get(AccessRequest, rid))
+    if revoke_ids:
+        details.append("odebrania przekazano do realizacji IT: "
+                       + ", ".join(f"#{r}" for r in revoke_ids))
+
     for p in rows:
         p.is_active = False
         p.deleted_at = now
@@ -1714,16 +1844,21 @@ def _delete_held_group(session: Session, request: Request, actor: User,
         "affected_users": affected, "unlinked_holders": unlinked_out,
         "revoke_request_ids": revoke_ids, "updated_request_ids": in_progress,
         "revoked_in_progress_item_ids": revoked_in_progress,
+        "rejected_request_ids": rejected,
     }
     record_event(session, action="permission_group.deleted", user_id=actor.id,
                  username=actor.username, target_type="permission_system",
                  target_id=system_id, ip=meta["ip"], user_agent=meta["user_agent"],
                  details=audit_details)
+    from services.security_events import plural
+    n_people = len(affected) + len(unlinked_out)
     emit_security_event(
         session, event_type="permission_group.deleted_held", source="systems",
         severity=SecuritySeverity.high,
         summary=(f"Superadmin {actor.username} usunął grupę „{group}” ({sys_name}) — "
-                 f"odebrano uprawnienia {len(affected) + len(unlinked_out)} os.: {reason}"),
+                 f"odebranie uprawnień {n_people} "
+                 f"{plural(n_people, 'osoby', 'osób', 'osób')} "
+                 f"przekazano do realizacji IT: {reason}"),
         details=audit_details, user_id=actor.id, ip=meta["ip"],
     )
     return GroupDeleteOut(
@@ -1732,6 +1867,7 @@ def _delete_held_group(session: Session, request: Request, actor: User,
         revoke_request_ids=revoke_ids, updated_request_ids=in_progress,
         unlinked_request_ids=[u["request_id"] for u in unlinked_out],
         revoked_in_progress_item_ids=revoked_in_progress,
+        rejected_request_ids=rejected,
     )
 
 
@@ -1750,7 +1886,7 @@ def delete_permission_group(
 
     Gdy ktoś je posiada (także osoba bez dowiązanego konta): wyłącznie
     superadmin, z powodem i potwierdzeniem hasłem. Posiadacze tracą
-    uprawnienia (systemowy, zrealizowany wniosek o odebranie), pozycje
+    uprawnienia po realizacji przez IT systemowego wniosku o odebranie, pozycje
     we wnioskach w toku są odmawiane, a same uprawnienia usuwane miękko
     (zostają w historii pod dotychczasową nazwą).
     """

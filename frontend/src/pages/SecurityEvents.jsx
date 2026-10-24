@@ -110,7 +110,7 @@ export default function SecurityEvents() {
             <div key={sev} className={`stat-tile stat-tile--sev-${sevKey(sev)}`}>
               <span style={TILE_LBL}>{SEVERITY_LABEL[sev] || sev}</span>
               <span style={TILE_VAL}>{n}</span>
-              <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>istotność, otwarte</span>
+              <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>otwarte o tej istotności</span>
             </div>
           ))}
         </div>
@@ -129,8 +129,10 @@ export default function SecurityEvents() {
             <RefreshCw size={13} /> Odśwież
           </button>
         </div>
-        <div style={{ overflowX: 'auto' }}>
-          <table className="data-table" style={{ minWidth: 1000 }}>
+        {/* v3.11: kolumna akcji przyklejona do prawej (task-table) — przy 1024 px przycisk
+            „Oznacz jako rozwiązane” w zasięgu bez przewijania w poziomie. */}
+        <div className="task-table-wrap">
+          <table className="data-table task-table" style={{ minWidth: 900 }}>
             <thead>
               <tr>
                 <th>Data</th><th>Typ</th><th>Istotność</th><th>Opis</th><th>IP</th><th>Status</th><th><span className="sr-only">Akcje</span></th>
@@ -166,7 +168,7 @@ export default function SecurityEvents() {
                         {SEVERITY_LABEL[r.severity] || r.severity}
                       </span>
                     </td>
-                    <td>{r.summary}</td>
+                    <td style={{ minWidth: 220, overflowWrap: 'anywhere' }}>{r.summary}</td>
                     <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-text-muted)' }}>{r.ip || '—'}</td>
                     <td>
                       {r.resolved_at

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { onTablistKeyDown } from '../components/ui/tabs'
 import { useSearchParams } from 'react-router-dom'
 import Structure from './Structure'
 import { Users, RefreshCw, FilePlus, Search, ListChecks, Send, Save, ChevronDown, ChevronRight } from 'lucide-react'
@@ -14,6 +15,7 @@ import RequestViewShell, {
 } from '../components/RequestView'
 import { toast, confirmDialog } from '../components/ui/feedback'
 import { ErrorAlert, LoadError } from '../components/ui/LoadState'
+import { focusIfLost, PAGE_HEADING } from '../components/ui/focus'
 import { plural } from '../labels'
 import { ReviewDialog, describeKeys, diffSelection } from '../components/ChangeSummary'
 import CopyFromColleague, { buildCopiedSelection } from '../components/CopyFromColleague'
@@ -24,22 +26,6 @@ import PermInput, {
   isScopeGated, missingScopeSystems,
 } from '../components/ItemFields'
 
-// Zakładki (wzorzec WAI-ARIA „tabs”): strzałki lewo/prawo, Home/End
-// przechodzą między zakładkami i od razu je aktywują.
-function onTablistKeyDown(e) {
-  const tabs = Array.from(e.currentTarget.querySelectorAll('[role="tab"]'))
-  const i = tabs.indexOf(e.target)
-  if (i < 0) return
-  const next = e.key === 'ArrowRight' ? (i + 1) % tabs.length
-    : e.key === 'ArrowLeft' ? (i - 1 + tabs.length) % tabs.length
-    : e.key === 'Home' ? 0
-    : e.key === 'End' ? tabs.length - 1
-    : null
-  if (next == null) return
-  e.preventDefault()
-  tabs[next].focus()
-  tabs[next].click()
-}
 
 // v3.0 — „Moi pracownicy” ma dwie zakładki: Pracownicy (lista + wnioski)
 // oraz Struktura (drzewo komórek w zakresie kierownika).
@@ -65,6 +51,7 @@ export default function MyTeam() {
            onKeyDown={onTablistKeyDown}>
         {[['workers', 'Pracownicy'], ['structure', 'Struktura']].map(([id, label]) => (
           <button key={id} role="tab" aria-selected={tab === id} tabIndex={tab === id ? 0 : -1}
+                  id={`myteam-tab-${id}`} aria-controls="myteam-panel"
                   className={`tab-btn${tab === id ? ' active' : ''}`}
                   onClick={() => setParams(id === 'structure' ? { tab: 'structure' } : {})}>
             {label}
@@ -135,6 +122,7 @@ function WorkersTab({ renderHeader }) {
   return (
     <div>
       {renderHeader(load, loading)}
+      <div role="tabpanel" id="myteam-panel" aria-labelledby="myteam-tab-workers">
 
       {/* v3.0: wyszukiwarka w nagłówku karty listy (wg projektu). */}
       <section aria-label="Pracownicy" className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -267,6 +255,7 @@ function WorkersTab({ renderHeader }) {
           </div>
         )}
       </section>
+      </div>
     </div>
   )
 }
@@ -290,6 +279,11 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
   const [busy, setBusy]             = useState(false)
   const [err, setErr]               = useState(null)
   const [loading, setLoading]       = useState(true)
+  // Krok podsumowania przed wysłaniem (v3.1).
+  const [reviewOpen, setReviewOpen] = useState(false)
+  // Cel powrotu fokusu po zamknięciu podsumowania / oświadczenia albo po błędzie.
+  const sendBtnRef = useRef(null)
+  const focusSendBtn = () => focusIfLost(sendBtnRef, PAGE_HEADING)
   // Migawka zaznaczenia po załadowaniu — do ostrzeżenia o niezapisanych zmianach.
   const initialSel = useRef(null)
   const selKey = () => JSON.stringify([[...picked].sort(), fieldValues])
@@ -455,14 +449,23 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
     setReviewOpen(true)
   }
 
-  const [reviewOpen, setReviewOpen] = useState(false)
   async function confirmFromReview() {
     // Nadanie uprawnień administracyjnych wymaga twardego potwierdzenia.
     const admins = adminGrantNames([...toGrant, ...scopeChanged], systems, permsBySys)
-    if (!(await confirmAdminRights(admins))) { setErr(ADMIN_CONFIRM_ABORTED); setReviewOpen(false); return }
+    if (!(await confirmAdminRights(admins))) { setErr(ADMIN_CONFIRM_ABORTED); setReviewOpen(false); focusSendBtn(); return }
 
+    // v3.11: backend podaje landing_node_type — gdy wniosek od razu trafi do IT
+    // i nadaje uprawnienia, oświadczenie zbieramy PRZED wysłaniem (bez rundy 428).
+    // Obsługa 428 w sendRequest zostaje jako zabezpieczenie (wspólne declarationRequired).
+    const items = selectionItems()
+    if (w.landing_node_type === 'it_execute' && items.some(it => it.kind === 'grant')) {
+      setReviewOpen(false)
+      setDeclText('')
+      setDeclItems(items)
+      return
+    }
     setBusy(true); setErr(null)
-    await sendRequest(selectionItems())
+    await sendRequest(items)
   }
 
   // Pozycje wniosku ze stanu docelowego: zaznaczone-nowe → nadanie,
@@ -533,10 +536,11 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
         setDeclText(declText428)
         setDeclItems(items)
         setBusy(false)
-        return
+        return 'decl'
       }
       setErr(errorMessage(ex, 'Nie udało się złożyć wniosku'))
       setBusy(false)
+      focusSendBtn()
     }
   }
 
@@ -576,6 +580,9 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
   const _steps = buildWorkflowSteps({
     sent: true, nodeType: 'select_permissions',
     requiresHigher: toApproval, kind: 'grant',
+    step2Caption: superiorTakeover ? 'Ty (przejęcie)' : undefined,
+    step3Caption: landingNode === 'higher_manager_approve' && !w.requires_higher_approval ? 'Przełożony pracownika' : undefined,
+    step3SkipCaption: superiorTakeover && !toApproval ? 'Zaliczona — wybór wysyła przełożony' : undefined,
   })
   const takeoverNote = superiorTakeover
     ? 'Składasz wniosek jako przełożony dla komórki, która ma własnego kierownika — wniosek zostanie '
@@ -610,7 +617,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
                   : noChange ? 'Brak zmian do zapisania' : 'Zapisz bez wysyłania — wrócisz do wniosku później'}>
           <Save size={14} /> Zapisz roboczy
         </button>
-        <button className="btn btn--success" onClick={submit} disabled={busy || loading || noChange || !requestTypeId}
+        <button ref={sendBtnRef} className="btn btn--success" onClick={submit} disabled={busy || loading || noChange || !requestTypeId}
                 title={!loading && !requestTypeId ? NO_TYPE_MSG : undefined}>
           <Send size={14} /> {sendLabel}
         </button>
@@ -855,7 +862,7 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
           : 'Po wysłaniu wniosek trafi do realizacji przez IT.'}
         confirmLabel={sendLabel}
         busy={busy}
-        onBack={() => setReviewOpen(false)}
+        onBack={() => { setReviewOpen(false); focusSendBtn() }}
         onConfirm={confirmFromReview}
       />
 
@@ -863,12 +870,11 @@ function NewRequestModal({ worker: w, onClose, onDone }) {
         <DeclarationModal
           text={declText}
           busy={busy}
-          onClose={() => { setDeclItems(null); setBusy(false) }}
+          onClose={() => { setDeclItems(null); setBusy(false); focusSendBtn() }}
           onConfirm={(declaration) => {
+            // Okno zostaje otwarte („Wysyłanie…”) do końca żądania.
             setBusy(true)
-            const items = declItems
-            setDeclItems(null)
-            sendRequest(items, declaration)
+            sendRequest(declItems, declaration).then(res => { if (res !== 'decl') setDeclItems(null) })
           }}
         />
       )}

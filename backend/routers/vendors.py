@@ -24,6 +24,29 @@ from services.permissions import require_it_staff
 
 router = APIRouter()
 
+
+def _clean_vendor(data) -> None:
+    """Limity pól dostawcy (3.11, N-2): nazwa i dane kontaktowe ≤ 200 znaków,
+    notatki ≤ 2000; bez znaków sterujących i znaków kierunku tekstu."""
+    from services.structure import (
+        clean_model_fields, description_spec, name_spec, text_spec,
+    )
+    clean_model_fields(data, {
+        "name": name_spec("nazwa dostawcy"),
+        **{f: text_spec(label) for f, label in (
+            ("nip", "NIP"), ("address", "adres"), ("postal_code", "kod pocztowy"),
+            ("city", "miejscowość"), ("contact_person", "osoba kontaktowa"),
+            ("phone", "telefon"), ("email", "e-mail"), ("website", "strona WWW"))},
+        "notes": description_spec("notatki"),
+    })
+
+
+def _clean_contract(data) -> None:
+    from services.structure import clean_model_fields, description_spec, text_spec
+    clean_model_fields(data, {"contract_number": text_spec("numer umowy"),
+                              "description": description_spec(),
+                              "notes": description_spec("notatki")})
+
 # Ile dni przed końcem umowy zaczynamy ostrzegać (pomarańczowo).
 EXPIRY_WARN_DAYS = 30
 
@@ -198,6 +221,7 @@ def create_vendor(
 ):
     if not data.name.strip():
         raise HTTPException(400, "Nazwa dostawcy jest wymagana")
+    _clean_vendor(data)
     v = SoftwareVendor(**data.model_dump())
     v.name = v.name.strip()
     session.add(v); session.commit(); session.refresh(v)
@@ -217,6 +241,7 @@ def update_contract(
     c = session.get(VendorContract, contract_id)
     if not c:
         raise HTTPException(404, "Umowa nie istnieje")
+    _clean_contract(data)
     payload = data.model_dump(exclude_unset=True)
     for field, value in payload.items():
         setattr(c, field, value)
@@ -265,6 +290,7 @@ def add_contract(
     if not session.get(SoftwareVendor, vendor_id):
         raise HTTPException(404, "Dostawca nie istnieje")
     _validate_period(data.valid_from, data.valid_to)
+    _clean_contract(data)
     c = VendorContract(vendor_id=vendor_id, **data.model_dump())
     session.add(c); session.commit(); session.refresh(c)
     return _serialize_contract(c)
@@ -294,6 +320,9 @@ def update_vendor(
     v = session.get(SoftwareVendor, vendor_id)
     if not v:
         raise HTTPException(404, "Dostawca nie istnieje")
+    if "name" in data.model_fields_set and not (data.name or "").strip():
+        raise HTTPException(400, "Nazwa dostawcy jest wymagana")
+    _clean_vendor(data)
     # exclude_unset (nie exclude_none) — pozwala wyczyścić pole i ustawić False.
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(v, field, value)

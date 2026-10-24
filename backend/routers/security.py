@@ -97,6 +97,10 @@ SUPERADMIN_ONLY_SEVERITIES = {SecuritySeverity.high, SecuritySeverity.critical}
 SELF_RESOLVE_FORBIDDEN_TYPES = frozenset({
     "audit.purged", "security.purged", "settings.factory_reset",
     "department.force_deleted", "permission_group.deleted_held",
+    # 3.11 (N9): nieudane potwierdzenia własnego hasła i blokada konta —
+    # przejęta sesja nie może sama „wyciszać” śladów zgadywania hasła.
+    "auth.password_change_denied", "superadmin.confirm_denied", "auth.lockout",
+    "settings.factory_reset_denied",
 })
 
 
@@ -128,22 +132,60 @@ def _target_user_id(ev: SecurityEvent) -> Optional[int]:
 
 def _involved_user_ids(ev: SecurityEvent) -> set[int]:
     """Konta, których dotyczy zdarzenie: sprawca (`user_id`), konto docelowe
-    (`target_user_id`) i nowo powołana osoba (`new_user_id`, np. mianowanie
-    na stanowisko kierownika)."""
+    (`target_user_id`), nowo powołana osoba (`new_user_id`, np. mianowanie
+    na stanowisko kierownika) i członkowie komórki (`member_user_ids`, np.
+    nadanie komórce funkcji kadr — beneficjenci, 3.11 N5)."""
     ids = {ev.user_id, _target_user_id(ev), _detail_user_id(ev, "new_user_id")}
+    members = _details(ev).get("member_user_ids")
+    if isinstance(members, list):
+        for raw in members:
+            if isinstance(raw, bool):
+                continue
+            try:
+                ids.add(int(raw))
+            except (TypeError, ValueError):
+                continue
     return {i for i in ids if i is not None}
 
 
-def _guard_resolve(ev: SecurityEvent, current_user: User) -> None:
+def _superadmin_acquired_after(session: Session, ev: SecurityEvent, user: User) -> bool:
+    """Czy `user` uzyskał rolę superadmina PO zdarzeniu `ev` (konto założone
+    później albo rola nadana później — 3.11, N-5): superadmin nie zamknie
+    śladu własnej operacji „drugim kontem” założonym po fakcie."""
+    if ev.created_at and user.created_at and user.created_at > ev.created_at:
+        return True
+    grants = session.exec(
+        select(SecurityEvent).where(SecurityEvent.event_type == "user.roles_granted")
+    ).all()
+    for g in grants:
+        d = _details(g)
+        if _detail_user_id(g, "target_user_id") != user.id:
+            continue
+        if "superadmin" not in (d.get("granted") or []):
+            continue
+        if ev.created_at and g.created_at and g.created_at >= ev.created_at:
+            return True
+    return False
+
+
+def _guard_resolve(ev: SecurityEvent, current_user: User,
+                   session: Optional[Session] = None) -> None:
     """Kto może zamknąć zdarzenie. Superadmin — każde poza śladem własnej
-    nieodwracalnej operacji; admin — tylko low/medium i nie te, które dotyczą
-    jego własnego konta."""
+    nieodwracalnej operacji (i nieudanych potwierdzeń własnego hasła), a ślady
+    z SELF_RESOLVE_FORBIDDEN_TYPES tylko, gdy był superadminem już w chwili
+    zdarzenia; admin — tylko low/medium i nie te,
+    które dotyczą jego własnego konta."""
     involved = current_user.id in _involved_user_ids(ev)
     if has_role(current_user, "superadmin"):
         if involved and ev.event_type in SELF_RESOLVE_FORBIDDEN_TYPES:
             raise HTTPException(403,
                 "To zdarzenie jest śladem Twojej własnej operacji — zamknąć je może "
                 "tylko inny superadmin")
+        if (session is not None and ev.event_type in SELF_RESOLVE_FORBIDDEN_TYPES
+                and _superadmin_acquired_after(session, ev, current_user)):
+            raise HTTPException(403,
+                "Rolę superadmina uzyskałeś po tym zdarzeniu — zamknąć je może "
+                "superadmin, który był nim już w chwili zdarzenia")
         return
     severity = getattr(ev.severity, "value", ev.severity)
     if severity in {s.value for s in SUPERADMIN_ONLY_SEVERITIES}:
@@ -165,12 +207,13 @@ def resolve(
     current_user: User = Depends(require_admin),
     session: Session = Depends(get_session),
 ):
-    ev = session.get(SecurityEvent, event_id)
+    from services.structure import db_int_ok
+    ev = session.get(SecurityEvent, event_id) if db_int_ok(event_id) else None
     if not ev:
         raise HTTPException(404, "Zdarzenie nie istnieje")
     if ev.resolved_at:
         return {"ok": True, "already": True}
-    _guard_resolve(ev, current_user)
+    _guard_resolve(ev, current_user, session)
     ev.resolved_at = datetime.utcnow()
     ev.resolved_by_user_id = current_user.id
     ev.resolution_note = (data.note or "")[:1000] or None

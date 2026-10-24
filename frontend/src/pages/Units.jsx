@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   Plus, Trash2, Edit2, ChevronDown, ChevronRight, Building2, Download,
   FolderTree, Layers, User as UserIcon, UserCog, Save, ShieldAlert,
@@ -547,8 +547,10 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged, onRe
                 aria-label={`Usuń komórkę ${d.name}`}><Trash2 size={15} aria-hidden="true" /></button>
         {superadmin && (
           // Kompaktowo (ikona) — tekstowy przycisk poszerzał kolumnę akcji o ~170 px.
-          // Różnica względem zwykłego „Usuń” w podpowiedzi i nazwie dostępnej.
-          <button type="button" className="btn btn--ghost btn--sm" style={{ border: 0, color: 'var(--color-error-text)' }}
+          // v3.11: odróżniony od zwykłego „Usuń” także wizualnie (wypełnione tło i obramowanie).
+          <button type="button" className="btn btn--ghost btn--sm"
+                  style={{ border: '1px solid var(--color-error)', background: 'var(--color-error-bg)',
+                           color: 'var(--color-error-text)', marginLeft: 4 }}
                   onClick={() => setForceOpen(true)}
                   title="Usuń komórkę (superadmin) — także z pracownikami, podkomórkami i wnioskami; z hasłem i powodem"
                   aria-label={`Usuń komórkę (superadmin): ${d.name}`}>
@@ -570,31 +572,52 @@ function DeptRow({ dept: d, depth = 0, users, unitId, unitDepts, onChanged, onRe
 }
 
 // Czytelne podsumowanie odpowiedzi force-delete (DepartmentForceDeleteOut):
-// { mode: "deleted"|"archived", department_id, detached_users, detached_user_ids?,
-//   removed_deputies, reparented_department_ids, rejected_request_ids, … }.
+// { mode: "deleted"|"archived", department_id, detached_users ([{id, full_name, login}] od 3.11,
+//   wcześniej liczba), detached_user_ids?, removed_deputies, reparented_department_ids,
+//   rejected_request_ids, completed_request_ids, it_pending_request_ids,
+//   higher_approval_unreachable_ids, … }.
 // department_id / mode / message nie trafiają na listę; nieznane pola pomijamy
 // (zamiast pokazywać surowe klucze API).
 const FORCE_DELETE_COUNTS = [
   // [etykieta, klucze (pierwszy obecny wygrywa)]
-  ['Odpięci pracownicy',   ['detached_users', 'detached_user_ids', 'users_detached']],
   ['Usunięci zastępcy',    ['removed_deputies', 'deputies_removed']],
   ['Przepięte podkomórki', ['reparented_department_ids', 'children_moved', 'moved_children']],
 ]
 const REJECTED_KEYS = ['rejected_request_ids', 'rejected_requests', 'requests_rejected']
 const asCount = v => (typeof v === 'number' ? v : Array.isArray(v) ? v.length : null)
+const idList = v => (Array.isArray(v) ? v.filter(x => x != null && typeof x !== 'object') : [])
+const hashIds = ids => ids.map(i => `#${i}`).join(', ')
 
 function forceDeleteSummary(data) {
   if (!data || typeof data !== 'object') return []
   const out = []
+  // Odpięci pracownicy — z nazwiskami (3.11), inaczej sama liczba.
+  const du = data.detached_users
+  if (Array.isArray(du) && du.some(u => u && typeof u === 'object')) {
+    out.push({ key: 'detached', label: 'Odpięci pracownicy (bez komórki)', people: du.filter(Boolean) })
+  } else {
+    const k = ['detached_users', 'detached_user_ids', 'users_detached'].find(x => asCount(data[x]) != null)
+    if (k) out.push({ key: 'detached', text: `Odpięci pracownicy: ${asCount(data[k])}`,
+                      hint: asCount(data[k]) > 0 ? 'Złóż dla nich ustanie w Kartotece (kadry).' : null })
+  }
   for (const [label, keys] of FORCE_DELETE_COUNTS) {
     const k = keys.find(x => asCount(data[x]) != null)
-    if (k) out.push(`${label}: ${asCount(data[k])}`)
+    if (k) out.push({ key: label, text: `${label}: ${asCount(data[k])}` })
   }
+  const done = idList(data.completed_request_ids)
+  if (done.length) out.push({ key: 'completed', text: `Wnioski zamknięte częściowo: ${hashIds(done)}` })
+  const itp = idList(data.it_pending_request_ids)
+  if (itp.length) out.push({ key: 'itp', text: `Przekazane do realizacji IT: ${hashIds(itp)}`,
+                             hint: 'Niewykonane odebrania czekają w kolejce IT — uprawnienia znikną po realizacji.' })
   const rk = REJECTED_KEYS.find(x => asCount(data[x]) != null)
   if (rk) {
-    const v = data[rk]
-    const ids = Array.isArray(v) ? v.filter(x => x != null) : []
-    out.push(`Odrzucone wnioski: ${asCount(v)}${ids.length ? ` (${ids.map(i => `#${i}`).join(', ')})` : ''}`)
+    const ids = idList(data[rk])
+    out.push({ key: 'rejected', text: `Odrzucone wnioski: ${asCount(data[rk])}${ids.length ? ` (${hashIds(ids)})` : ''}` })
+  }
+  const hu = Array.isArray(data.higher_approval_unreachable_ids) ? data.higher_approval_unreachable_ids : []
+  if (hu.length) {
+    const names = hu.map(x => (x && typeof x === 'object') ? (x.name || `#${x.id}`) : `#${x}`).join(', ')
+    out.push({ key: 'higher', text: `Bez osoby do akceptacji wyższej: ${names}`, unitsLink: true })
   }
   return out
 }
@@ -609,6 +632,7 @@ function ForceDeleteDeptModal({ dept: d, onClose, onDone }) {
   const [result, setResult]     = useState(null)
   const pwRef = useRef(null)
   const canSubmit = reason.trim().length > 0 && password.length > 0 && !busy
+  const missing = [!reason.trim() && 'powód', !password && 'hasło'].filter(Boolean)
 
   async function submit(e) {
     e?.preventDefault()
@@ -619,7 +643,7 @@ function ForceDeleteDeptModal({ dept: d, onClose, onDone }) {
       const data = r.data || {}
       setResult(data)
       toast(isArchived(data)
-        ? `Zarchiwizowano komórkę „${d.name}” (ma historię)`
+        ? `Zarchiwizowano komórkę „${d.name}” (ma powiązania)`
         : `Usunięto komórkę „${d.name}”`)
     } catch (ex) {
       setErr(errorMessage(ex, 'Nie udało się usunąć komórki'))
@@ -634,19 +658,45 @@ function ForceDeleteDeptModal({ dept: d, onClose, onDone }) {
     // key: nowe okno (nie ponowne użycie formularza) — useDialog ustawia fokus
     // na „Zamknij”, zamiast zostawić go na zniszczonym przycisku wysyłki.
     return (
-      <Modal key="result" title={`${archived ? 'Zarchiwizowano komórkę (ma historię)' : 'Usunięto komórkę'} — ${d.name}`}
+      <Modal key="result" title={`${archived ? 'Zarchiwizowano komórkę (ma powiązania)' : 'Usunięto komórkę'} — ${d.name}`}
              onClose={onDone} width={520}
              footer={<button type="button" className="btn btn--primary" data-autofocus onClick={onDone}>Zamknij</button>}>
         {archived && (
           <p style={{ marginTop: 0 }}>
-            Komórka ma historię (wnioski, uprawnienia), więc zamiast usunięcia została zarchiwizowana
-            i nie jest już widoczna w strukturze.
+            Komórka ma powiązania (pracownicy, zastępcy, wnioski), więc zamiast usunięcia została
+            zarchiwizowana i nie jest już widoczna w strukturze.
           </p>
         )}
         {result.message && <p style={{ marginTop: 0 }}>{result.message}</p>}
         {lines.length > 0 ? (
-          <ul style={{ margin: 0, paddingLeft: 20, fontSize: 14 }}>
-            {lines.map(l => <li key={l}>{l}</li>)}
+          <ul style={{ margin: 0, paddingLeft: 20, fontSize: 14, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {lines.map(l => (
+              <li key={l.key}>
+                {l.people ? (
+                  <>
+                    {l.label}: <strong>{l.people.length}</strong>
+                    <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                      {l.people.map((u, i) => (
+                        <li key={u.id ?? i}>
+                          {u.full_name || u.login || `#${u.id}`}
+                          {u.login && u.full_name ? <span style={{ color: 'var(--color-text-muted)' }}> ({u.login})</span> : null}
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="form-hint">Złóż dla nich ustanie w Kartotece (kadry) — do tego czasu zachowują uprawnienia.</div>
+                  </>
+                ) : (
+                  <>
+                    {l.text}
+                    {l.unitsLink && (
+                      <> — <Link to="/units" onClick={onDone} style={{ color: 'var(--color-gold-dark)', fontWeight: 700 }}>
+                        uzupełnij kierownika lub zastępcę w „Jednostkach”</Link></>
+                    )}
+                    {l.hint && <div className="form-hint">{l.hint}</div>}
+                  </>
+                )}
+              </li>
+            ))}
           </ul>
         ) : !result.message && <p style={{ margin: 0 }}>Operacja zakończona.</p>}
       </Modal>
@@ -655,21 +705,23 @@ function ForceDeleteDeptModal({ dept: d, onClose, onDone }) {
 
   return (
     <Modal key="form" title={`Usuń komórkę (superadmin) — ${d.name}`} onClose={onClose} closable={!busy} width={560}
-           onSubmit={submit}
+           onSubmit={submit} describedBy={`fd-warn-${d.id}`}
            footer={<>
              <button type="button" className="btn btn--ghost" onClick={onClose} disabled={busy}>Anuluj</button>
              {/* aria-disabled zamiast disabled — przycisk nie gubi fokusu podczas wysyłki. */}
-             <button type="submit" className="btn btn--danger" aria-disabled={!canSubmit}>
+             <button type="submit" className="btn btn--danger" aria-disabled={!canSubmit}
+                     aria-describedby={missing.length ? `fd-missing-${d.id}` : undefined}>
                <Trash2 size={14} aria-hidden="true" /> {busy ? 'Usuwanie…' : 'Usuń komórkę'}
              </button>
            </>}>
-      <div className="alert alert--warning" style={{ marginTop: 0 }}>
+      <div id={`fd-warn-${d.id}`} className="alert alert--warning" style={{ marginTop: 0 }}>
         <strong>Skutki operacji:</strong>
         <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
-          <li>pracownicy komórki zostaną odpięci (bez komórki),</li>
+          <li>pracownicy komórki zostaną odpięci (bez komórki) — kadry złożą dla nich ustanie,</li>
           <li>podkomórki zostaną przepięte poziom wyżej,</li>
-          <li>wnioski w toku zostaną odrzucone,</li>
-          <li>komórka z historią (wnioski, uprawnienia) zostanie zarchiwizowana zamiast usunięta.</li>
+          <li>wnioski w toku na etapie kierownika zostaną zamknięte; zrealizowane częściowo — domknięte,
+            a niewykonane odebrania uprawnień przekazane do realizacji IT,</li>
+          <li>komórka z powiązaniami (pracownicy, zastępcy, wnioski) zostanie zarchiwizowana zamiast usunięta.</li>
         </ul>
       </div>
       <div className="form-group">
@@ -684,6 +736,11 @@ function ForceDeleteDeptModal({ dept: d, onClose, onDone }) {
                autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} />
         <div className="form-hint">Operacja zostanie zapisana w dzienniku zdarzeń.</div>
       </div>
+      {missing.length > 0 && !busy && (
+        <div id={`fd-missing-${d.id}`} className="form-hint" style={{ marginBottom: 8 }}>
+          Aby usunąć komórkę, uzupełnij: {missing.join(', ')}.
+        </div>
+      )}
       {err && <div className="alert alert--error" role="alert">{err}</div>}
     </Modal>
   )
@@ -1223,28 +1280,12 @@ export function LdapUsersImportModal({ onClose }) {
     })
   }
 
-  function selectAllMapped() {
-    setSelected(prev => {
-      const s = { ...prev }
-      for (const u of visibleUsers) s[u.username] = importable(u)
-      return s
-    })
-  }
-
-  function deselectAll() {
-    setSelected(prev => {
-      const s = { ...prev }
-      for (const u of visibleUsers) s[u.username] = false
-      return s
-    })
-  }
-
   // Sort: OU (unit → department) → pełna nazwa, z filtrowaniem po frazie.
   function ouKey(u) {
     return `${(u.unit_name || '\uffff').toLowerCase()}\u0001${(u.department_name || '\uffff').toLowerCase()}`
   }
   // Czy użytkownik jest w zaznaczonej jednostce najwyższego rzędu.
-  const inSelectedUnit = u => !selectedUnits || selectedUnits.has(u.unit_id ?? 0)
+  function inSelectedUnit(u) { return !selectedUnits || selectedUnits.has(u.unit_id ?? 0) }
 
   // Jednostki najwyższego rzędu obecne w podglądzie — do checkboxów wyboru.
   const unitChoices = (() => {
@@ -1282,6 +1323,22 @@ export function LdapUsersImportModal({ onClose }) {
       const nb = (b.full_name || b.username || '').toLowerCase()
       return na < nb ? -1 : na > nb ? 1 : 0
     })
+
+  function selectAllMapped() {
+    setSelected(prev => {
+      const s = { ...prev }
+      for (const u of visibleUsers) s[u.username] = importable(u)
+      return s
+    })
+  }
+
+  function deselectAll() {
+    setSelected(prev => {
+      const s = { ...prev }
+      for (const u of visibleUsers) s[u.username] = false
+      return s
+    })
+  }
 
   // Liczba realnie importowalnych zaznaczonych (z uwzględnieniem wyboru jednostek).
   const selectedCount = users.filter(

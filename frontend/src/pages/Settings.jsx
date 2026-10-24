@@ -740,7 +740,8 @@ function FactoryResetSection() {
         {row('wipe_structure', 'Struktura organizacyjna', 'Jednostki, wydziały (w tym komórka kadrowa), zastępcy')}
         {row('wipe_users', 'Użytkownicy', 'Wszystkie konta OPRÓCZ Twojego (wymaga czyszczenia wniosków)')}
         {row('wipe_software', 'Rejestr oprogramowania', 'Systemy i ich uprawnienia (wymaga czyszczenia wniosków)')}
-        {row('wipe_audit', 'Dziennik zdarzeń i zdarzenia bezpieczeństwa', 'Historia audytowa — usuwaj tylko świadomie')}
+        {row('wipe_audit', 'Dziennik zdarzeń i zdarzenia bezpieczeństwa',
+          'Usuwa wpisy dziennika starsze niż 24 miesiące — młodsze zostają (okres przechowywania NIS2/KSC)')}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>

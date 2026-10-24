@@ -82,7 +82,7 @@ export default function PurgeLogModal({ title, what, purge, onClose, onDone, sta
         before,   // data ISO (RRRR-MM-DD), ≤ dziś − 24 miesiące
       })
       const n = deletedCount(r.data)
-      toast(`Usunięto ${countLabel(n, 'wpis', 'wpisy', 'wpisów')}`)
+      toast(n > 0 ? `Usunięto ${countLabel(n, 'wpis', 'wpisy', 'wpisów')}` : 'Brak wpisów do usunięcia')
       onDone?.()
     } catch (ex) {
       setErr(errorMessage(ex, 'Nie udało się wyczyścić wpisów'))

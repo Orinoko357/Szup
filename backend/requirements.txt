@@ -3,13 +3,14 @@
 # Dolne granice omijają wersje ze znanymi podatnościami:
 #   fastapi>=0.115.3 → Starlette>=0.40 (CVE-2024-47874, DoS formularzy multipart),
 #   python-multipart>=0.0.18 (CVE-2024-53981),
-#   python-jose>=3.4.0 (CVE-2024-33663, CVE-2024-33664).
+#   PyJWT>=2.8.0 (zamiast python-jose od 3.11 — PYSEC-2026-4298, zależność ecdsa;
+#   format tokenów HS256 bez zmian, wydane wcześniej tokeny nadal działają).
 # `pip install -r` podnosi zainstalowaną wersję, która nie spełnia dolnej granicy.
 fastapi>=0.115.3,<0.160
 uvicorn[standard]>=0.30.0,<0.55
 sqlmodel>=0.0.21,<0.0.23
 SQLAlchemy>=2.0,<2.1
-python-jose[cryptography]>=3.4.0,<3.6
+PyJWT>=2.8.0,<3
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 cryptography>=42.0.0,<51

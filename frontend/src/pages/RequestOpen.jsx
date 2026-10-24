@@ -27,6 +27,7 @@ export default function RequestOpen() {
   }
   useEffect(() => { load() }, [id])
 
+  // Po akcji/powrocie — pulpit; fokus na jego h1 ustawia RouteFocus (App.jsx).
   const back = () => navigate('/')
 
   if (loading && !req) {
@@ -49,9 +50,19 @@ export default function RequestOpen() {
   if (!req) return null
   // key z can_act — po zmianie uprawnień do kroku widok montuje się od nowa.
   return (
-    <RequestModal key={`${req.id}:${req.can_act ? 1 : 0}`} request={req}
-                  onClose={back}
-                  onDone={back}
-                  onRefresh={(upd) => { if (upd) setReq(upd); else load() }} />
+    <>
+      {/* v3.11 (N3): dlaczego superadmin widzi ten wniosek / czemu nie może działać. */}
+      {!req.can_act && req.waiting_for && !['completed', 'rejected'].includes(req.status) && (
+        <div role="note" className="alert alert--info" style={{ fontSize: 13, marginBottom: 12 }}>
+          Wniosek czeka na: <strong>{req.waiting_for}</strong>. Superadmin może działać tylko awaryjnie —
+          gdy w strukturze nie ma nikogo uprawnionego do bieżącego kroku; tu możesz go tylko podejrzeć.
+        </div>
+      )}
+      <RequestModal key={`${req.id}:${req.can_act ? 1 : 0}`} request={req}
+                    backLabel="← Wróć do pulpitu"
+                    onClose={back}
+                    onDone={back}
+                    onRefresh={(upd) => { if (upd) setReq(upd); else load() }} />
+    </>
   )
 }

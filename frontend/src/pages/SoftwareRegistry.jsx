@@ -1453,9 +1453,11 @@ function GroupForceDeleteModal({ system: s, group, count, usage, onClose, onDone
   const [err, setErr] = useState(null)
   const fid = useId()
   const pwRef = useRef(null)
-  const holders = usage.holders || []
+  // v3.11: posiadacze z kontem i bez konta (pozycje zrealizowane bez loginu AD).
+  const holders = [...(usage.holders || []), ...(usage.unlinked_holders || [])]
   const inProgress = usage.in_progress_requests || []
   const canSubmit = !busy && reason.trim().length > 0 && password.length > 0
+  const missing = [!reason.trim() && 'powód', !password && 'hasło'].filter(Boolean)
 
   async function submit(e) {
     e?.preventDefault()
@@ -1463,8 +1465,21 @@ function GroupForceDeleteModal({ system: s, group, count, usage, onClose, onDone
     setBusy(true); setErr(null)
     try {
       const r = await deletePermissionGroup(s.id, group, reason.trim(), password)
-      const n = revokedCount(r.data, holders.length)
-      toast(`Usunięto grupę „${group}”. Odebrano uprawnienia ${n} ${n === 1 ? 'osobie' : 'osobom'}.`)
+      const d = r.data || {}
+      // 3.11: odebrania trafiają do kolejki IT (wnioski pending_it), wnioski w toku
+      // z samymi odmówionymi pozycjami — odrzucone systemowo.
+      const parts = [`Usunięto grupę „${group}”.`]
+      if (Array.isArray(d.revoke_request_ids)) {
+        parts.push(`Odebrania przekazane do IT: ${d.revoke_request_ids.length}`
+          + (d.revoke_request_ids.length ? ` (${d.revoke_request_ids.map(i => `#${i}`).join(', ')})` : '') + '.')
+      } else {
+        const n = revokedCount(d, holders.length)
+        parts.push(`Odebranie uprawnień: ${n} ${n === 1 ? 'osoba' : 'osób'}.`)
+      }
+      if (Array.isArray(d.rejected_request_ids) && d.rejected_request_ids.length) {
+        parts.push(`Wnioski odrzucone systemowo: ${d.rejected_request_ids.map(i => `#${i}`).join(', ')}.`)
+      }
+      toast(parts.join(' '), { timeout: 9000 })
       onDone()
     } catch (ex) {
       setErr(errorMessage(ex, 'Nie udało się usunąć grupy'))
@@ -1476,18 +1491,20 @@ function GroupForceDeleteModal({ system: s, group, count, usage, onClose, onDone
 
   return (
     <Modal title={`Usuń grupę „${group}” (superadmin)`} onClose={onClose} closable={!busy} width={620}
-           onSubmit={submit}
+           onSubmit={submit} describedBy={`${fid}-warn`}
            footer={<>
              <button type="button" className="btn btn--ghost" onClick={onClose} disabled={busy}>Anuluj</button>
              {/* aria-disabled zamiast disabled — przycisk nie gubi fokusu podczas wysyłki. */}
-             <button type="submit" className="btn btn--danger" aria-disabled={!canSubmit}>
+             <button type="submit" className="btn btn--danger" aria-disabled={!canSubmit}
+                     aria-describedby={missing.length ? `${fid}-missing` : undefined}>
                <Trash2 size={14} aria-hidden="true" /> {busy ? 'Usuwanie…' : 'Usuń grupę i odbierz uprawnienia'}
              </button>
            </>}>
-      <div className="alert alert--warning" style={{ marginTop: 0 }}>
+      <div id={`${fid}-warn`} className="alert alert--warning" style={{ marginTop: 0 }}>
         Grupa ({countLabel(count, 'pozycja', 'pozycje', 'pozycji')}) jest przyznana <strong>{holders.length}</strong>{' '}
-        {holders.length === 1 ? 'osobie' : 'osobom'}. Po usunięciu uprawnienia z tej grupy
-        zostaną im odebrane (z wpisem w rejestrze i dzienniku zdarzeń).
+        {holders.length === 1 ? 'osobie' : 'osobom'}. Po usunięciu odebranie uprawnień z tej grupy trafi
+        do realizacji przez IT (wniosek systemowy w kolejce IT, powiadomienie e-mail) — uprawnienie zniknie
+        z ewidencji dopiero po realizacji.
         {inProgress.length > 0 && <> Grupy dotyczą też wnioski w toku: <strong>{inProgress.length}</strong>{' '}
           (nr {inProgress.join(', ')}).</>}
       </div>
@@ -1528,6 +1545,11 @@ function GroupForceDeleteModal({ system: s, group, count, usage, onClose, onDone
                autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} />
         <div className="form-hint">Operacja zostanie zapisana w dzienniku zdarzeń.</div>
       </div>
+      {missing.length > 0 && !busy && (
+        <div id={`${fid}-missing`} className="form-hint" style={{ marginBottom: 8 }}>
+          Aby usunąć grupę, uzupełnij: {missing.join(', ')}.
+        </div>
+      )}
       {err && <div className="alert alert--error" role="alert">{err}</div>}
     </Modal>
   )
@@ -1561,9 +1583,20 @@ function PermissionsPanel({ system: s }) {
     catch (ex) { setLoadErr(errorMessage(ex, 'Nie udało się wczytać listy uprawnień')) }
     finally { setLoading(false) }
   }
+  // v3.11 (N1): cel widoczny — przycisk „Nowa grupa uprawnień” (nagłówek sr-only miał 1×1 px).
+  // Lista przeładowuje się (na czas „Ładowanie…” przycisku nie ma) — fokus ustawiamy
+  // dopiero po wyrenderowaniu wczytanej listy (efekt niżej).
+  const newGroupBtnRef = useRef(null)
+  const [focusAfterLoad, setFocusAfterLoad] = useState(false)
   async function afterGroupRemoved() {
-    try { await load() } finally { requestAnimationFrame(() => focusTarget(panelRef)) }
+    setFocusAfterLoad(true)
+    await load()
   }
+  useEffect(() => {
+    if (!focusAfterLoad || loading) return
+    setFocusAfterLoad(false)
+    requestAnimationFrame(() => { if (!focusTarget(newGroupBtnRef)) focusTarget(panelRef) })
+  }, [focusAfterLoad, loading])
   useEffect(() => { load() }, [s.id])
 
   // Pozycja administratora nie należy do listy edytowalnej — system utrzymuje
@@ -1641,15 +1674,19 @@ function PermissionsPanel({ system: s }) {
       toast(errorMessage(ex, 'Nie udało się sprawdzić, komu przyznano grupę'), { tone: 'error' })
       return
     }
+    // v3.11: także posiadacze BEZ KONTA (unlinked_holders) — backend wymaga wtedy
+    // hasła i powodu, więc zwykłe potwierdzenie kończyło się błędem 400.
     const holders = usage.holders || []
+    const unlinked = usage.unlinked_holders || []
+    const total = holders.length + unlinked.length
     const inProgress = usage.in_progress_requests || []
-    if (holders.length > 0) {
+    if (total > 0) {
       if (!getUserRoles().includes('superadmin')) {
-        toast(`Grupa jest przyznana ${holders.length} ${holders.length === 1 ? 'osobie' : 'osobom'} — `
+        toast(`Grupa jest przyznana ${total} ${total === 1 ? 'osobie' : 'osobom'} — `
               + 'usunąć może tylko superadmin', { tone: 'warning', timeout: 7000 })
         return
       }
-      setGroupDel({ group, count, usage: { holders, in_progress_requests: inProgress } })
+      setGroupDel({ group, count, usage: { holders, unlinked_holders: unlinked, in_progress_requests: inProgress } })
       return
     }
     if (!await ask(
@@ -1688,7 +1725,7 @@ function PermissionsPanel({ system: s }) {
           <div style={{
             display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
           }}>
-            <button className="btn btn--action btn--sm" onClick={() => setShowGroup(true)}>
+            <button ref={newGroupBtnRef} className="btn btn--action btn--sm" onClick={() => setShowGroup(true)}>
               <ListPlus size={13} /> Nowa grupa uprawnień
             </button>
             <button className="btn btn--ghost btn--sm" onClick={() => setShowImport(true)}>

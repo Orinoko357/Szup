@@ -33,7 +33,7 @@ const NOTE_BOX = {
 // przypominamy, jak idzie obieg po wysłaniu (v3.1).
 function NextSteps({ revoke = false }) {
   const steps = [
-    revoke ? 'Kierownik komórki wskaże uprawnienia do odebrania.' : 'Kierownik komórki wybierze uprawnienia.',
+    revoke ? 'Kierownik komórki potwierdzi odebranie — przy ustaniu odbierane są wszystkie bieżące uprawnienia.' : 'Kierownik komórki wybierze uprawnienia.',
     'Jeśli komórka tego wymaga — akceptacja wyższa (kierownik nadrzędny).',
     revoke ? 'IT odbierze dostępy w systemach.' : 'IT zrealizuje uprawnienia w systemach.',
     'Dostaniesz potwierdzenie e-mailem, a status zobaczysz w Kartotece.',
@@ -177,6 +177,12 @@ export default function HR() {
         </div>
       </div>
 
+      {/* v3.11: po likwidacji komórki jej pracownicy zostają bez komórki — przypomnienie dla kadr. */}
+      <div role="note" className="alert alert--info" style={{ fontSize: 13, marginBottom: 16 }}>
+        Osoby bez komórki (np. po likwidacji komórki) zachowują uprawnienia do czasu ustania —
+        złóż dla nich „Ustanie stosunku pracy”: wyszukaj po nazwisku i wskaż komórkę docelową wniosku.
+      </div>
+
       <section aria-label="Moje zgłoszenia" className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12,
                       padding: '14px 18px', borderBottom: '1px solid var(--color-border)' }}>
@@ -189,7 +195,7 @@ export default function HR() {
                        { value: 'done', label: 'Zakończone', count: loadErr ? null : counts.done },
                        { value: 'all',  label: 'Wszystkie', count: loadErr ? null : counts.all },
                      ]} />
-          <label style={{ position: 'relative', display: 'block', flex: '0 1 280px' }}>
+          <label style={{ position: 'relative', display: 'block', flex: '1 1 220px', maxWidth: 360 }}>
             <span className="sr-only" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
               Szukaj pracownika
             </span>
@@ -206,10 +212,11 @@ export default function HR() {
           <div style={{ padding: '20px 18px', fontSize: 14, color: 'var(--color-text-muted)' }}>Brak zgłoszeń</div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table className="data-table" style={{ minWidth: 760 }}>
+            {/* Wąski ekran (≤600 px): kolumny pomocnicze ukryte (.hr-col-opt), status zostaje widoczny. */}
+            <table className="data-table hr-table">
               <thead>
                 <tr>
-                  <th>#</th><th>Pracownik</th><th>Rodzaj</th><th>Stanowisko</th><th>Status</th><th>Data</th>
+                  <th className="hr-col-opt">#</th><th>Pracownik</th><th>Rodzaj</th><th className="hr-col-opt">Stanowisko</th><th>Status</th><th className="hr-col-opt">Data</th>
                 </tr>
               </thead>
               <tbody>
@@ -217,12 +224,12 @@ export default function HR() {
                   const kind = r.kind || 'grant'
                   return (
                     <tr key={r.id}>
-                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--color-text-muted)' }}>{r.id}</td>
+                      <td className="hr-col-opt" style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--color-text-muted)' }}>{r.id}</td>
                       <td style={{ fontWeight: 700 }}>{r.worker_name}</td>
                       <td>
-                        <KindBadge kind={kind} label={kindLabel(kind)} />
+                        <KindBadge kind={kind} label={kindLabel(kind, r.is_system === true)} />
                       </td>
-                      <td style={{ color: 'var(--color-text-muted)' }}>{r.worker_position || '—'}</td>
+                      <td className="hr-col-opt" style={{ color: 'var(--color-text-muted)' }}>{r.worker_position || '—'}</td>
                       <td>
                         <span className={`badge ${statusBadge(r.status)}`}>{statusLabel(r.status)}</span>
                         {!DONE.includes(r.status) && (r.waiting_for || r.step_since) && (
@@ -232,7 +239,7 @@ export default function HR() {
                           </div>
                         )}
                       </td>
-                      <td style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>
+                      <td className="hr-col-opt" style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>
                         {fmtDate(r.created_at)}
                       </td>
                     </tr>
@@ -302,11 +309,11 @@ function RequestFormView({ onCancel, onCreated }) {
     onCancel()
   }
 
+  const workerName = `${firstName.trim()} ${lastName.trim()}`.trim()
   async function submit(e) {
     e.preventDefault()
     setErr(null)
 
-    const workerName = `${firstName.trim()} ${lastName.trim()}`.trim()
     if (!workerName) { setErr('Podaj imię i nazwisko'); return }
     if (!position.trim()) { setErr('Podaj stanowisko'); return }
     if (!selectedDept) { setErr('Wybierz komórkę organizacyjną'); return }
@@ -336,7 +343,6 @@ function RequestFormView({ onCancel, onCreated }) {
     }
   }
 
-  const workerName = `${firstName.trim()} ${lastName.trim()}`.trim()
   const higher = selectedDept ? !!selectedDept.requires_higher_approval : null
   const steps = buildWorkflowSteps({ sent: false, kind: 'grant', requiresHigher: higher })
   const summary = [
@@ -431,6 +437,9 @@ function TerminationFormView({ onCancel, onCreated }) {
   const [results, setResults] = useState([])
   const [searching, setSearching] = useState(false)
   const [picked, setPicked]   = useState(null)   // wybrany z wyszukiwarki (pełne dane)
+  // v3.11: pracownik bez „żywej” komórki (odpięty po likwidacji, komórka nieaktywna
+  // lub zarchiwizowana) — kadry wskazują aktywną komórkę docelową wniosku.
+  const [targetDeptId, setTargetDeptId] = useState(null)
 
   const [workUntil, setWorkUntil] = useState('')   // ostatni dzień pracy
   const [err, setErr]   = useState(null)
@@ -456,7 +465,8 @@ function TerminationFormView({ onCancel, onCreated }) {
     if (q.length < 2) { setResults([]); return }
     setSearching(true)
     const t = setTimeout(() => {
-      searchUsers(q)
+      // include_inactive — także konta nieaktywne z uprawnieniami (honorowane tylko dla kadr).
+      searchUsers(q, { include_inactive: true })
         .then(r => setResults(r.data))
         .catch(ex => { setResults([]); toast(errorMessage(ex, 'Wyszukiwanie nie powiodło się'), { tone: 'error' }) })
         .finally(() => setSearching(false))
@@ -486,14 +496,26 @@ function TerminationFormView({ onCancel, onCreated }) {
   function pickFromSearch(r) {
     setPicked(r)
     setSearch(''); setResults([])
-    setDeptId(null); setWorkerId(null)
+    setDeptId(null); setWorkerId(null); setTargetDeptId(null)
   }
+
+  // Czy wybrany pracownik ma „żywą” komórkę (backend: department_live; starszy
+  // backend — brak komórki albo komórka spoza listy aktywnych).
+  const pickedNeedsTarget = !!picked && (
+    picked.department_live === false || !picked.department_id
+    || (depts.length > 0 && !depts.some(d => d.id === picked.department_id)))
+  const targetDept = pickedNeedsTarget ? depts.find(d => d.id === targetDeptId) || null : null
+  const targetUnit = targetDept ? units.find(u => u.id === targetDept.unit_id) || null : null
 
   // Efektywny pracownik/komórka do zapisu: z wyszukiwarki albo z picker-a.
   const effWorker = picked
-    ? { id: picked.id, name: picked.full_name || picked.username,
-        unit_id: picked.unit_id, department_id: picked.department_id,
-        unit_name: picked.unit_name, department_name: picked.department_name }
+    ? (pickedNeedsTarget
+        ? { id: picked.id, name: picked.full_name || picked.username,
+            unit_id: targetDept?.unit_id ?? null, department_id: targetDept?.id ?? null,
+            unit_name: targetUnit?.name, department_name: targetDept?.name }
+        : { id: picked.id, name: picked.full_name || picked.username,
+            unit_id: picked.unit_id, department_id: picked.department_id,
+            unit_name: picked.unit_name, department_name: picked.department_name })
     : (selectedWorker && selectedDept
         ? (() => {
             // Pracownik może siedzieć w podkomórce wybranego węzła — zapisz jego
@@ -506,7 +528,7 @@ function TerminationFormView({ onCancel, onCreated }) {
           })()
         : null)
 
-  const dirty = !!(picked || workerId || workUntil || deptId)
+  const dirty = !!(picked || workerId || workUntil || deptId || targetDeptId)
   // Niezapisane dane — „Anuluj” / „← Wróć” pyta przed porzuceniem zmian.
   async function leave() {
     if (dirty && !(await confirmDialog({
@@ -520,7 +542,13 @@ function TerminationFormView({ onCancel, onCreated }) {
     e.preventDefault()
     setErr(null)
     if (!effWorker) { setErr('Wskaż pracownika (wyszukaj po nazwisku albo wybierz z komórki)'); return }
-    if (!effWorker.department_id) { setErr('Nie udało się ustalić komórki pracownika'); return }
+    if (!effWorker.department_id) {
+      setErr(pickedNeedsTarget
+        ? 'Pracownik nie ma aktywnej komórki — wskaż komórkę docelową wniosku.'
+        : 'Nie udało się ustalić komórki pracownika')
+      if (pickedNeedsTarget) document.getElementById('hr-term-target')?.focus()
+      return
+    }
     if (!requestTypeId) { setErr(NO_REVOKE_TYPE_MSG); return }
 
     setBusy(true)
@@ -535,7 +563,8 @@ function TerminationFormView({ onCancel, onCreated }) {
         items:           [],
         request_type_id: requestTypeId,
       })
-      toast(`Wysłano zgłoszenie odejścia: ${effWorker.name}. Trafi teraz do kierownika komórki.`)
+      toast(`Wysłano zgłoszenie odejścia: ${effWorker.name}. Trafi teraz do kierownika komórki`
+        + `${pickedNeedsTarget && effWorker.department_name ? ` ${effWorker.department_name}` : ''}.`)
       onCreated()
     } catch (ex) {
       setErr(errorMessage(ex, 'Błąd zapisu zgłoszenia'))
@@ -578,12 +607,13 @@ function TerminationFormView({ onCancel, onCreated }) {
                             minHeight: 52, padding: '6px 12px', border: '2px solid var(--color-selected)',
                             background: 'var(--bg-secondary)', borderRadius: 8 }}>
                 <strong>{picked.full_name || picked.username}</strong>
+                {picked.is_active === false && <span className="badge badge--neutral" style={{ fontSize: 11 }}>konto nieaktywne</span>}
                 <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
                   {picked.username ? `(${picked.username}) · ` : ''}
-                  {picked.unit_name ? `${picked.unit_name} › ` : ''}{picked.department_name || '—'}
+                  {picked.unit_name ? `${picked.unit_name} › ` : ''}{picked.department_name || 'bez komórki'}
                 </span>
                 <button type="button" className="btn btn--ghost btn--sm" style={{ marginLeft: 'auto' }}
-                        onClick={() => setPicked(null)}>Zmień</button>
+                        onClick={() => { setPicked(null); setTargetDeptId(null) }}>Zmień</button>
               </div>
             ) : (
               <>
@@ -610,10 +640,11 @@ function TerminationFormView({ onCancel, onCreated }) {
                               onBlur={e => e.currentTarget.style.background = 'transparent'}>
                         <span style={{ fontWeight: 700, color: 'var(--color-heading)' }}>{r.full_name || r.username}</span>
                         <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
-                          {[r.title, r.username].filter(Boolean).join(' · ')}
+                          {[r.title, r.username, r.is_active === false ? 'konto nieaktywne' : null].filter(Boolean).join(' · ')}
                         </span>
                         <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-text-muted)' }}>
-                          {r.unit_name ? `${r.unit_name} › ` : ''}{r.department_name || '—'}
+                          {r.unit_name ? `${r.unit_name} › ` : ''}{r.department_name || 'bez komórki'}
+                          {r.department_id && r.department_live === false ? ' (nieaktywna)' : ''}
                         </span>
                       </button>
                     ))}
@@ -627,6 +658,21 @@ function TerminationFormView({ onCancel, onCreated }) {
               </>
             )}
           </div>
+
+          {pickedNeedsTarget && (
+            <div className="form-group" style={{ marginTop: 12 }}>
+              <div role="note" className="alert alert--warning" style={{ fontSize: 13, marginBottom: 10 }}>
+                {picked.department_id
+                  ? 'Komórka tego pracownika jest nieaktywna lub zlikwidowana.'
+                  : 'Ten pracownik nie jest przypisany do żadnej komórki (np. po likwidacji komórki).'}
+                {' '}Wskaż aktywną komórkę, której kierownik obsłuży ustanie — wszystkie bieżące
+                uprawnienia pracownika zostaną odebrane.
+              </div>
+              <label className="form-label" htmlFor="hr-term-target">Komórka docelowa wniosku *</label>
+              <DeptSearchSelect units={units} depts={depts} value={targetDeptId} onChange={setTargetDeptId}
+                                inputId="hr-term-target" />
+            </div>
+          )}
 
           {/* Alternatywnie: dwukolumnowy wybór ze struktury (jak w projekcie):
               lewa kolumna — drzewo komórek, prawa — pracownicy jako karty. */}
@@ -957,14 +1003,14 @@ function DepartmentPicker({ units, depts, selectedId, onSelect, flush = false })
   const expandedPath = useMemo(() => {
     const set = new Set()
     if (!selectedId) return set
-    const byId = new Map(depts.map(d => [d.id, d]))
-    let d = byId.get(selectedId)
-    if (d) {
-      set.add(`unit-${d.unit_id}`)
-      let p = d.parent_dept_id
+    const deptById = new Map(depts.map(x => [x.id, x]))
+    let cur = deptById.get(selectedId)
+    if (cur) {
+      set.add(`unit-${cur.unit_id}`)
+      let p = cur.parent_dept_id
       while (p != null) {
         set.add(`dept-${p}`)
-        p = byId.get(p)?.parent_dept_id ?? null
+        p = deptById.get(p)?.parent_dept_id ?? null
       }
     }
     return set

@@ -122,7 +122,9 @@ def test_list_visibility_equals_single_request_rule(api, username):
     assert listed <= can, username
     if username in SEE_ALL:
         assert listed == can, username
-    # Podgląd pojedynczego wniosku zgadza się z regułą (403 = ukryty etap roboczy).
+    # Podgląd pojedynczego wniosku zgadza się z regułą (403 = ukryty etap roboczy
+    # dla osoby, która wniosek normalnie widzi; 404 = poza jej zakresem — 3.11,
+    # bez wyroczni istnienia).
     tok = api.login(username)
     for rid in {r.id for r in all_rows} - can:
-        assert api.get(f"/requests/{rid}", token=tok).status_code == 403, (username, rid)
+        assert api.get(f"/requests/{rid}", token=tok).status_code in (403, 404), (username, rid)

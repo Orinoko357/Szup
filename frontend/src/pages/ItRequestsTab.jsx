@@ -195,7 +195,7 @@ export function RequestsTab({ onViewChange, openId, onOpenConsumed, onChanged })
                   <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.id}</td>
                   <td>
                     <div style={{ fontWeight: 700 }}>{r.worker_name}</div>
-                    <KindPill kind={r.kind} />
+                    <KindPill kind={r.kind} isSystem={r.is_system === true} />
                   </td>
                   <td>{deptFull(r.department_name, r.department_description)}</td>
                   <td style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>{r.unit_name || '—'}</td>
@@ -264,7 +264,7 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     && workRoles().includes('it_staff')
   // Login AD potrzebny tylko wtedy, gdy wniosek nie jest jeszcze dowiązany do
   // konta pracownika (nowy pracownik). Przy zmianie/ustaniu konto już istnieje.
-  const needsAd = !r.worker_user_id
+  const needsAd = !r.worker_user_id && !r.is_system
 
   // Pozycje wniosku — PermissionChanges rozbija je po kierunku (nadanie/odebranie).
   // Trzymamy lokalną kopię, żeby po natychmiastowym zapisie odmowy odświeżyć
@@ -286,6 +286,8 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
   // Szkice odmów (otwarte pola komentarza): { [item_id]: komentarz }.
   const [denials, setDenials] = useState({})
   const [denyBusy, setDenyBusy] = useState(null)   // id pozycji aktualnie zapisywanej
+  const [busy, setBusy] = useState(false)
+  const [err, setErr]   = useState(null)
   const toggleDeny = (id) => setDenials(prev => {
     const next = { ...prev }
     if (Object.prototype.hasOwnProperty.call(next, id)) delete next[id]
@@ -339,8 +341,6 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
       setErr(errorMessage(ex, done ? 'Nie udało się odhaczyć pozycji' : 'Nie udało się cofnąć realizacji'))
     } finally { setDenyBusy(null) }
   }
-  const [busy, setBusy] = useState(false)
-  const [err, setErr]   = useState(null)
 
   // Dokładanie uprawnień wymaganych technicznie (np. moduł potrzebuje
   // zależnego dostępu). Sekcja domyślnie zwinięta — realizacja bez zmian
@@ -571,10 +571,13 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
     { label: 'Stanowisko', value: r.worker_position || '—' },
     { label: 'Komórka', value: `${r.department_name || '—'} · ${r.unit_name || '—'}` },
   ]
+  // v3.11: realizacja zablokowana dla tej osoby (np. wykonała krok kierownika
+  // tego wniosku) — backend podaje powód po polsku; przycisk aria-disabled z tym tekstem.
+  const blockedReason = canRealize ? (r.execute_blocked_reason || null) : null
 
   return (
     <RequestViewShell
-      icon={Wrench} kind={['revoke', 'change'].includes(r.kind) ? r.kind : 'grant'} kindLabel={kindLabel(r.kind)}
+      icon={Wrench} kind={['revoke', 'change'].includes(r.kind) ? r.kind : 'grant'} kindLabel={kindLabel(r.kind, r.is_system === true)}
       perspective={canRealize ? perspectiveLabel('it_execute') : null}
       waiting={!canRealize ? waitingText(r) : null}
       statusText={`Wniosek #${r.id}${r.created_at ? ` · złożony ${fmtDate(r.created_at)}` : ''}`} title={title}
@@ -592,7 +595,12 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           {canRealize || canLink ? 'Anuluj' : 'Zamknij'}
         </button>
         {canRealize && (
-          <button className="btn btn--success" onClick={() => realize()}
+          <button className="btn btn--success"
+                  onClick={() => { if (blockedReason) { setErr(blockedReason); return } realize() }}
+                  aria-disabled={blockedReason ? 'true' : undefined}
+                  aria-describedby={blockedReason ? 'it-exec-blocked' : undefined}
+                  title={blockedReason || undefined}
+                  style={blockedReason ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
                   disabled={busy || (needsAd && !adUsername.trim())}>
             <CheckCircle size={14} /> {busy ? 'Zapisywanie…' : (isRevoke ? 'Potwierdź odebranie' : 'Potwierdź realizację')}
           </button>
@@ -603,6 +611,11 @@ function RequestModal({ request: r, onClose, onDone, onRefresh }) {
           </button>
         )}
       </>}>
+      {blockedReason && (
+        <div id="it-exec-blocked" role="note" className="alert alert--warning" style={{ fontSize: 13, marginBottom: 16 }}>
+          <strong>Nie możesz zrealizować tego wniosku.</strong> {blockedReason}
+        </div>
+      )}
       <Section n={sec()} title="Pracownik">
         <WorkerCard name={r.worker_name}
           sub={[r.worker_username, r.worker_email].filter(Boolean).join(' · ') || null}

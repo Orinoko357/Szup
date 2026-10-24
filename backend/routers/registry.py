@@ -62,8 +62,9 @@ def _revocations(session: Session, pairs) -> dict[int, tuple[int, Optional[datet
         select(AccessRequest).where(col(AccessRequest.id).in_(list(marked))))} if marked else {}
     for it, _req in pairs:
         rid = getattr(it, "revoked_by_request_id", None)
-        if rid:
-            rr = rev_reqs.get(rid)
+        rr = rev_reqs.get(rid) if rid else None
+        # Wniosek odbierający jeszcze w kolejce IT — uprawnienie nadal jest.
+        if rid and (rr is None or rr.status == RequestStatus.completed):
             out[it.id] = (rid, _ts(rr) if rr else None)
 
     worker_ids = list({r.worker_user_id for _, r in pairs if r.worker_user_id})

@@ -197,10 +197,12 @@ fi
 for d in "$DATA_DIR" "$APP_DIR/logs"; do
     if [ -d "$d" ]; then chmod -R go-rwx "$d"; fi
 done
-UNIT_FILE="$(systemctl show "$SERVICE" -p FragmentPath --value 2>/dev/null || true)"
-if [ -n "$UNIT_FILE" ] && [ -r "$UNIT_FILE" ] && ! grep -q '^UMask=' "$UNIT_FILE"; then
-    echo "UWAGA: $UNIT_FILE nie ma UMask=0077 — skopiuj deploy/szup.service"
-    echo "       do /etc/systemd/system/ i wykonaj: systemctl daemon-reload"
+# Efektywna wartość (uwzględnia drop-iny w szup.service.d/), nie tylko plik główny.
+UNIT_UMASK="$(systemctl show "$SERVICE" -p UMask --value 2>/dev/null || true)"
+if [ -n "$UNIT_UMASK" ] && [ "$UNIT_UMASK" != "0077" ]; then
+    UNIT_FILE="$(systemctl show "$SERVICE" -p FragmentPath --value 2>/dev/null || true)"
+    echo "UWAGA: usługa $SERVICE ma UMask=$UNIT_UMASK zamiast 0077 — skopiuj deploy/szup.service"
+    echo "       do ${UNIT_FILE:-/etc/systemd/system/} i wykonaj: systemctl daemon-reload"
 fi
 
 # 1. Aktualizacja zależności Python (tylko produkcyjne — bez narzędzi testowych)

@@ -145,18 +145,15 @@ def confirm_password(session: Session, user, password: str, *,
     CONFIRM_MAX_FAILURES nieudanych próbach w oknie → 429. Nieudana próba =
     zdarzenie bezpieczeństwa high (critical przy blokadzie) i 403."""
     from fastapi import HTTPException
-    from services.auth_service import (
-        clear_password_confirm_failures, ensure_password_confirm_allowed,
-        register_password_confirm_failure,
-    )
+    from services.auth_service import verify_password_with_limit
 
-    ensure_password_confirm_allowed(session, user)
-    if verify_user_password(session, user, password):
-        if clear_password_confirm_failures(session, user):
-            session.commit()
+    # Próba jest rezerwowana atomowo PRZED sprawdzeniem hasła (3.11, N7) —
+    # równoległe żądania nie przekroczą limitu.
+    if verify_password_with_limit(
+            session, user, password, operation=operation, ip=ip,
+            event_type=event_type, source=source,
+            verify=lambda: verify_user_password(session, user, password)):
         return
-    register_password_confirm_failure(session, user, operation=operation,
-                                      event_type=event_type, source=source, ip=ip)
     raise HTTPException(403, denied_detail)
 
 
@@ -290,6 +287,10 @@ _PURGE_TARGETS = {
 }
 
 
+# Nazwa dziennika w bierniku — „Wyczyszczono dziennik zdarzeń”.
+_PURGE_LABEL_ACC = {"audit": "dziennik zdarzeń", "security": "dziennik zdarzeń bezpieczeństwa"}
+
+
 def _local_tz():
     try:
         from zoneinfo import ZoneInfo
@@ -365,8 +366,10 @@ def _purge_trace_writer(*, table: str, log: str, trace_action: str, label: str,
             'ip, user_agent, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
             (now, user.id, user.username, trace_action, table, meta.get("ip"),
              (meta.get("user_agent") or "")[:512] or None, payload))
-        summary = (f"Wyczyszczono {label} ({deleted} wpisów sprzed "
-                   f"{str(details.get('before') or '')[:10]}) przez {user.username}: "
+        from services.security_events import local_date, plural
+        summary = (f"Wyczyszczono {_PURGE_LABEL_ACC.get(log, label)} ({deleted} "
+                   f"{plural(deleted, 'wpis', 'wpisy', 'wpisów')} sprzed "
+                   f"{local_date(details.get('before'))}) przez {user.username}: "
                    f"{details.get('reason')}")[:512]
         cur.execute(
             'INSERT INTO "securityevent" (created_at, event_type, severity, source, '

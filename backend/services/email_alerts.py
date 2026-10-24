@@ -24,6 +24,12 @@ def request_url(request_id: int, tab: str = "handle") -> str:
     return f"{APP_URL.rstrip('/')}/requests?tab={tab}&open={request_id}"
 
 
+def request_view_url(request_id: int) -> str:
+    """Widok pojedynczego wniosku (/requests/view/<id>) — link dla superadmina,
+    który nie ma zakładek obsługi wniosków (3.11)."""
+    return f"{APP_URL.rstrip('/')}/requests/view/{request_id}"
+
+
 def names_queue_url() -> str:
     """Kolejka IT wniosków o zmianę nazwiska — /requests?tab=names."""
     return f"{APP_URL.rstrip('/')}/requests?tab=names"
@@ -237,16 +243,19 @@ def notify_request_rejected(requester_email: str, request_id: int,
 def notify_workflow_stage(to_address: str, request_id: int, worker_name: str,
                           dept_name: str, stage_label: str, node_type: str,
                           from_name: str | None = None,
-                          from_email: str | None = None) -> None:
+                          from_email: str | None = None,
+                          url: str | None = None) -> None:
     """Generyczne powiadomienie: wniosek wszedł w nowy etap obiegu i wymaga
-    działania adresata. Używane przez silnik workflow (advance)."""
+    działania adresata. Używane przez silnik workflow (advance). `url` —
+    własny link do wniosku (np. widok dla superadmina)."""
     from services.notifications import STAGE_ACTIONS
     action_hint = STAGE_ACTIONS.get(node_type, "Wniosek wymaga Twojego działania.")
     _send_event("workflow_stage", to_address, {
         "request_id": request_id, "worker_name": worker_name,
         "dept_name": dept_name, "stage_label": stage_label,
         "action_hint": action_hint,
-        "request_url": request_url(request_id, "it" if node_type == "it_execute" else "handle"),
+        "request_url": url or request_url(
+            request_id, "it" if node_type == "it_execute" else "handle"),
     }, from_name=from_name, from_email=from_email)
 
 

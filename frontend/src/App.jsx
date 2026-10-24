@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import { Moon, Sun } from 'lucide-react'
 import Header from './components/Layout/Header'
@@ -14,6 +14,7 @@ import useIdleLogout from './hooks/useIdleLogout'
 import { ChangePasswordModal } from './components/Layout/Header'
 import { syncServerTime } from './serverTime'
 import { getCurrentUser, getUserRoles, updateCurrentUser, workRoles } from './roles'
+import { focusIfLost } from './components/ui/focus'
 
 const HR                 = lazy(() => import('./pages/HR'))
 const Requests           = lazy(() => import('./pages/Requests'))
@@ -51,6 +52,31 @@ function RouteTitle({ override }) {
     document.title = name ? `${name} · SZUP` : 'SZUP'
   }, [pathname, override])
   return null
+}
+
+// v3.11 (WCAG 2.4.3): po zmianie trasy (np. „Zatwierdź” w widoku wniosku → pulpit)
+// fokus nie może zostać na <body> — trafia na h1 nowej strony, awaryjnie na <main>.
+// Tylko gdy fokus faktycznie zgubiono (link w pasku bocznym zostaje zaznaczony).
+function RouteFocus() {
+  const { pathname } = useLocation()
+  const first = useRef(true)
+  useEffect(() => {
+    if (first.current) { first.current = false; return }
+    focusIfLost('main h1', '#main-content')
+    // Strony leniwe (Suspense) renderują h1 później — druga próba po chwili.
+    const t = setTimeout(() => focusIfLost('main h1', '#main-content'), 400)
+    return () => clearTimeout(t)
+  }, [pathname])
+  return null
+}
+
+// v3.11: link z e-maila /requests?tab=handle&open=N u superadmina (nie ma strony
+// „Wnioski”) prowadzi do widoku pojedynczego wniosku zamiast na pulpit.
+function SuperadminRequestsRedirect({ fallback }) {
+  const { search } = useLocation()
+  const open = new URLSearchParams(search).get('open')
+  if (open && /^\d+$/.test(open)) return <Navigate to={`/requests/view/${open}`} replace />
+  return fallback
 }
 
 // Link „Przejdź do treści” — pierwszy element w kolejności Tab, widoczny
@@ -288,6 +314,7 @@ function AuthGate() {
   return (
     <div className="app-shell">
       <RouteTitle />
+      <RouteFocus />
       <SkipLink />
       <Header />
       <Sidebar />
@@ -299,7 +326,10 @@ function AuthGate() {
           <Route path="/my-permissions" element={<MyPermissions />} />
           {/* Operacyjne */}
           <Route path="/hr"        element={guard(<HR />,        ['hr'])} />
-          <Route path="/requests"  element={guard(<Requests />,  ['manager','it_staff'])} />
+          <Route path="/requests"  element={
+            getUserRoles().includes('superadmin') && !roles.some(r => ['manager', 'it_staff'].includes(r))
+              ? <SuperadminRequestsRedirect fallback={<Navigate to="/" replace />} />
+              : guard(<Requests />,  ['manager','it_staff'])} />
           {/* Pojedynczy wniosek (podgląd + akcje wg can_act) — dla superadmina z pulpitu
               (rezerwa: akceptacja wyższa „utkniętych” wniosków). Pozostałe role
               trafiają na zwykłą stronę wniosku. */}

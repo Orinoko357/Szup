@@ -306,16 +306,47 @@ def find_node(graph: dict, node_id: str) -> Optional[dict]:
 # Podpisy łańcuchowe
 # ---------------------------------------------------------------------------
 
+# Wersja podpisu kroku: HMAC-SHA256 z sekretem jako kluczem (3.11). Starsze
+# kroki mają podpis sha256(secret|prev|payload) bez przedrostka — weryfikacja
+# przyjmuje oba formaty, więc istniejące łańcuchy pozostają ważne.
+SIGN_PREFIX_HMAC = "hmac1:"
+
+
+def _sign_material(prev_signature: Optional[str], step_data: dict) -> str:
+    payload = json.dumps(step_data, sort_keys=True, ensure_ascii=False, default=str)
+    return f"{prev_signature or ''}|{payload}"
+
+
 def _sign(prev_signature: Optional[str], step_data: dict) -> str:
-    """Podpis łańcuchowy: sha256(secret + prev_sig + kanoniczny_step_json).
+    """Podpis łańcuchowy kroku: `hmac1:` + HMAC-SHA256(secret, prev_sig|kanoniczny_step_json).
 
     Nie jest to podpis kwalifikowany, ale wykrywa manipulację historią
-    (wstawianie / modyfikacja kroków). PIN podpisu użytkownika dodamy
-    w kolejnej iteracji jako dodatkowy element hashowany.
-    """
-    payload = json.dumps(step_data, sort_keys=True, ensure_ascii=False, default=str)
-    material = f"{_SIGN_SECRET}|{prev_signature or ''}|{payload}"
+    (wstawianie / modyfikacja kroków) bez znajomości sekretu."""
+    import hmac
+    mac = hmac.new(_SIGN_SECRET.encode("utf-8"),
+                   _sign_material(prev_signature, step_data).encode("utf-8"),
+                   hashlib.sha256).hexdigest()
+    return SIGN_PREFIX_HMAC + mac
+
+
+def _sign_legacy(prev_signature: Optional[str], step_data: dict) -> str:
+    """Podpis sprzed 3.11: sha256(secret|prev_sig|kanoniczny_step_json) — tylko
+    do weryfikacji starych kroków."""
+    material = f"{_SIGN_SECRET}|{_sign_material(prev_signature, step_data)}"
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _signature_ok(signature: Optional[str], prev_signature: Optional[str],
+                  step_data: dict) -> bool:
+    """Czy podpis kroku zgadza się z danymi — format rozpoznawany po przedrostku."""
+    import hmac
+    if not signature:
+        return False
+    if signature.startswith(SIGN_PREFIX_HMAC):
+        expected = _sign(prev_signature, step_data)
+    else:
+        expected = _sign_legacy(prev_signature, step_data)
+    return hmac.compare_digest(signature, expected)
 
 
 def _last_signature(session: Session, instance_id: int) -> Optional[str]:
@@ -345,7 +376,7 @@ def verify_chain(session: Session, instance_id: int) -> bool:
     ).all()
     prev = None
     for s in steps:
-        expected = _sign(prev, {
+        data = {
             "step_index": s.step_index,
             "node_id": s.node_id,
             "node_type": s.node_type,
@@ -354,8 +385,8 @@ def verify_chain(session: Session, instance_id: int) -> bool:
             "payload": s.payload,
             "comment": s.comment,
             "created_at": s.created_at.isoformat() if s.created_at else None,
-        })
-        if s.signature != expected or s.prev_signature != prev:
+        }
+        if s.prev_signature != prev or not _signature_ok(s.signature, prev, data):
             return False
         prev = s.signature
     return True
@@ -375,32 +406,84 @@ def is_self_request(request: AccessRequest, user: Optional[User]) -> bool:
     return bool(user is not None and wid and user.id == wid)
 
 
+def _lead_depts_of(session: Session, user_id: Optional[int]) -> list[Department]:
+    """Komórki (aktywne, niezarchiwizowane), którymi `user_id` kieruje albo
+    w których jest zastępcą kierownika — w całej strukturze (cache na żądanie)."""
+    if not user_id:
+        return []
+    from services.permissions import _cached
+
+    def compute():
+        from sqlmodel import col
+        from models import DepartmentDeputy
+        ids = {int(x) for x in session.exec(
+            select(Department.id).where(Department.manager_user_id == user_id)).all()}
+        ids |= {int(x) for x in session.exec(
+            select(DepartmentDeputy.department_id)
+            .where(DepartmentDeputy.user_id == user_id)).all()}
+        if not ids:
+            return []
+        return [d for d in session.exec(
+            select(Department).where(col(Department.id).in_(sorted(ids)))).all()
+            if d.is_active and not getattr(d, "archived_at", None)]
+    return _cached(session, f"wf_lead_depts:{user_id}", compute)
+
+
+def _directs_unit(session: Session, user_id: Optional[int]) -> bool:
+    """Czy `user_id` jest kierownikiem całej jednostki (dyrektorem)."""
+    if not user_id:
+        return False
+    from models import Unit
+    return session.exec(select(Unit.id).where(Unit.manager_user_id == user_id)).first() is not None
+
+
 def worker_lead_circle(session: Session, request: AccessRequest,
-                       dept: Optional[Department]) -> set[int]:
-    """Kierownictwo (kierownik i zastępcy) komórki, którą kieruje pracownik
-    wniosku albo w której jest zastępcą — komórki wniosku albo komórki, która
-    odpowiada za nią na etapie kierownika (samodzielne stanowisko / komórka bez
-    aktywnego kierownika → kierownik wyżej). Puste, gdy pracownik nikim tu nie
-    kieruje. Te osoby nie zastępują decyzji przełożonego pracownika."""
+                       dept: Optional[Department] = None) -> set[int]:
+    """Kierownictwo (kierownik i zastępcy) KAŻDEJ komórki, którą kieruje
+    pracownik wniosku albo w której jest zastępcą — w całej strukturze, nie
+    tylko komórki wniosku (3.11, decyzja D1/D2). Pracownik będący dyrektorem
+    jednostki należy do kręgu sam. Puste, gdy pracownik nikim nie kieruje.
+    Te osoby nie zastępują decyzji przełożonego pracownika."""
     wid = getattr(request, "worker_user_id", None)
-    if not wid or dept is None:
+    if not wid:
         return set()
     from services.permissions import dept_deputy_ids
     out: set[int] = set()
-    for d in {id(x): x for x in (dept, _responsible_dept(session, dept)) if x}.values():
-        circle = set(dept_deputy_ids(session, d.id))
+    for d in _lead_depts_of(session, wid):
+        out |= set(dept_deputy_ids(session, d.id))
         if d.manager_user_id:
-            circle.add(d.manager_user_id)
-        if wid in circle:
-            out |= circle
+            out.add(d.manager_user_id)
+    if _directs_unit(session, wid):
+        out.add(wid)
     return out
 
 
 def worker_leads_dept(session: Session, request: AccessRequest,
-                      dept: Optional[Department]) -> bool:
-    """Czy pracownik wniosku kieruje komórką wniosku (albo odpowiadającą za nią
-    komórką wyżej) lub jest jej zastępcą — patrz `worker_lead_circle`."""
+                      dept: Optional[Department] = None) -> bool:
+    """Czy pracownik wniosku kieruje dowolną komórką, jest w niej zastępcą
+    albo jest dyrektorem jednostki — patrz `worker_lead_circle`."""
     return bool(worker_lead_circle(session, request, dept))
+
+
+def stands_above_worker(session: Session, user: Optional[User],
+                        request: Optional[AccessRequest]) -> bool:
+    """Czy `user` stoi w strukturze WYŻEJ niż pracownik wniosku (D1/D2):
+
+    - pracownik bez stanowiska kierowniczego — każdy (zakres sprawdza wołający),
+    - pracownik kierujący komórkami (lub zastępca) — `user` musi być
+      przełożonym KAŻDEJ z nich (komórka wyżej albo dyrektor jednostki),
+    - pracownik będący dyrektorem jednostki — nikt (rezerwa superadmina).
+    Sam pracownik nigdy nie stoi nad sobą."""
+    wid = getattr(request, "worker_user_id", None) if request is not None else None
+    if not wid or user is None:
+        return True
+    if user.id == wid:
+        return False
+    if _directs_unit(session, wid):
+        return False
+    from services.permissions import is_superior_for
+    return all(is_superior_for(session, user, d, include_self=False)
+               for d in _lead_depts_of(session, wid))
 
 
 def worker_did_manager_step(session: Session, request: AccessRequest,
@@ -411,6 +494,8 @@ def worker_did_manager_step(session: Session, request: AccessRequest,
     if not wid:
         return False
     if instance is None:
+        if getattr(request, "id", None) is None:
+            return False
         instance = instance_of(session, request)
     if instance is None or instance.id is None:
         return False
@@ -433,9 +518,9 @@ def needs_superior_approval(session: Session, request: AccessRequest,
 
     - krok kierownika wykonuje (`actor_user`) pracownik, którego wniosek dotyczy,
     - którykolwiek wcześniejszy krok etapu kierownika wykonał ten pracownik,
-    - pracownik kieruje komórką wniosku albo jest jej zastępcą — wtedy krok
-      kierownika wykonany przez jego zastępcę albo podwładnego nie zastępuje
-      decyzji przełożonego."""
+    - pracownik kieruje dowolną komórką, jest w niej zastępcą albo jest
+      dyrektorem jednostki (3.11) — wtedy krok kierownika wykonany przez jego
+      zastępcę albo podwładnego nie zastępuje decyzji przełożonego."""
     return (is_self_request(request, actor_user)
             or worker_leads_dept(session, request, dept)
             or worker_did_manager_step(session, request, instance))
@@ -480,8 +565,22 @@ def landing_node_type(
         return None
     graph = json.loads(instance.template_snapshot)
     dept = session.get(Department, request.department_id) if request.department_id else None
+    return _landing_from(session, graph, instance.current_node_id, request, dept,
+                         actor_user, instance)
 
-    node_id = instance.current_node_id
+
+def _landing_from(session: Session, graph: dict, node_id: str, request: AccessRequest,
+                  dept: Optional[Department], actor_user: Optional[User],
+                  instance: Optional[WorkflowInstance]) -> Optional[str]:
+    """Rdzeń `landing_node_type` — od węzła `node_id` grafu `graph` (także dla
+    wniosku jeszcze niezapisanego: `instance` = None)."""
+    node = _landing_node_from(session, graph, node_id, request, dept, actor_user, instance)
+    return node["type"] if node else None
+
+
+def _landing_node_from(session: Session, graph: dict, node_id: str, request: AccessRequest,
+                       dept: Optional[Department], actor_user: Optional[User],
+                       instance: Optional[WorkflowInstance]) -> Optional[dict]:
     acted = find_node(graph, node_id)
     self_req = needs_superior_approval(session, request, dept, actor_user, instance)
     # Automatyczna akceptacja wyższa (`auto_higher_approval`) liczy się tylko
@@ -493,7 +592,7 @@ def landing_node_type(
             return None
         node_id = nxt["id"]
         if nxt["type"] == "end":
-            return "end"
+            return nxt
         if should_skip(nxt, request, dept, actor_user, self_request=self_req):
             continue
         if (acted_type and auto_higher_approval(session, request, dept, acted_type,
@@ -501,8 +600,89 @@ def landing_node_type(
                 and can_act(acted, request, dept, actor_user, session)[0]):
             acted_type = None
             continue
-        return nxt["type"]
+        return nxt
     return None
+
+
+def self_request_blocked(session: Session, request: AccessRequest,
+                         dept: Optional[Department], user: User, node: Optional[dict],
+                         landing: Optional[str],
+                         instance: Optional[WorkflowInstance] = None) -> bool:
+    """Czy krok kierownika (`node`) na wniosku „dla siebie” ominąłby akceptację
+    przełożonego — obieg trafiłby (`landing`) prosto do IT.
+
+    „Dla siebie” w szerokim sensie (`needs_superior_approval`). Nie blokujemy
+    przełożonego, który sam mógłby wykonać akceptację wyższą (np. przejął
+    wniosek) — jego krok jest decyzją przełożonego — ani superadmina działającego
+    jako rezerwa, gdy nad pracownikiem nie ma nikogo (`superadmin_acts`)."""
+    if not needs_superior_approval(session, request, dept, user, instance):
+        return False
+    if landing in ("higher_manager_approve", *MANAGER_STAGE_TYPES):
+        return False
+    if has_role(user, "superadmin"):
+        return not (node is not None and superadmin_acts(session, node, request, dept))
+    if is_self_request(request, user):
+        return True
+    return not can_act({"id": "_higher", "type": "higher_manager_approve"},
+                       request, dept, user, session)[0]
+
+
+def is_superior_creator(session: Session, user: User, dept: Optional[Department]) -> bool:
+    """Czy wniosek składany przez `user` dla komórki `dept` jest od razu przez
+    niego przejmowany — przełożony (kierownik / zastępca komórki wyżej, dyrektor
+    jednostki) składa wniosek dla podległej komórki z własnym kierownikiem."""
+    from services.permissions import is_department_manager_or_deputy, is_superior_for
+    return bool(
+        dept is not None
+        and not has_role(user, "superadmin")
+        and dept_has_own_manager(session, dept)
+        and not is_department_manager_or_deputy(session, user, dept)
+        and is_superior_for(session, user, dept, include_self=False))
+
+
+def preview_new_request(session: Session, user: User, worker: Optional[User],
+                        dept: Optional[Department], graph: dict,
+                        kind: str = "change") -> dict:
+    """Podgląd wniosku, który `user` złożyłby teraz z pozycjami dla `worker`
+    w komórce `dept` (bez zapisu): `landing_node_type` — węzeł, na którym
+    stanie obieg po złożeniu (z automatycznymi krokami etapu kierownika jak
+    w `POST /requests/`), i `will_take_over` — czy składający od razu przejmie
+    wniosek. Te same reguły co serwer (MyTeam nie przybliża ich sam)."""
+    take = is_superior_creator(session, user, dept)
+    req = AccessRequest(
+        worker_name=(worker.full_name or worker.username) if worker else "",
+        worker_user_id=worker.id if worker else None,
+        unit_id=dept.unit_id if dept else 0,
+        department_id=dept.id if dept else None,
+        kind=kind, created_by_id=user.id,
+        taken_over_by_id=user.id if take else None,
+    )
+    # Wejście w pierwszy interaktywny węzeł (jak `start_instance`, aktor None).
+    start = find_start(graph)
+    self_req = needs_superior_approval(session, req, dept, None, None)
+    node = None
+    cur = start["id"]
+    for _ in range(100):
+        nxt = next_node(graph, cur)
+        if not nxt:
+            break
+        cur = nxt["id"]
+        if nxt["type"] == "end" or not should_skip(nxt, req, dept, None, self_request=self_req):
+            node = nxt
+            break
+    landing = node["type"] if node else None
+    # Automatyczne kroki etapu kierownika składającego (`_auto_manager_steps`).
+    for _ in range(len(MANAGER_STAGE_TYPES) + 1):
+        if not node or node["type"] not in MANAGER_STAGE_TYPES:
+            break
+        if not can_act(node, req, dept, user, session)[0]:
+            break
+        nxt = _landing_node_from(session, graph, node["id"], req, dept, user, None)
+        nxt_type = nxt["type"] if nxt else None
+        if self_request_blocked(session, req, dept, user, node, nxt_type):
+            break
+        landing, node = nxt_type, nxt
+    return {"landing_node_type": landing, "will_take_over": take}
 
 
 AUTO_HIGHER_COMMENT = ("Akceptacja wyższa zaliczona automatycznie — wybór wykonał "
@@ -541,15 +721,18 @@ def auto_higher_approval(session: Session, request: AccessRequest,
 
 
 def grants_permissions(session: Session, request: AccessRequest) -> bool:
-    """Czy wniosek NADAJE co najmniej jedno uprawnienie (pozycja `kind='grant'`).
+    """Czy wniosek NADAJE co najmniej jedno uprawnienie (pozycja `kind='grant'`,
+    której nie odmówiono).
 
-    Czyste odebranie/ustanie stosunku pracy nie nadaje niczego → oświadczenie
-    wnioskującego nie ma zastosowania.
+    Czyste odebranie/ustanie stosunku pracy nie nadaje niczego (podobnie
+    wniosek, którego wszystkie nadania odmówiono) → oświadczenie wnioskującego
+    nie ma zastosowania.
     """
     items = session.exec(
         select(RequestItem).where(RequestItem.request_id == request.id)
     ).all()
-    return any((getattr(i, "kind", "grant") or "grant") == "grant" for i in items)
+    return any((getattr(i, "kind", "grant") or "grant") == "grant"
+               and not getattr(i, "denied", False) for i in items)
 
 
 # ---------------------------------------------------------------------------
@@ -1222,9 +1405,13 @@ def superadmin_acts(session: Session, node: dict, request: AccessRequest,
       przełożonego (np. dyrektor jednostki kierujący komórką),
     - krok bez żadnej osoby uprawnionej (np. ta sama osoba kieruje komórką
       i komórką nadrzędną, a jednostka nie ma dyrektora; usunięta komórka
-      nadrzędna; komórka bez kierownika w jednostce bez dyrektora).
+      nadrzędna; komórka bez kierownika w jednostce bez dyrektora),
+    - etap kierownika wniosku, który musi zatwierdzić przełożony pracownika,
+      w obiegu bez akceptacji wyższej, gdy nad pracownikiem nie ma nikogo (M1).
 
-    Poza tym superadmin w obiegu nie działa."""
+    Poza tym superadmin w obiegu nie działa. Każdy krok superadmina jest
+    oznaczany jako awaryjny (`superadmin_emergency` w payloadzie kroku,
+    adnotacja w oświadczeniu)."""
     if node.get("type") not in STRUCTURE_SENSITIVE_TYPES:
         return False
     return bool(_stage_actor_info(session, node, dept, request)[1])
@@ -1314,6 +1501,12 @@ def can_act(node: dict, request: AccessRequest, dept: Optional[Department],
                 and _unit_director_id(session, dept) != user.id):
             return False, ("Wniosek dotyczy osoby z kierownictwa Twojej komórki — "
                            "zatwierdzi go przełożony.")
+        # D1/D2 (3.11): akceptację wyższą wykonuje wyłącznie osoba stojąca
+        # w strukturze WYŻEJ niż pracownik wniosku (np. nie podwładny dyrektora
+        # ani kierownika komórki nadrzędnej, który formalnie siedzi w komórce).
+        if not stands_above_worker(session, user, request):
+            return False, ("Akceptację wyższą wykonuje przełożony pracownika, którego "
+                           "dotyczy wniosek — osoba stojąca w strukturze wyżej niż on.")
         parent = None
         if dept and dept.parent_dept_id:
             parent = session.get(Department, dept.parent_dept_id)
@@ -1471,6 +1664,7 @@ def advance(
             instance.completed_at = datetime.utcnow()
             session.add(instance)
             _sync_request_status(request, instance)
+            _audit_request_event(session, request, "request.completed", actor_user)
             _notify_request_completed(session, request, actor_user)
             return
 
@@ -1560,6 +1754,8 @@ FALLBACK_SELF = "self"      # wniosek „dla siebie”, nad pracownikiem nie ma 
 FALLBACK_NOBODY = "nobody"  # w strukturze nie ma żadnej osoby uprawnionej
 
 SUPERADMIN_NOBODY_LABEL = "superadmin — brak osoby uprawnionej w strukturze"
+SUPERADMIN_SELF_LABEL = ("superadmin — poza pracownikiem, którego dotyczy wniosek, nie ma "
+                         "przełożonego, który mógłby go zatwierdzić")
 
 
 def _stage_actor_info(session: Session, node: dict, dept: Optional[Department],
@@ -1569,13 +1765,32 @@ def _stage_actor_info(session: Session, node: dict, dept: Optional[Department],
     None). Powód (`FALLBACK_SELF` / `FALLBACK_NOBODY`) oznacza, że adresatami
     są superadmini, bo w strukturze nie ma nikogo innego, kto mógłby działać."""
     ntype = node["type"]
-    if ntype in ("manager_approve", "select_permissions"):
-        own = dept
-    elif ntype == "higher_manager_approve":
-        own = session.get(Department, dept.parent_dept_id) if dept and dept.parent_dept_id else None
-    else:
-        return [], None
+    if ntype in MANAGER_STAGE_TYPES:
+        return _manager_stage_actor_info(session, node, dept, request)
+    if ntype == "higher_manager_approve":
+        return _higher_actor_info(session, dept, request)
+    return [], None
 
+
+def _superadmin_ids(session: Session) -> list[int]:
+    from services.permissions import users_with_role
+    return [u.id for u in users_with_role(session, "superadmin")]
+
+
+def _manager_stage_actor_info(session: Session, node: dict, dept: Optional[Department],
+                              request: Optional[AccessRequest]
+                              ) -> tuple[list[int], Optional[str]]:
+    """Adresaci kroku kierownika komórki: kierownik odpowiedzialnej komórki i jej
+    zastępcy (+ zastępcy samej komórki bez kierownika), a bez nikogo takiego —
+    dyrektor jednostki; gdy nikt nie ma aktywnego konta — superadmin
+    (`FALLBACK_NOBODY`).
+
+    M1 (3.11): wniosek, który musi zatwierdzić przełożony pracownika
+    (`needs_superior_approval`), w obiegu bez akceptacji wyższej, gdy nad
+    pracownikiem nie ma nikogo, kto mógłby ją wykonać (łańcuch wyczerpany) —
+    kierownictwo komórki nie może go wysłać (409), a przejąć nie ma kto. Krok
+    wykonuje wtedy superadmin jako rezerwa (`FALLBACK_SELF`)."""
+    own = dept
     resp = _responsible_dept(session, own)
     ids: list[int] = []
 
@@ -1590,39 +1805,120 @@ def _stage_actor_info(session: Session, node: dict, dept: Optional[Department],
     if own and own is not resp:
         for uid in _deputy_ids(session, own):
             _add(uid)
-    director = _unit_director_id(session, dept)
+    if not ids:
+        _add(_unit_director_id(session, dept))
+    if any(_is_active_user(session, uid) for uid in ids):
+        if request is not None and _manager_stage_needs_fallback(session, node, dept, request):
+            return _superadmin_ids(session), FALLBACK_SELF
+        return ids, None
+    return _superadmin_ids(session), FALLBACK_NOBODY
+
+
+def _manager_stage_needs_fallback(session: Session, node: dict, dept: Optional[Department],
+                                  request: AccessRequest) -> bool:
+    """Warunek M1 z `_manager_stage_actor_info` (bez przejęcia, bez akceptacji
+    wyższej w dalszej części obiegu, bez przełożonego nad pracownikiem)."""
+    if not getattr(request, "worker_user_id", None) or getattr(request, "id", None) is None:
+        return False
+    inst = instance_of(session, request)
+    if inst is None or not inst.template_snapshot:
+        return False
+    if effective_taker_id(session, request, dept):
+        return False
+    if not needs_superior_approval(session, request, dept, None, inst):
+        return False
+    try:
+        graph = _graph_of(session, inst)
+    except Exception:
+        return False
+    cur, seen = node.get("id"), set()
+    while cur and cur not in seen:
+        seen.add(cur)
+        nxt = next_node(graph, cur)
+        if not nxt:
+            break
+        if nxt["type"] == "higher_manager_approve":
+            return False
+        cur = nxt["id"]
+    return _higher_actor_info(session, dept, request)[1] is not None
+
+
+def _graph_of(session: Session, inst: WorkflowInstance) -> dict:
+    graphs = session.info.setdefault("_wf_graphs", {})
+    graph = graphs.get(inst.id)
+    if graph is None:
+        graph = json.loads(inst.template_snapshot)
+        graphs[inst.id] = graph
+    return graph
+
+
+def _higher_actor_info(session: Session, dept: Optional[Department],
+                       request: Optional[AccessRequest]
+                       ) -> tuple[list[int], Optional[str]]:
+    """Adresaci akceptacji wyższej: (odpowiedzialny) kierownik komórki
+    nadrzędnej, jego zastępcy i zastępcy samej komórki nadrzędnej — bez
+    kierownictwa samej komórki (wyjątek: dyrektor jednostki), bez pracownika
+    wniosku i jego kręgu i wyłącznie osoby stojące WYŻEJ niż pracownik
+    (`stands_above_worker`, 3.11). Gdy na danym poziomie nie ma nikogo
+    aktywnego — szukamy wyżej (N4); po wyczerpaniu łańcucha — dyrektor
+    jednostki; dopiero potem rezerwa superadmina."""
     worker_id = getattr(request, "worker_user_id", None) if request is not None else None
+    director = _unit_director_id(session, dept)
     own_circle: set[int] = set()
-    worker_dropped = False
-    if ntype == "higher_manager_approve":
-        if dept is not None:
-            # Kierownik / zastępca samej komórki nie wykona akceptacji wyższej
-            # (patrz `can_act`) — nie wysyłamy mu „czeka na Ciebie”, nawet gdy
-            # jest też zastępcą komórki nadrzędnej. Wyjątek: dyrektor jednostki.
-            own_circle = set(_deputy_ids(session, dept))
-            if dept.manager_user_id:
-                own_circle.add(dept.manager_user_id)
-            # To samo dla kierownictwa komórki, którą kieruje pracownik wniosku
-            # (np. komórka bez kierownika, za którą odpowiada pracownik).
-            own_circle |= worker_lead_circle(session, request, dept) if request else set()
-            ids = [uid for uid in ids if uid not in own_circle or uid == director]
-        if worker_id:
-            # Pracownik nie zatwierdza wniosku, który dotyczy jego samego.
-            worker_dropped = worker_id in ids
-            ids = [uid for uid in ids if uid != worker_id]
-    if not ids and not (ntype == "higher_manager_approve" and director == worker_id):
-        _add(director)
+    worker_circle: set[int] = set()
+    if dept is not None:
+        own_circle = set(_deputy_ids(session, dept))
+        if dept.manager_user_id:
+            own_circle.add(dept.manager_user_id)
+    if request is not None:
+        worker_circle = worker_lead_circle(session, request, dept)
+    ids: list[int] = []
+    dropped_for_worker = False
+
+    def _consider(uid) -> None:
+        nonlocal dropped_for_worker
+        if not uid or uid in ids:
+            return
+        if uid == worker_id:
+            dropped_for_worker = True
+            return
+        if uid in worker_circle and uid != director:
+            dropped_for_worker = True
+            return
+        if uid in own_circle and uid != director:
+            return
+        if worker_id and not stands_above_worker(session, session.get(User, uid), request):
+            dropped_for_worker = True
+            return
+        ids.append(uid)
+
+    own = session.get(Department, dept.parent_dept_id) if dept and dept.parent_dept_id else None
+    seen: set[int] = set()
+    while own is not None and own.id not in seen:
+        seen.add(own.id)
+        resp = _responsible_dept(session, own)
+        if resp:
+            _consider(resp.manager_user_id)
+            for uid in _deputy_ids(session, resp):
+                _consider(uid)
+        if own is not resp:
+            for uid in _deputy_ids(session, own):
+                _consider(uid)
+        if any(_is_active_user(session, uid) for uid in ids):
+            return ids, None
+        top = resp or own
+        own = session.get(Department, top.parent_dept_id) if top.parent_dept_id else None
+    if director and _is_active_user(session, director):
+        _consider(director)
     if any(_is_active_user(session, uid) for uid in ids):
         return ids, None
     # Nikt w strukturze nie może wykonać kroku — rezerwa superadmina. Wniosek
-    # „dla siebie” kierownika, nad którym nie ma nikogo innego (np. dyrektor
-    # jednostki kierujący komórką), ma osobny opis.
+    # dla osoby, nad którą nie ma nikogo (np. dyrektor jednostki albo kierownik
+    # najwyższej komórki), ma osobny opis.
     reason = FALLBACK_NOBODY
-    if (ntype == "higher_manager_approve" and worker_id
-            and (worker_dropped or worker_id in own_circle or worker_id == director)):
+    if worker_id and (dropped_for_worker or director == worker_id or worker_circle):
         reason = FALLBACK_SELF
-    from services.permissions import users_with_role
-    return [u.id for u in users_with_role(session, "superadmin")], reason
+    return _superadmin_ids(session), reason
 
 
 def _is_active_user(session: Session, user_id: Optional[int]) -> bool:
@@ -1692,7 +1988,10 @@ def waiting_for_label(session: Session, node: Optional[dict], request: AccessReq
     if ntype == "higher_manager_approve":
         return _higher_waiting_label(session, node, request, dept)
     if ntype in ("manager_approve", "select_permissions"):
-        if _stage_actor_info(session, node, dept, request)[1]:
+        fallback = _stage_actor_info(session, node, dept, request)[1]
+        if fallback == FALLBACK_SELF:
+            return SUPERADMIN_SELF_LABEL
+        if fallback:
             return SUPERADMIN_NOBODY_LABEL
         own = dept
         resp = _responsible_dept(session, own)
@@ -1726,8 +2025,7 @@ def _higher_waiting_label(session: Session, node: dict, request: AccessRequest,
     from models import Unit
     ids, fallback = _stage_actor_info(session, node, dept, request)
     if fallback == FALLBACK_SELF:
-        return ("superadmin — poza pracownikiem, którego dotyczy wniosek, nie ma "
-                "przełożonego, który mógłby go zatwierdzić")
+        return SUPERADMIN_SELF_LABEL
     if fallback:
         return SUPERADMIN_NOBODY_LABEL
     if not ids:
@@ -1849,8 +2147,12 @@ def _notify_stage(session: Session, request: AccessRequest, node: dict,
                     "e-mail — powiadomienie nie zostało wysłane.", request.id)
             return
         s_name, s_email = _actor_sender(actor_user)
-        from services.email_alerts import notify_workflow_stage
+        from services.email_alerts import notify_workflow_stage, request_view_url
+        from services.permissions import users_with_role
+        # Superadmin nie ma zakładek obsługi wniosków — link do widoku wniosku.
+        sa_emails = {u.email for u in users_with_role(session, "superadmin") if u.email}
         for e in emails:
+            extra = {"url": request_view_url(request.id)} if e in sa_emails else {}
             defer(session, notify_workflow_stage, **{
                     "to_address": e,
                     "request_id": request.id,
@@ -1859,6 +2161,7 @@ def _notify_stage(session: Session, request: AccessRequest, node: dict,
                     "stage_label": node.get("label") or node["type"],
                     "node_type": node["type"],
                     "from_name": s_name, "from_email": s_email,
+                    **extra,
                 })
     except Exception as exc:
         _log.warning("Powiadomienie o etapie obiegu nie zostało wysłane: %s", exc)
@@ -1960,6 +2263,75 @@ def _notify_request_rejected(session: Session, request: AccessRequest,
         _log.warning("Powiadomienie o odrzuceniu wniosku nie wysłane: %s", exc)
 
 
+def _audit_request_event(session: Session, request: AccessRequest, action: str,
+                         actor_user: Optional[User], **extra: Any) -> None:
+    """Zdarzenie domenowe wniosku w dzienniku audytu (`request.completed`,
+    `request.rejected`) — w tej samej transakcji co zmiana stanu."""
+    try:
+        from services.audit import record_event
+        record_event(
+            session, action=action,
+            user_id=actor_user.id if actor_user else None,
+            username=actor_user.username if actor_user else None,
+            target_type="access_request", target_id=request.id,
+            details={"kind": getattr(request, "kind", None) or "grant",
+                     "worker_user_id": getattr(request, "worker_user_id", None),
+                     "department_id": getattr(request, "department_id", None),
+                     **extra},
+            commit=False,
+        )
+    except Exception:
+        _log.exception("Nie udało się zapisać zdarzenia %s wniosku #%s w dzienniku audytu",
+                       action, getattr(request, "id", None))
+
+
+EXECUTOR_DID_MANAGER_STEP_MSG = (
+    "Wykonałeś(-aś) w tym wniosku krok etapu kierownika (wybór, akceptację albo "
+    "akceptację wyższą) — realizację w IT musi wykonać inna osoba z IT.")
+
+
+def execute_blocked_reason(session: Session, request: AccessRequest,
+                           user: User) -> Optional[str]:
+    """Ś11 (3.11): osoba z IT, która wykonała w tym wniosku krok etapu
+    kierownika (wybór / akceptacja kierownika / akceptacja wyższa — także
+    automatyczny), nie realizuje go w IT — chyba że w systemie jest tylko jedna
+    aktywna osoba z rolą it_staff. Realizacja wniosku „dla siebie” (krok
+    kierownika wykonał ktoś inny) jest dozwolona. None — brak przeszkody."""
+    if user is None or not has_role(user, "it_staff"):
+        return None
+    inst = instance_of(session, request) if getattr(request, "id", None) else None
+    if inst is None or inst.id is None:
+        return None
+    from sqlmodel import col
+    did = session.exec(
+        select(WorkflowStep.id)
+        .where(WorkflowStep.instance_id == inst.id)
+        .where(WorkflowStep.actor_user_id == user.id)
+        .where(col(WorkflowStep.node_type).in_(list(STRUCTURE_SENSITIVE_TYPES)))
+        .where(col(WorkflowStep.action).in_([WorkflowStepAction.select,
+                                             WorkflowStepAction.approve]))
+    ).first() is not None
+    if not did:
+        return None
+    from services.permissions import users_with_role
+    if len(users_with_role(session, "it_staff")) <= 1:
+        return None
+    return EXECUTOR_DID_MANAGER_STEP_MSG
+
+
+def superadmin_emergency(session: Session, node: Optional[dict], request: AccessRequest,
+                         dept: Any = _UNSET) -> bool:
+    """Czy bieżący krok czeka na superadmina jako rezerwę (brak osoby uprawnionej
+    w strukturze albo nikogo nad pracownikiem)."""
+    if not node or node.get("type") not in STRUCTURE_SENSITIVE_TYPES:
+        return False
+    if dept is _UNSET:
+        dept = session.get(Department, request.department_id) if request.department_id else None
+    if node.get("type") in MANAGER_STAGE_TYPES and effective_taker_id(session, request, dept):
+        return False
+    return bool(_stage_actor_info(session, node, dept, request)[1])
+
+
 def _sync_request_status(request: AccessRequest, instance: WorkflowInstance) -> None:
     """Mapuje status instancji na RequestStatus, żeby stare dashboardy dalej
     pokazywały coś sensownego. Nowe widoki czytają current_node_id.
@@ -1981,7 +2353,11 @@ def _sync_request_status(request: AccessRequest, instance: WorkflowInstance) -> 
             n = find_node(graph, instance.current_node_id)
             current_type = n["type"] if n else None
         except Exception:
-            pass
+            # Uszkodzony graf instancji — status ustawiamy zachowawczo, ale
+            # administrator musi to zobaczyć w logu.
+            _log.exception("Nie udało się odczytać bieżącego węzła instancji %s "
+                           "(wniosek #%s) — uszkodzony graf obiegu.",
+                           instance.id, getattr(request, "id", None))
         request.current_node_type = current_type
         if current_type == "select_permissions":
             request.status = RequestStatus.pending_selection
@@ -2060,6 +2436,12 @@ def execute_action(
         "select":  WorkflowStepAction.select,
         "execute": WorkflowStepAction.execute,
     }[action]
+    # Superadmin działa w obiegu wyłącznie jako rezerwa — krok jest oznaczony
+    # w podpisanym payloadzie jako awaryjny.
+    if has_role(user, "superadmin"):
+        payload = {**(payload if isinstance(payload, dict) else
+                      ({} if payload is None else {"value": payload})),
+                   "superadmin_emergency": True}
 
     _record_step(session, instance, node,
                  action=action_enum, actor_user=user, payload=payload, comment=comment)
@@ -2078,6 +2460,8 @@ def execute_action(
         instance.completed_at = datetime.utcnow()
         session.add(instance)
         _sync_request_status(request, instance)
+        _audit_request_event(session, request, "request.rejected", user,
+                             node_type=node["type"])
         _notify_request_rejected(session, request, user, comment, extra_ids=extra)
         return instance
 

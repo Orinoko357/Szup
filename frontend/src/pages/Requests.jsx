@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
+import { onTablistKeyDown } from '../components/ui/tabs'
 import { useSearchParams } from 'react-router-dom'
 import Manager from './Manager'
-import { RequestsTab } from './IT'
+import { RequestsTab } from './ItRequestsTab'
 import NameChangeQueue from '../components/NameChangeQueue'
 import { workflowDashboard, errorMessage } from '../api'
 import { toast } from '../components/ui/feedback'
@@ -24,22 +25,6 @@ const TABS = [
     sub: 'Zgłoszenia zmiany nazwiska do realizacji przez IT' },
 ]
 
-// Zakładki (wzorzec WAI-ARIA „tabs”): strzałki lewo/prawo, Home/End
-// przechodzą między zakładkami i od razu je aktywują.
-function onTablistKeyDown(e) {
-  const tabs = Array.from(e.currentTarget.querySelectorAll('[role="tab"]'))
-  const i = tabs.indexOf(e.target)
-  if (i < 0) return
-  const next = e.key === 'ArrowRight' ? (i + 1) % tabs.length
-    : e.key === 'ArrowLeft' ? (i - 1 + tabs.length) % tabs.length
-    : e.key === 'Home' ? 0
-    : e.key === 'End' ? tabs.length - 1
-    : null
-  if (next == null) return
-  e.preventDefault()
-  tabs[next].focus()
-  tabs[next].click()
-}
 
 export default function Requests() {
   // Zakładki operacyjne (w tym kolejka zmian nazwiska — tylko IT); admin
@@ -101,6 +86,7 @@ export default function Requests() {
              onKeyDown={onTablistKeyDown}>
           {tabs.map(t => (
             <button key={t.id} role="tab" aria-selected={t.id === tab} tabIndex={t.id === tab ? 0 : -1}
+                    id={`requests-tab-${t.id}`} aria-controls="requests-panel"
                     className={`tab-btn${t.id === tab ? ' active' : ''}`} onClick={() => pick(t.id)}>
               {t.label}
               {counts[t.id] > 0 && <span className="tab-count">{counts[t.id]}</span>}
@@ -108,6 +94,9 @@ export default function Requests() {
           ))}
         </div>
       )}
+      {/* Panel zakładki (role=tabpanel tylko, gdy jest pasek zakładek). */}
+      <div {...(!fullView && tabs.length > 1
+        ? { role: 'tabpanel', id: 'requests-panel', 'aria-labelledby': `requests-tab-${tab}` } : {})}>
       {(tab === 'handle' || tab === 'mine') && (
         <Manager key={`m-${open.nonce}`} view={tab} openId={openFor(tab)} onOpenConsumed={consumeOpen}
                  onViewChange={setFullView} onChanged={loadCounts} />
@@ -117,6 +106,7 @@ export default function Requests() {
                      onViewChange={setFullView} onChanged={loadCounts} />
       )}
       {tab === 'names' && <NameChangeQueue onChanged={loadCounts} />}
+      </div>
     </div>
   )
 }

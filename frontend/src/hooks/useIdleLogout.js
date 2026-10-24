@@ -13,6 +13,7 @@ export default function useIdleLogout(isLoggedIn) {
       clearTimeout(timerRef.current)
       timerRef.current = setTimeout(() => {
         clearSession()
+        try { sessionStorage.setItem('szup_logout_reason', 'idle') } catch { /* brak dostępu */ }
         window.location.href = '/login?reason=idle'
       }, IDLE_TIMEOUT_MS)
     }

@@ -6,6 +6,70 @@ Wersjonowanie: [Semantic Versioning](https://semver.org/lang/pl/).
 
 ## [Unreleased]
 
+## [3.11.0] — 2026-10-24
+
+Poprawki po audycie 3.10.
+
+### Obieg
+- Akceptację wyższą wykonuje wyłącznie osoba stojąca w strukturze wyżej niż
+  pracownik wniosku. Pracownik kierujący (lub zastępujący) dowolną komórką albo
+  dyrektor jednostki jest traktowany jak kierownik — wniosek dla niego zawsze
+  wymaga akceptacji jego przełożonego. Łańcuch przełożonych jest przeszukiwany
+  w górę; superadmin wchodzi dopiero, gdy łańcuch jest pusty (także na etapie
+  kierownika — wniosek dla kierownika komórki najwyższego poziomu nie utyka).
+- Superadmin działający awaryjnie: krok i oświadczenie z adnotacją „działając
+  awaryjnie jako superadmin”; wnioski z rezerwy widoczne na pulpicie, link
+  z maila otwiera wniosek.
+- Osoba, która wykonała krok etapu kierownika lub akceptację wyższą, nie
+  realizuje tego wniosku w IT (chyba że w systemie jest jedna osoba IT).
+- Ustanie: odbierane są wszystkie bieżące uprawnienia (pozycji nie można
+  odznaczyć); wniosek odebrania przyjmuje wyłącznie pozycje odebrania.
+  Ustanie dla osoby bez komórki lub z komórki nieaktywnej składają tylko kadry,
+  wskazując komórkę docelową; wyszukiwarka kadr pokazuje też konta nieaktywne
+  z uprawnieniami. Superadmin nie może być pracownikiem wniosku.
+- Wersja robocza: wykrywanie równoczesnej zmiany przez inną osobę (409).
+- Cudzy wniosek zwraca 404 jak nieistniejący; podgląd uprawnień osoby tylko
+  dla osób uprawnionych.
+- Zdarzenia `request.created`, `request.completed`, `request.rejected`
+  w dzienniku; nowe kroki obiegu podpisywane HMAC-SHA256 (stare podpisy nadal
+  weryfikowane).
+- Mail o wniosku prowadzonym przez przełożonego trafia też do zastępców;
+  „Mój zespół” pokazuje cel wysyłki wyliczony przez serwer.
+
+### Struktura i rejestr
+- Likwidacja komórki i usunięcie posiadanej grupy nie oznaczają niewykonanych
+  odebrań jako zrealizowanych — trafiają do kolejki IT (mail do IT i helpdesku);
+  uprawnienie znika dopiero po realizacji. Wnioski w toku, w których wszystkie
+  pozycje zostały odmówione, są odrzucane systemowo.
+- Superadmin nie może być przypisany do komórki; funkcję kadr daje tylko
+  aktywna, niezarchiwizowana komórka kadrowa; import z AD pomija komórki
+  nieaktywne.
+- Limity długości nazw i opisów w strukturze i rejestrze; usuwanie znaków
+  sterujących kierunkiem tekstu.
+
+### Bezpieczeństwo
+- Wspólny limit prób hasła jest atomowy (próba zapisywana przed weryfikacją)
+  i obejmuje też logowanie; blokada logowania dotyczy pary konto + adres IP.
+- Wylogowanie po 30 minutach bezczynności egzekwowane przez serwer.
+- Reset fabryczny i `tools/reset_data.py` nie usuwają wpisów dziennika
+  młodszych niż 24 miesiące; narzędzie odtwarza zabezpieczenia i zapisuje ślad.
+- Superadmin nie zamyka zdarzeń o nieudanych potwierdzeniach własnego hasła
+  ani zdarzeń sprzed uzyskania roli; nadanie roli superadmin — zdarzenie
+  *critical*. Beneficjent oznaczenia komórki jako kadrowej nie zamyka zdarzenia.
+- Identyfikatory spoza zakresu dają 400 zamiast 500. python-jose zastąpione
+  przez PyJWT (dotychczasowe tokeny pozostają ważne).
+
+### Interfejs
+- Pasek kroków, fokus po akcjach (IT „Zrobione/Cofnij”, wysyłka, zmiana trasy),
+  okno oświadczenia, wynik likwidacji komórki z nazwiskami odpiętych osób,
+  okno usuwania grupy z posiadaczami bez konta, tabela zdarzeń przy 1024 px,
+  ciemny motyw kontrolek, kontrast, Kadry na telefonie, zakładki
+  z `tabpanel`, „Odebranie systemowe”, teksty zdarzeń po polsku.
+
+### Operacje
+- `audit-deps.sh` instaluje pip-audit we własnym venv (PEP 668); `deploy.sh`
+  sprawdza efektywny UMask usługi.
+
 ## [3.10.0] — 2026-10-23
 
 Poprawki po audycie 3.9.
@@ -117,8 +181,9 @@ przełożonego dla wniosku kierownika o uprawnienia dla siebie.
   i ich przypisania do typów wniosków są zdarzeniem bezpieczeństwa.
 - Import z AD nie reaktywuje kont wyłączonych w SZUP; wyłączenie kierownika
   powiadamia nowego odpowiedzialnego.
-- Zależności bez znanych podatności (axios, react-router, python-multipart,
-  python-jose, fastapi), limity rozmiaru importu i parametrów list, uprawnienia
+- Aktualizacja zależności z podatnościami (axios, react-router, python-multipart,
+  python-jose, fastapi; python-jose i ecdsa miały dalej zgłoszenia nieistotne
+  przy HS256 — wymienione na PyJWT w 3.11), limity rozmiaru importu i parametrów list, uprawnienia
   plików (UMask 0077, klucze 0600), rsync z właścicielem root.
 
 ### Obieg

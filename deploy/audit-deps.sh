@@ -18,17 +18,25 @@ NPM_REPORT="$REPORT_DIR/npm-audit-$STAMP.json"
 EXIT=0
 
 echo "=== [1/2] pip-audit (backend) ==="
+# pip-audit w osobnym venv — systemowy pip odrzuca `--user` (PEP 668,
+# „externally-managed-environment” na Debianie 12 / Ubuntu 24.04).
+PIP_AUDIT="pip-audit"
 if ! command -v pip-audit >/dev/null 2>&1; then
-    echo "Instaluję pip-audit..."
-    python3 -m pip install --quiet --user pip-audit || { echo "Nie udało się zainstalować pip-audit"; exit 2; }
+    AUDIT_VENV="${AUDIT_VENV:-$REPORT_DIR/.pip-audit-venv}"
+    if [ ! -x "$AUDIT_VENV/bin/pip-audit" ]; then
+        echo "Instaluję pip-audit do $AUDIT_VENV..."
+        { python3 -m venv "$AUDIT_VENV" && "$AUDIT_VENV/bin/pip" install --quiet pip-audit; } \
+            || { echo "Nie udało się zainstalować pip-audit"; exit 2; }
+    fi
+    PIP_AUDIT="$AUDIT_VENV/bin/pip-audit"
 fi
 
-if pip-audit -r backend/requirements.txt --format json --output "$PY_REPORT"; then
+if "$PIP_AUDIT" -r backend/requirements.txt --format json --output "$PY_REPORT"; then
     echo "pip-audit OK — raport: $PY_REPORT"
 else
     rc=$?
     echo "pip-audit: znalezione podatności (rc=$rc) — raport: $PY_REPORT"
-    pip-audit -r backend/requirements.txt || true
+    "$PIP_AUDIT" -r backend/requirements.txt || true
     EXIT=1
 fi
 

@@ -17,14 +17,27 @@ Po przekroczeniu limitu użytkownik jest zmuszony do zmiany hasła przy kolejnym
 
 ## Blokada konta
 
-- **5 nieudanych prób** logowania → blokada konta na **15 minut**
-- Blokada rejestrowana jako `SecurityEvent` o wadze `high`
-- Odblokowanie możliwe przez administratora lub automatycznie po upływie czasu
+- **5 nieudanych prób hasła w 15 minut** → blokada logowania dla pary
+  konto + adres IP na **15 minut** (HTTP 423); logowanie z innego adresu działa
+- Do tego samego limitu liczą się nieudane potwierdzenia hasłem w sesji
+  (zmiana hasła, operacje superadmina, reset fabryczny) — po przekroczeniu
+  HTTP 429. Próba jest zapisywana przed weryfikacją hasła, więc równoległe
+  żądania nie omijają limitu
+- Blokada rejestrowana jako `SecurityEvent` o wadze `high` (dla superadmina
+  `critical`)
+- Odblokowanie: administrator, reset hasła, `tools/reset_password.py` albo
+  automatycznie po upływie czasu
 
 ## Rate limiting
 
-- Maksymalnie **10 prób logowania na 60 sekund** z jednego adresu IP
+- Maksymalnie **10 nieudanych prób logowania na 60 sekund** z jednego adresu IP
+  (udane logowania się nie liczą)
 - Przekroczenie → kod HTTP 429
+
+## Bezczynność
+
+- Sesja wygasa po **30 minutach** bez aktywności — egzekwuje to serwer
+  (HTTP 401), nie tylko przeglądarka
 
 ## Przechowywanie haseł
 

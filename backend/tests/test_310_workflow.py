@@ -25,7 +25,7 @@ from sqlmodel import Session, select
 from database import engine
 from models import (
     AccessRequest, Department, RequestItem, RequestStatus, RequestType, User,
-    WorkflowInstance, WorkflowStep, WorkflowTemplate,
+    WorkflowTemplate,
 )
 from conftest import PW
 from test_audit35_logic import (

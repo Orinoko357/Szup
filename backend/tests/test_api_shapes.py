@@ -83,5 +83,6 @@ def test_creator_sees_own_request_others_do_not(api):
     assert api.get(f"/requests/{rid}", token=api.login("hr")).status_code == 200
     assert api.get(f"/requests/{rid}/workflow", token=api.login("hr")).status_code == 200
     # inna kadrowa (nie twórca) i kierownik spoza zakresu — brak dostępu
-    assert api.get(f"/requests/{rid}", token=api.login("hr2")).status_code == 403
-    assert api.get(f"/requests/{rid}", token=api.login("kier2")).status_code == 403
+    # 3.11 (N-4): cudzy wniosek — 404, jak nieistniejący.
+    assert api.get(f"/requests/{rid}", token=api.login("hr2")).status_code == 404
+    assert api.get(f"/requests/{rid}", token=api.login("kier2")).status_code == 404

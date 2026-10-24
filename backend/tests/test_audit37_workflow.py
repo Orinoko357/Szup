@@ -527,7 +527,8 @@ def test_termination_prefilled_and_cannot_be_emptied_silently(api):
     assert [(i["permission_name"], i["kind"]) for i in r.json()["items"]] == [("Odczyt", "revoke")]
     kier = api.login("kier")
     sel = _act(api, t, kier, "select", items=[])
-    assert sel.status_code == 400 and "nadal ma uprawnienia" in sel.json()["detail"]
+    # 3.11: pozycje ustania są ustalone — komunikat wymienia pominięte pozycje.
+    assert sel.status_code == 400 and "wszystkie uprawnienia" in sel.json()["detail"]
     # Wysłanie z pozycjami z kadr — po realizacji pracownik nie ma nic.
     assert _act(api, t, kier, "select",
                 items=[{**_items(w)[0], "kind": "revoke"}]).status_code == 200
@@ -546,7 +547,11 @@ def test_empty_termination_requires_explicit_confirmation(api):
             s.delete(it)
         s.commit()
     assert _act(api, t2, kier, "select", items=[]).status_code == 400
-    assert _act(api, t2, kier, "select", items=[], allow_empty=True).status_code == 200
+    # 3.11: przy ustaniu odbierane są wszystkie bieżące uprawnienia — także
+    # `allow_empty` nie zostawi pracownikowi dostępu.
+    assert _act(api, t2, kier, "select", items=[], allow_empty=True).status_code == 400
+    assert _act(api, t2, kier, "select",
+                items=[{**_items(w)[0], "kind": "revoke"}]).status_code == 200
 
 
 def test_only_one_active_termination_per_worker(api):

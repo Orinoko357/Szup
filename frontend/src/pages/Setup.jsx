@@ -28,7 +28,7 @@ export default function Setup({ onSetup }) {
       }))
       onSetup()
     } catch (ex) {
-      setErr(errorMessage(ex, 'Nie udało się utworzyć konta administratora'))
+      setErr(errorMessage(ex, 'Nie udało się utworzyć konta superadmina'))
       setBusy(false)
     }
   }
@@ -40,12 +40,12 @@ export default function Setup({ onSetup }) {
         <div className="wl-head">
           <WodsLogo size={56} onNavy />
           <h1>Pierwsze uruchomienie</h1>
-          <p>Utwórz konto administratora systemu szup · WODS</p>
+          <p>Utwórz konto superadmina systemu szup · WODS</p>
         </div>
 
         <form onSubmit={submit} className="wl-card wl-card--form">
           <div className="wl-field">
-            <label htmlFor="setup-login">Login administratora <span className="wl-req" aria-hidden="true">*</span></label>
+            <label htmlFor="setup-login">Login superadmina <span className="wl-req" aria-hidden="true">*</span></label>
             <input id="setup-login" className="wl-input" type="text" required autoFocus
                    value={username} onChange={e => setUsername(e.target.value)} />
           </div>
@@ -66,9 +66,9 @@ export default function Setup({ onSetup }) {
           <div className="wl-field">
             <label htmlFor="setup-pw">Hasło <span className="wl-req" aria-hidden="true">*</span></label>
             <input id="setup-pw" className="wl-input" type="password" required
-                   autoComplete="new-password"
+                   autoComplete="new-password" aria-describedby="setup-pw-hint"
                    value={password} onChange={e => setPassword(e.target.value)} />
-            <span className="wl-help">
+            <span className="wl-help" id="setup-pw-hint">
               Min. 12 znaków, co najmniej 3 z 4 klas: małe litery, wielkie, cyfry, specjalne.
             </span>
           </div>

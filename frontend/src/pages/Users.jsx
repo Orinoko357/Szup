@@ -595,9 +595,12 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
   const deptHr = !!depts.find(d => d.id === u.department_id)?.is_hr
   const isLocked = u.locked_until && serverTs(u.locked_until) > serverNow()
 
-  async function saveDept() {
+  // v3.11: superadmin nie może należeć do żadnej komórki (backend: 400).
+  const userIsSuperadmin = (u.roles || [u.role]).includes('superadmin')
+
+  async function saveDept(forceClear = false) {
     try {
-      const r = await updateUser(u.id, { department_id: deptId ? Number(deptId) : null })
+      const r = await updateUser(u.id, { department_id: (!forceClear && deptId) ? Number(deptId) : null })
       // Backend może zwrócić informację (np. komórka ma już kierownika) —
       // zapis się udał, ale admin musi o tym wiedzieć.
       if (r.data?.warning) toast(r.data.warning, { tone: 'warning' })
@@ -711,12 +714,29 @@ function UserRow({ user: u, depts = [], units = [], onChanged }) {
         )}
       </td>
       <td>
-        {editDept ? (
+        {userIsSuperadmin ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', fontSize: 12 }}
+               title="Superadmin (konto awaryjne) nie może być przypisany do żadnej komórki — także kadrowej">
+            <Building2 size={13} aria-hidden="true" style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
+            {u.department_name ? (
+              <>
+                <span>{u.department_name}</span>
+                <span className="badge badge--warning" style={{ fontSize: 10 }}>niedozwolone</span>
+                <button type="button" className="btn btn--ghost btn--sm" onClick={() => saveDept(true)}
+                        aria-label={`Odepnij superadmina ${u.username} od komórki`}>Odepnij</button>
+              </>
+            ) : (
+              <span style={{ color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+                nie dotyczy <span className="sr-only">— superadmin nie może należeć do komórki</span>
+              </span>
+            )}
+          </div>
+        ) : editDept ? (
           <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
             <DeptCombo depts={depts} units={units} value={deptId} onChange={setDeptId}
                        className="input input--sm" autoFocus
                        aria-label={`Komórka organizacyjna użytkownika ${u.username}`} />
-            <button type="button" className="btn btn--primary btn--sm" onClick={saveDept} title="Zapisz"
+            <button type="button" className="btn btn--primary btn--sm" onClick={() => saveDept()} title="Zapisz"
                     aria-label="Zapisz komórkę">Zapisz</button>
             <button type="button" className="btn btn--ghost btn--sm" aria-label="Anuluj zmianę komórki"
                     onClick={() => { setEditDept(false); setDeptId(u.department_id || '') }} title="Anuluj">Anuluj</button>
@@ -794,7 +814,8 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
     try {
       const r = await createUser({
         ...form, roles: selectedRoles,
-        department_id: form.department_id ? Number(form.department_id) : null,
+        // Superadmin bez komórki (v3.11 — backend odrzuca przypisanie).
+        department_id: (form.department_id && !selectedRoles.includes('superadmin')) ? Number(form.department_id) : null,
       })
       if (r.data?.warning) toast(r.data.warning, { tone: 'warning' })
       onAdded()
@@ -843,9 +864,19 @@ function AddUserCard({ depts = [], units = [], onAdded, onCancel }) {
         <div className="form-row">
           <div className="form-group">
             <label className="form-label" htmlFor={`${formId}-dept`}>Komórka organizacyjna</label>
-            <DeptCombo id={`${formId}-dept`} depts={depts} units={units} value={form.department_id}
-                       onChange={v => set('department_id', v)}
-                       placeholder="— brak (można przypisać później) —" />
+            {selectedRoles.includes('superadmin') ? (
+              <>
+                <input id={`${formId}-dept`} className="form-control" value="— nie dotyczy —" disabled
+                       aria-describedby={`${formId}-dept-sa`} />
+                <div id={`${formId}-dept-sa`} className="form-hint">
+                  Superadmin (konto awaryjne) nie może być przypisany do żadnej komórki — także kadrowej.
+                </div>
+              </>
+            ) : (
+              <DeptCombo id={`${formId}-dept`} depts={depts} units={units} value={form.department_id}
+                         onChange={v => set('department_id', v)}
+                         placeholder="— brak (można przypisać później) —" />
+            )}
           </div>
         </div>
 

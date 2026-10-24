@@ -14,8 +14,8 @@ export function initials(name) {
   return (name || '?').split(/\s+/).map(s => s[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
 }
 
-/** Przełącznik motywu w belce — widoczny tylko na wąskich ekranach (CSS), gdzie
- *  pływający przycisk z App.jsx jest ukryty. Stan motywu trzyma App
+/** Przełącznik motywu w belce (v3.11: na każdej szerokości — pływający przycisk
+ *  z App.jsx jest w aplikacji ukryty, bo zasłaniał treść). Stan motywu trzyma App
  *  (zdarzenia szup:theme / szup:theme-toggle). */
 function ThemeButton() {
   const read = () => document.documentElement.getAttribute('data-theme') === 'dark'

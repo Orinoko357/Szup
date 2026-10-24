@@ -87,7 +87,7 @@ def _old_token(username: str, age_s: int = 10) -> str:
     więc „stara” sesja w teście musi być naprawdę starsza."""
     import time
     import uuid
-    from jose import jwt
+    import jwt  # PyJWT
     from models import parse_roles
     from services.auth_service import ALGORITHM, _jwt_secret
     with Session(engine) as s:
@@ -349,8 +349,9 @@ def test_factory_reset_wipe_audit_keeps_purge_and_reset_traces(api):
     assert len(_audit("settings.factory_reset")) == 2
     assert len(_events("settings.factory_reset")) == 2
     assert _details(_audit("settings.factory_reset")[-1])["scope"]["wipe_audit"] is True
-    # Zwykłe wpisy zniknęły.
-    assert not _audit("login.success")
+    # Stare wpisy zniknęły; świeże (np. logowanie) zostają — retencja 24 mies. (3.11).
+    assert not _audit("test.old.0")
+    assert _audit("login.success")
 
 
 def test_securityevent_trace_rows_are_append_only(api):
@@ -656,7 +657,7 @@ def test_garbage_jwt_is_rejected(api, token):
 
 
 def test_token_without_uid_or_wrong_key_is_rejected(api):
-    from jose import jwt
+    import jwt  # PyJWT
     from services.auth_service import ALGORITHM, _jwt_secret
     import time
     api.setup_superadmin()

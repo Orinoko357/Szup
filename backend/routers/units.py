@@ -49,12 +49,14 @@ def _audit_post_change(session: Session, request: Optional[Request], actor: User
                  target_type=target_type, target_id=target_id, ip=meta["ip"],
                  user_agent=meta["user_agent"], details=details)
     if new_user_id:
+        from services.security_events import POST_ACTION_LABELS
         new_user = session.get(User, new_user_id)
         who = (new_user.username if new_user else f"id={new_user_id}")
+        post = POST_ACTION_LABELS.get(action, "stanowisko kierownicze")
         emit_security_event(
             session, event_type="structure.post_assigned", source="units",
             severity=SecuritySeverity.medium,
-            summary=f"{who} obejmuje stanowisko w „{name}” ({action}) — przez {actor.username}",
+            summary=f"{who} obejmuje stanowisko w „{name}” ({post}) — przez {actor.username}",
             details={"action": action, **details}, user_id=actor.id, ip=meta["ip"],
         )
 
@@ -127,6 +129,9 @@ def _guard_superadmin_post(session: Session, user_id: Optional[int]) -> None:
     w strukturze: kierownika komórki, dyrektora jednostki ani zastępcy."""
     if not user_id:
         return
+    from services.structure import db_int_ok
+    if not db_int_ok(user_id):
+        raise HTTPException(400, "Wskazana osoba nie istnieje")
     u = session.get(User, user_id)
     if u and has_role(u, "superadmin"):
         raise HTTPException(400, SUPERADMIN_POST_MSG)
@@ -198,6 +203,8 @@ def create_unit(
     session: Session = Depends(get_session),
     _: User = Depends(require_admin),
 ):
+    from services.structure import clean_model_fields, name_spec, text_spec
+    clean_model_fields(data, {"name": name_spec("nazwa jednostki"), "code": text_spec("kod")})
     unit = Unit(name=data.name, code=data.code)
     session.add(unit); session.commit(); session.refresh(unit)
     return unit
@@ -214,6 +221,11 @@ def update_unit(
     unit = _get_unit(session, unit_id)
     if not unit:
         raise HTTPException(404, "Jednostka nie istnieje")
+    from services.structure import (
+        clean_model_fields, description_spec, name_spec, text_spec,
+    )
+    clean_model_fields(data, {"name": name_spec("nazwa jednostki"), "code": text_spec("kod"),
+                              "description": description_spec()})
     prev_manager_id = unit.manager_user_id
     # exclude_unset: pozwala jawnie zdjąć kierownika (manager_user_id=None w patchu),
     # nie gubiąc przy tym pozostałych pól.
@@ -273,14 +285,18 @@ def delete_unit(
         raise HTTPException(400,
             "Nie można usunąć jednostki — zawiera zarchiwizowane komórki z historią "
             "wniosków. Wyłącz jednostkę zamiast ją usuwać.")
+    # Dawne przypisania kadr do jednostek (UserUnit) niczego już nie
+    # ograniczają (kadry obsługują całą organizację) — nie blokują usunięcia.
+    from sqlalchemy import delete as _delete
+    from models import UserUnit
+    session.execute(_delete(UserUnit).where(UserUnit.unit_id == unit_id))
     session.delete(unit)
     try:
         session.commit()
     except IntegrityError:
         session.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT,
-            "Nie można usunąć jednostki — jest powiązana z wnioskami, systemami "
-            "lub przypisaniami HR.")
+            "Nie można usunąć jednostki — jest powiązana z wnioskami lub systemami.")
 
 
 # ---------------------------------------------------------------------------
@@ -461,10 +477,13 @@ def create_department(
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin),
 ):
+    from services.structure import clean_model_fields, description_spec, name_spec
+    clean_model_fields(data, {"name": name_spec("nazwa komórki"),
+                              "description": description_spec()})
     if data.kind != "standalone":
         _guard_self_post(current_user, data.manager_user_id)
         _guard_superadmin_post(session, data.manager_user_id)
-    if not session.get(Unit, data.unit_id):
+    if not _get_unit(session, data.unit_id):
         raise HTTPException(400, "Jednostka nie istnieje")
     _validate_kind(data.kind)
     if data.parent_dept_id is not None:
@@ -502,13 +521,14 @@ def _emit_hr_flag_change(session: Session, request: Request, actor: User, dept: 
                          enabled: bool) -> None:
     """Zdarzenie bezpieczeństwa przy oznaczeniu komórki jako kadrowej (lub zdjęciu
     oznaczenia) — członkowie zyskują/tracą zdolność kadrową dla wszystkich jednostek."""
-    from services.security_events import emit
+    from services.security_events import emit, plural
     from services.audit import request_meta
     members = session.exec(select(User).where(User.department_id == dept.id)).all()
     emit(session, event_type="department.hr_flag_changed", source="units",
          severity=SecuritySeverity.medium,
          summary=(f"Komórka „{dept.name}” {'oznaczona jako kadrowa' if enabled else 'nie jest już kadrowa'} "
-                  f"przez {actor.username} ({len(members)} os.)"),
+                  f"przez {actor.username} ({len(members)} "
+                  f"{plural(len(members), 'osoba', 'osoby', 'osób')})"),
          details={"department_id": dept.id, "enabled": enabled,
                   "member_user_ids": [u.id for u in members]},
          user_id=actor.id, ip=request_meta(request)["ip"])
@@ -525,6 +545,9 @@ def update_department(
     dept = _live_dept(session, dept_id)
     if not dept:
         raise HTTPException(404, "Wydział nie istnieje")
+    from services.structure import clean_model_fields, description_spec, name_spec
+    clean_model_fields(data, {"name": name_spec("nazwa komórki"),
+                              "description": description_spec()})
     prev_manager_id = dept.manager_user_id   # do synchronizacji roli po zmianie
     # requires_higher_approval=False jest prawidłową wartością (nie pomijaj None-em)
     payload = data.model_dump(exclude_unset=True)
@@ -730,9 +753,10 @@ class DepartmentForceDeleteIn(BaseModel):
 class DepartmentForceDeleteOut(BaseModel):
     mode: str                        # "deleted" (usunięta) | "archived" (zarchiwizowana)
     department_id: int
-    detached_users: int
     # Pracownicy odpięci od zarchiwizowanej komórki — kadry składają dla nich
     # wnioski o ustanie (bez komórki) albo admin przypisuje ich do innej.
+    # 3.11: lista [{id, full_name, login}] (wcześniej liczba).
+    detached_users: list[dict] = []
     detached_user_ids: list[int] = []
     removed_deputies: int
     reparented_department_ids: list[int]
@@ -741,6 +765,9 @@ class DepartmentForceDeleteOut(BaseModel):
     # odrzucane: pozostałe pozycje odmówiono, a wniosek zamknięto, żeby
     # nadane w systemach uprawnienia zostały w rejestrze.
     completed_request_ids: list[int] = []
+    # Wnioski z niewykonanymi pozycjami odebrania — zostają w kolejce IT
+    # (pending_it); uprawnienia znikają po realizacji przez IT.
+    it_pending_request_ids: list[int] = []
     # Komórki z akceptacją wyższą, które przez usunięcie straciły osobę
     # uprawnioną do jej wykonania (zgłasza je też lista kontrolna).
     higher_approval_unreachable_ids: list[int] = []
@@ -759,7 +786,8 @@ def _active_node(session: Session, inst) -> dict:
 
 
 def _system_reject_request(session: Session, req, actor: User, comment: str,
-                           dept_id: int, extra_ids=()) -> None:
+                           dept_id: Optional[int], extra_ids=(),
+                           payload: Optional[dict] = None) -> None:
     """Odrzucenie wniosku w toku z powodu usunięcia komórki — poza `can_act`
     (superadmin nie jest uczestnikiem obiegu). Zapisuje podpisany krok
     `reject` z aktorem-superadminem w łańcuchu kroków, zamyka instancję,
@@ -768,7 +796,9 @@ def _system_reject_request(session: Session, req, actor: User, comment: str,
     Na etapie kierownika komórki wersja robocza przestaje obowiązywać: notatka
     robocza (`manager_comment`) zostaje zastąpiona powodem odrzucenia — inaczej
     po archiwizacji zobaczyliby ją IT i administrator. `extra_ids` — dodatkowi
-    adresaci powiadomienia (kierownik i zastępcy usuwanej komórki)."""
+    adresaci powiadomienia (kierownik i zastępcy usuwanej komórki).
+    `payload` — opis operacji systemowej w podpisanym kroku (domyślnie
+    usunięcie komórki; usunięcie grupy uprawnień podaje własny)."""
     from datetime import datetime as _dt
     from models import RequestStatus, WorkflowInstanceStatus, WorkflowStepAction
     from services.workflow import (
@@ -780,7 +810,8 @@ def _system_reject_request(session: Session, req, actor: User, comment: str,
         node = _active_node(session, inst)
         _record_step(session, inst, node, action=WorkflowStepAction.reject,
                      actor_user=actor, comment=comment,
-                     payload={"system": "department_deleted", "department_id": dept_id})
+                     payload=payload or {"system": "department_deleted",
+                                         "department_id": dept_id})
         inst.status = WorkflowInstanceStatus.rejected
         inst.completed_at = _dt.utcnow()
         session.add(inst)
@@ -816,8 +847,9 @@ def _system_complete_partial(session: Session, req, actor: User, comment: str,
     (IT nadało je w systemach) przy usunięciu komórki: zamiast odrzucenia
     (które zostawiłoby nadane uprawnienia poza rejestrem — reguła częściowej
     realizacji) pozostałe pozycje NADANIA są odmawiane z powodem, a wniosek
-    zamykany jako zrealizowany. Pozycje odebrania nie podlegają odmowie i są
-    zamykane razem z wnioskiem. Zwraca id odmówionych pozycji."""
+    zamykany jako zrealizowany. Wniosek z niewykonanymi pozycjami odebrania
+    tu nie trafia — zostaje w kolejce IT (`_system_forward_to_it`). Zwraca id
+    odmówionych pozycji."""
     from datetime import datetime as _dt
     from models import RequestItem, WorkflowInstanceStatus, WorkflowStepAction
     from services.workflow import (
@@ -828,18 +860,13 @@ def _system_complete_partial(session: Session, req, actor: User, comment: str,
     denied: list[int] = []
     for it in session.exec(select(RequestItem).where(RequestItem.request_id == req.id)
                            .order_by(RequestItem.id)).all():
-        if it.fulfilled or it.denied:
+        if it.fulfilled or it.denied or (it.kind or "grant") == "revoke":
             continue
-        if (it.kind or "grant") == "revoke":
-            it.fulfilled = True
-            it.fulfilled_by_user_id = actor.id
-            it.fulfilled_at = now
-        else:
-            it.denied = True
-            it.deny_comment = comment[:FORCE_DELETE_REASON_MAX + 40]
-            it.denied_by_user_id = actor.id
-            it.denied_at = now
-            denied.append(it.id)
+        it.denied = True
+        it.deny_comment = comment[:FORCE_DELETE_REASON_MAX + 40]
+        it.denied_by_user_id = actor.id
+        it.denied_at = now
+        denied.append(it.id)
         session.add(it)
     inst = instance_of(session, req)
     if inst and inst.status == WorkflowInstanceStatus.active:
@@ -866,6 +893,49 @@ def _system_complete_partial(session: Session, req, actor: User, comment: str,
     return denied
 
 
+def _has_open_revoke_items(session: Session, req) -> bool:
+    """Czy wniosek ma pozycje odebrania jeszcze niewykonane przez IT."""
+    from models import RequestItem
+    return any((it.kind or "grant") == "revoke" and not it.fulfilled and not it.denied
+               for it in session.exec(select(RequestItem)
+                                      .where(RequestItem.request_id == req.id)).all())
+
+
+def _system_forward_to_it(session: Session, req, actor: User, comment: str) -> list[int]:
+    """Wniosek w realizacji IT z niewykonanymi pozycjami ODEBRANIA przy
+    likwidacji komórki (3.11): odebrań NIE oznaczamy jako zrealizowanych —
+    wniosek zostaje w kolejce IT (`pending_it`), a IT i helpdesk dostają
+    powiadomienie. Uprawnienie efektywne znika dopiero po realizacji przez IT.
+    Niezrealizowane pozycje NADANIA są odmawiane (komórka nie istnieje).
+    Starszy wniosek bez obiegu dostaje obieg systemowy (realizacja IT).
+    Zwraca id odmówionych pozycji."""
+    from datetime import datetime as _dt
+    from models import RequestItem, WorkflowInstanceStatus
+    from services.workflow import _notify_stage, clear_take_over, instance_of
+    now = _dt.utcnow()
+    denied: list[int] = []
+    for it in session.exec(select(RequestItem).where(RequestItem.request_id == req.id)
+                           .order_by(RequestItem.id)).all():
+        if it.fulfilled or it.denied or (it.kind or "grant") == "revoke":
+            continue
+        it.denied = True
+        it.deny_comment = comment[:FORCE_DELETE_REASON_MAX + 40]
+        it.denied_by_user_id = actor.id
+        it.denied_at = now
+        denied.append(it.id)
+        session.add(it)
+    clear_take_over(req)
+    session.add(req)
+    session.flush()
+    inst = instance_of(session, req)
+    if inst is None:
+        from routers.systems import start_system_revoke
+        start_system_revoke(session, req)
+    elif inst.status == WorkflowInstanceStatus.active:
+        _notify_stage(session, req, _active_node(session, inst), None, actor)
+    return denied
+
+
 @router.post("/departments/{dept_id}/force-delete", response_model=DepartmentForceDeleteOut)
 def force_delete_department(
     dept_id: int,
@@ -882,9 +952,11 @@ def force_delete_department(
     zostaje dla historii (is_active=False, archived_at/archived_reason), znika
     ze wszystkich list; pracownicy są odpinani (lista w `detached_user_ids` —
     kadry składają dla nich wnioski o ustanie), zastępcy i kierownik zdejmowani,
-    a wnioski w toku tej komórki odrzucane z podanym powodem. Wyjątek: wniosek
-    w realizacji IT z pozycjami już zrealizowanymi jest zamykany (pozostałe
-    pozycje odmówione), żeby nadane uprawnienia zostały w rejestrze.
+    a wnioski w toku tej komórki odrzucane z podanym powodem. Wyjątki dla
+    wniosków w realizacji IT: z niewykonanymi pozycjami odebrania — zostają
+    w kolejce IT (niezrealizowane nadania odmówione, mail do IT i helpdesku);
+    z pozycjami już zrealizowanymi — zamykane (pozostałe pozycje odmówione),
+    żeby nadane uprawnienia zostały w rejestrze.
     """
     from datetime import datetime as _dt
     from models import AccessRequest, PermissionDeclaration
@@ -937,6 +1009,7 @@ def force_delete_department(
 
     rejected_ids: list[int] = []
     completed_ids: list[int] = []
+    it_pending_ids: list[int] = []
     denied_items: dict[int, list[int]] = {}
     ex_dn = dept.ldap_dn
     if not referenced:
@@ -959,6 +1032,11 @@ def force_delete_department(
         # wniosków, które czekały u nich (wersje robocze).
         stage_people = [x for x in (ex_manager_id, *ex_deputy_ids) if x]
         for req in active:
+            if req.status == _RS.pending_it and _has_open_revoke_items(session, req):
+                denied_items[req.id] = _system_forward_to_it(
+                    session, req, current_user, comment)
+                it_pending_ids.append(req.id)
+                continue
             if req.status == _RS.pending_it and _has_fulfilled_items(session, req):
                 denied_items[req.id] = _system_complete_partial(
                     session, req, current_user, comment, dept_id)
@@ -1004,6 +1082,8 @@ def force_delete_department(
         "name": dept_name, "mode": mode, "reason": reason,
         "detached_users": len(users) if mode == "archived" else 0,
         "detached_user_ids": [u.id for u in users] if mode == "archived" else [],
+        # Wnioski z niewykonanymi odebraniami — zostają w kolejce IT.
+        "it_pending_request_ids": it_pending_ids,
         "removed_deputies": ex_deputy_ids,
         "ex_manager_user_id": ex_manager_id,
         "reparented_department_ids": reparented,
@@ -1032,12 +1112,14 @@ def force_delete_department(
     )
     return DepartmentForceDeleteOut(
         mode=mode, department_id=dept_id,
-        detached_users=details["detached_users"],
+        detached_users=[{"id": u.id, "full_name": u.full_name, "login": u.username}
+                        for u in users] if mode == "archived" else [],
         detached_user_ids=details["detached_user_ids"],
         removed_deputies=len(ex_deputy_ids),
         reparented_department_ids=reparented,
         rejected_request_ids=rejected_ids,
         completed_request_ids=completed_ids,
+        it_pending_request_ids=it_pending_ids,
         higher_approval_unreachable_ids=unreachable,
     )
 
@@ -1564,6 +1646,8 @@ def add_deputy(
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin),
 ):
+    from services.structure import clean_model_fields, text_spec
+    clean_model_fields(data, {"role_label": text_spec("funkcja zastępcy")})
     _guard_self_post(current_user, data.user_id)
     _guard_superadmin_post(session, data.user_id)
     dept = _live_dept(session, department_id)
@@ -1614,9 +1698,11 @@ def update_deputy(
     session: Session = Depends(get_session),
     _: User = Depends(require_admin),
 ):
-    row = session.get(DepartmentDeputy, deputy_id)
+    from services.structure import clean_model_fields, db_int_ok, text_spec
+    row = session.get(DepartmentDeputy, deputy_id) if db_int_ok(deputy_id) else None
     if not row:
         raise HTTPException(404, "Zastępca nie istnieje")
+    clean_model_fields(data, {"role_label": text_spec("funkcja zastępcy")})
     # Zmieniamy tylko label — user_id/department_id są niezmienne (usuń i dodaj ponownie).
     row.role_label = (data.role_label or "").strip() or None
     session.add(row); session.commit(); session.refresh(row)

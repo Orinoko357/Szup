@@ -42,7 +42,7 @@ function localToday() {
 }
 
 export default function DeclarationModal({
-  text: textProp, defaultName, busy = false, onConfirm, onClose,
+  text: textProp, defaultName, busy = false, onConfirm, onClose, emergency = false,
 }) {
   const [text, setText] = useState(textProp || '')
   const [loading, setLoading] = useState(!textProp)
@@ -77,7 +77,7 @@ export default function DeclarationModal({
                                         color: 'var(--color-gold-dark)', display: 'grid', placeItems: 'center' }}>
         <ShieldAlert size={20} />
       </span>
-      Oświadczenie wnioskującego
+      {emergency ? 'Oświadczenie (działając awaryjnie jako superadmin)' : 'Oświadczenie wnioskującego'}
     </span>
   )
 
@@ -117,6 +117,12 @@ export default function DeclarationModal({
                    value={date} onChange={e => setDate(e.target.value)} />
           </label>
         </div>
+        {emergency && (
+          <div role="note" className="alert alert--warning" style={{ margin: 0, fontSize: 13 }}>
+            Składasz oświadczenie, <strong>działając awaryjnie jako superadmin</strong> — w strukturze
+            nie ma osoby uprawnionej do tego kroku. Ta adnotacja zostanie zapisana razem z oświadczeniem.
+          </div>
+        )}
         <p style={{ margin: 0, fontSize: 12, color: 'var(--color-text-muted)' }}>
           Wpisanie danych i zatwierdzenie jest równoznaczne ze złożeniem
           powyższego oświadczenia. Zostanie ono trwale zapisane i powiązane
